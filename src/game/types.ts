@@ -65,11 +65,6 @@ export interface BeltState {
   dropped: number;
 }
 
-export interface BeltVisual {
-  colorIndex: number;
-  celebrity: boolean;
-}
-
 export type SimulationStatus = 'idle' | 'running' | 'won' | 'lost';
 
 export interface SimulationSnapshot {
@@ -77,7 +72,7 @@ export interface SimulationSnapshot {
   status: SimulationStatus;
   components: Map<string, ComponentState>;
   belts: Map<string, BeltState>;
-  beltVisuals: Map<string, BeltVisual>;
+  activeRequests: Request[];
   totalSpawned: number;
   totalCompleted: number;
   totalDropped: number;

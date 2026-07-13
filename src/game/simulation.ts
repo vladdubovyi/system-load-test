@@ -1,11 +1,11 @@
 import type {
   BeltState,
-  BeltVisual,
   ComponentState,
   ComponentType,
   ConveyorBelt,
   PlacedComponent,
   Port,
+  Request,
   RequestKind,
   SimulationSnapshot,
   SimulationStatus,
@@ -18,9 +18,8 @@ import {
 } from './types';
 
 const SOURCE_ID = '__source__';
-const TRANSIT_SECONDS = 1.8;
-const MAX_ARRIVALS_PER_BELT_FRAME = 16;
-const MAX_COMPLETIONS_PER_FRAME = 12;
+
+let nextRequestId = 1;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -189,18 +188,12 @@ export class SimulationEngine {
   private componentMap: Map<string, PlacedComponent>;
   private portMap: Map<string, Port>;
   private beltByFromPort: Map<string, ConveyorBelt[]>;
-  private lbShortenerBelts: ConveyorBelt[] = [];
-  private lbBackendBelts: ConveyorBelt[] = [];
-  private backendRedisBelts: ConveyorBelt[] = [];
-  private backendDbBelts: ConveyorBelt[] = [];
-  private shortenerDbBelts: ConveyorBelt[] = [];
-  private shortenerRedisBelts: ConveyorBelt[] = [];
+  private beltByToPort: Map<string, ConveyorBelt>;
+  private beltById: Map<string, ConveyorBelt>;
 
   private componentState = new Map<string, ComponentState>();
   private beltState = new Map<string, BeltState>();
-  private beltVisuals = new Map<string, BeltVisual>();
-  private beltArrivalAcc = new Map<string, number>();
-  private completionAcc = new Map<string, number>();
+  private requests: Request[] = [];
 
   private time = 0;
   private status: SimulationStatus = 'idle';
@@ -214,35 +207,24 @@ export class SimulationEngine {
   private message = 'Wire up your system, then press Play.';
   private overloadTimers = new Map<string, number>();
 
-  private readonly snapshot: SimulationSnapshot = {
-    time: 0,
-    status: 'idle',
-    components: this.componentState,
-    belts: this.beltState,
-    beltVisuals: this.beltVisuals,
-    totalSpawned: 0,
-    totalCompleted: 0,
-    totalDropped: 0,
-    currentRps: SCENARIO.baseRps,
-    spikeActive: false,
-    message: 'Wire up your system, then press Play.',
-  };
-
   constructor(components: PlacedComponent[], belts: ConveyorBelt[]) {
     this.components = components;
     this.belts = belts;
     this.componentMap = new Map(components.map((c) => [c.id, c]));
     this.portMap = new Map();
     this.beltByFromPort = new Map();
+    this.beltByToPort = new Map();
+    this.beltById = new Map();
 
     for (const belt of belts) {
       const list = this.beltByFromPort.get(belt.fromPortId) ?? [];
       list.push(belt);
       this.beltByFromPort.set(belt.fromPortId, list);
+      this.beltByToPort.set(belt.toPortId, belt);
+      this.beltById.set(belt.id, belt);
     }
 
     this.rebuildPorts();
-    this.cacheRouting();
     this.resetStates();
   }
 
@@ -257,55 +239,9 @@ export class SimulationEngine {
     }
   }
 
-  private cacheRouting(): void {
-    this.lbShortenerBelts = [];
-    this.lbBackendBelts = [];
-    this.backendRedisBelts = [];
-    this.backendDbBelts = [];
-    this.shortenerDbBelts = [];
-    this.shortenerRedisBelts = [];
-
-    const lb = this.components.find((c) => c.type === 'load-balancer');
-    if (lb) {
-      const outPort = getComponentPorts(lb).find((p) => p.side === 'out');
-      for (const belt of this.beltByFromPort.get(outPort?.id ?? '') ?? []) {
-        const port = this.portMap.get(belt.toPortId);
-        const comp = this.componentMap.get(port?.componentId ?? '');
-        if (comp?.type === 'shortener') this.lbShortenerBelts.push(belt);
-        if (comp?.type === 'backend') this.lbBackendBelts.push(belt);
-      }
-    }
-
-    const backend = this.components.find((c) => c.type === 'backend');
-    if (backend) {
-      const outPort = getComponentPorts(backend).find((p) => p.side === 'out');
-      for (const belt of this.beltByFromPort.get(outPort?.id ?? '') ?? []) {
-        const port = this.portMap.get(belt.toPortId);
-        const comp = this.componentMap.get(port?.componentId ?? '');
-        if (comp?.type === 'redis') this.backendRedisBelts.push(belt);
-        if (comp?.type === 'database') this.backendDbBelts.push(belt);
-      }
-    }
-
-    const shortener = this.components.find((c) => c.type === 'shortener');
-    if (shortener) {
-      const outPort = getComponentPorts(shortener).find((p) => p.side === 'out');
-      for (const belt of this.beltByFromPort.get(outPort?.id ?? '') ?? []) {
-        const port = this.portMap.get(belt.toPortId);
-        const comp = this.componentMap.get(port?.componentId ?? '');
-        if (comp?.type === 'database') this.shortenerDbBelts.push(belt);
-        if (comp?.type === 'redis') this.shortenerRedisBelts.push(belt);
-      }
-    }
-  }
-
   private resetStates(): void {
     this.componentState.clear();
     this.beltState.clear();
-    this.beltVisuals.clear();
-    this.beltArrivalAcc.clear();
-    this.completionAcc.clear();
-
     for (const component of this.components) {
       this.componentState.set(component.id, {
         load: 0,
@@ -315,11 +251,9 @@ export class SimulationEngine {
         processed: 0,
         dropped: 0,
       });
-      this.completionAcc.set(component.id, 0);
     }
     for (const belt of this.belts) {
       this.beltState.set(belt.id, { load: 0, traveling: 0, dropped: 0 });
-      this.beltArrivalAcc.set(belt.id, 0);
     }
   }
 
@@ -330,9 +264,11 @@ export class SimulationEngine {
     this.totalSpawned = 0;
     this.totalCompleted = 0;
     this.totalDropped = 0;
+    this.requests = [];
     this.overloadTimers.clear();
     this.resetStates();
     this.message = 'Simulation running — watch for red overload!';
+    nextRequestId = 1;
   }
 
   stop(): void {
@@ -343,6 +279,7 @@ export class SimulationEngine {
   reset(): void {
     this.status = 'idle';
     this.time = 0;
+    this.requests = [];
     this.resetStates();
     this.totalSpawned = 0;
     this.totalCompleted = 0;
@@ -365,7 +302,7 @@ export class SimulationEngine {
       this.spawnRequest();
     }
 
-    this.updateBeltFlow(dt);
+    this.updateBelts(dt);
     this.updateComponents(dt);
     this.updateLoads();
 
@@ -397,20 +334,6 @@ export class SimulationEngine {
     }
   }
 
-  private pushToBelt(belt: ConveyorBelt, visual?: BeltVisual): boolean {
-    const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.5) {
-      beltSt.dropped += 1;
-      this.totalDropped += 1;
-      return false;
-    }
-
-    beltSt.traveling += 1;
-    const picked = visual ?? pickRequestColor();
-    this.beltVisuals.set(belt.id, picked);
-    return true;
-  }
-
   private spawnRequest(): void {
     const sourcePort = getSourcePort(this.components);
     const outgoing = this.beltByFromPort.get(sourcePort.id) ?? [];
@@ -419,93 +342,139 @@ export class SimulationEngine {
       return;
     }
 
-    if (this.pushToBelt(outgoing[0])) {
-      this.totalSpawned += 1;
+    const belt = outgoing[0];
+    const beltSt = this.beltState.get(belt.id)!;
+    if (beltSt.traveling >= belt.capacity * 0.5) {
+      beltSt.dropped += 1;
+      this.totalDropped += 1;
+      return;
     }
+
+    const kind: RequestKind = Math.random() < SCENARIO.readRatio ? 'read' : 'create';
+    const { colorIndex, celebrity } = pickRequestColor();
+
+    this.requests.push({
+      id: nextRequestId++,
+      kind,
+      colorIndex,
+      celebrity,
+      progress: 0,
+      beltId: belt.id,
+      currentComponentId: null,
+      targetPortId: belt.toPortId,
+      state: 'traveling',
+      waitTime: 0,
+    });
+    beltSt.traveling += 1;
+    this.totalSpawned += 1;
   }
 
-  private updateBeltFlow(dt: number): void {
-    for (const belt of this.belts) {
+  private updateBelts(dt: number): void {
+    const speed = 0.55;
+    for (const request of this.requests) {
+      if (request.state !== 'traveling' || !request.beltId) continue;
+
+      request.progress += speed * dt;
+      if (request.progress < 1) continue;
+
+      request.progress = 0;
+      const belt = request.beltId ? this.beltById.get(request.beltId) : undefined;
+      if (!belt) continue;
+
       const beltSt = this.beltState.get(belt.id)!;
-      if (beltSt.traveling <= 0) continue;
-
-      const acc =
-        (this.beltArrivalAcc.get(belt.id) ?? 0) +
-        (beltSt.traveling * dt) / TRANSIT_SECONDS;
-      let arrivals = Math.min(Math.floor(acc), MAX_ARRIVALS_PER_BELT_FRAME);
-      this.beltArrivalAcc.set(belt.id, acc - arrivals);
-
-      if (arrivals <= 0) continue;
-
-      arrivals = Math.min(arrivals, beltSt.traveling);
-      beltSt.traveling -= arrivals;
+      beltSt.traveling = Math.max(0, beltSt.traveling - 1);
 
       const targetPort = this.portMap.get(belt.toPortId);
       if (!targetPort) {
-        this.totalDropped += arrivals;
+        request.state = 'dropped';
+        this.totalDropped += 1;
         continue;
       }
 
-      const component = this.componentMap.get(targetPort.componentId);
-      if (!component) {
-        this.totalDropped += arrivals;
+      const componentId = targetPort.componentId;
+      const compSt = this.componentState.get(componentId);
+      const component = this.componentMap.get(componentId);
+      if (!compSt || !component) {
+        request.state = 'dropped';
+        this.totalDropped += 1;
         continue;
       }
 
-      const compSt = this.componentState.get(component.id)!;
-      const visual = this.beltVisuals.get(belt.id);
-
-      for (let i = 0; i < arrivals; i++) {
-        if (!this.deliverToComponent(component, compSt, visual)) {
-          this.totalDropped += 1;
-          compSt.dropped += 1;
-        }
+      if (!this.acceptRequest(request, component, compSt)) {
+        request.state = 'dropped';
+        compSt.dropped += 1;
+        this.totalDropped += 1;
+        continue;
       }
+
+      if (request.state === 'traveling') {
+        continue;
+      }
+
+      request.currentComponentId = componentId;
+      request.beltId = null;
+      request.state = 'queued';
     }
   }
 
-  private deliverToComponent(
+  private acceptRequest(
+    request: Request,
     component: PlacedComponent,
-    state: ComponentState,
-    visual?: BeltVisual
+    state: ComponentState
   ): boolean {
     if (state.failed) return false;
 
     if (component.type === 'load-balancer') {
-      const kind: RequestKind =
-        Math.random() < SCENARIO.readRatio ? 'read' : 'create';
-      const targetBelts =
-        kind === 'create' ? this.lbShortenerBelts : this.lbBackendBelts;
-      if (targetBelts.length === 0) return false;
-
-      const belt = targetBelts[Math.floor(Math.random() * targetBelts.length)];
-      const targetPort = this.portMap.get(belt.toPortId)!;
-      const targetComp = this.componentMap.get(targetPort.componentId)!;
-      const targetSt = this.componentState.get(targetComp.id)!;
-      if (targetSt.queue >= targetComp.queueLimit) return false;
-
-      return this.pushToBelt(belt, visual);
+      if (request.kind === 'create') {
+        return this.routeFromBalancer(request, 'shortener');
+      }
+      return this.routeFromBalancer(request, 'backend');
     }
 
-    if (component.type === 'shortener') {
-      if (state.queue >= component.queueLimit) return false;
-      state.queue += 1;
-      return true;
+    if (component.type === 'shortener' && request.kind !== 'create') {
+      return false;
+    }
+    if (component.type === 'backend' && request.kind !== 'read') {
+      return false;
     }
 
-    if (component.type === 'backend') {
-      if (state.queue >= component.queueLimit) return false;
-      state.queue += 1;
-      return true;
-    }
+    if (state.queue >= component.queueLimit) return false;
+    state.queue += 1;
+    return true;
+  }
 
-    if (component.type === 'database' || component.type === 'redis') {
-      if (state.queue >= component.queueLimit) return false;
-      state.queue += 1;
-      return true;
-    }
+  private routeFromBalancer(request: Request, targetType: ComponentType): boolean {
+    const lb = this.components.find((c) => c.type === 'load-balancer');
+    if (!lb) return false;
 
-    return false;
+    const outPort = getComponentPorts(lb).find((p) => p.side === 'out');
+    if (!outPort) return false;
+
+    const belts = this.beltByFromPort.get(outPort.id) ?? [];
+    const validBelts = belts.filter((belt) => {
+      const port = this.portMap.get(belt.toPortId);
+      if (!port) return false;
+      const comp = this.componentMap.get(port.componentId);
+      return comp?.type === targetType;
+    });
+
+    if (validBelts.length === 0) return false;
+
+    const belt = validBelts[Math.floor(Math.random() * validBelts.length)];
+    const beltSt = this.beltState.get(belt.id)!;
+    if (beltSt.traveling >= belt.capacity * 0.5) return false;
+
+    const targetPort = this.portMap.get(belt.toPortId)!;
+    const targetComp = this.componentMap.get(targetPort.componentId)!;
+    const targetSt = this.componentState.get(targetComp.id)!;
+    if (targetSt.queue >= targetComp.queueLimit) return false;
+
+    request.beltId = belt.id;
+    request.targetPortId = belt.toPortId;
+    request.state = 'traveling';
+    request.currentComponentId = null;
+    beltSt.traveling += 1;
+    return true;
   }
 
   private updateComponents(dt: number): void {
@@ -520,14 +489,7 @@ export class SimulationEngine {
         state.processing = canProcess / dt;
         state.processed += canProcess;
 
-        const acc = (this.completionAcc.get(component.id) ?? 0) + canProcess;
-        let completions = Math.min(
-          Math.floor(acc),
-          MAX_COMPLETIONS_PER_FRAME
-        );
-        this.completionAcc.set(component.id, acc - completions);
-
-        while (completions-- > 0) {
+        for (let i = 0; i < Math.ceil(canProcess); i++) {
           this.completeAtComponent(component);
         }
       } else {
@@ -548,45 +510,108 @@ export class SimulationEngine {
         this.overloadTimers.set(component.id, 0);
       }
     }
+
+    this.requests = this.requests.filter((r) => r.state !== 'done' && r.state !== 'dropped');
   }
 
   private completeAtComponent(component: PlacedComponent): void {
-    if (component.type === 'database' || component.type === 'redis') {
+    const outPort = getComponentPorts(component).find((p) => p.side === 'out');
+    if (!outPort) {
       this.totalCompleted += 1;
       return;
     }
 
-    if (component.type === 'backend') {
-      const cacheHit =
-        this.backendRedisBelts.length > 0 && Math.random() < 0.78;
-      const pool = cacheHit
-        ? this.backendRedisBelts
-        : this.backendDbBelts.length > 0
-          ? this.backendDbBelts
-          : this.backendRedisBelts;
-      if (pool.length === 0) {
+    const belts = this.beltByFromPort.get(outPort.id) ?? [];
+    if (belts.length === 0) {
+      if (component.type === 'database' || component.type === 'redis') {
+        this.finishQueuedRequest(component.id);
         this.totalCompleted += 1;
-        return;
       }
-      const belt = pool[Math.floor(Math.random() * pool.length)];
-      if (!this.pushToBelt(belt)) return;
+      return;
+    }
+
+    const visual = this.takeQueuedVisual(component);
+
+    if (component.type === 'backend') {
+      const redisBelts = belts.filter((b) => {
+        const port = this.portMap.get(b.toPortId);
+        return this.componentMap.get(port?.componentId ?? '')?.type === 'redis';
+      });
+      const dbBelts = belts.filter((b) => {
+        const port = this.portMap.get(b.toPortId);
+        return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
+      });
+
+      const cacheHit = redisBelts.length > 0 && Math.random() < 0.78;
+      const chosen = cacheHit
+        ? redisBelts[Math.floor(Math.random() * redisBelts.length)]
+        : dbBelts.length > 0
+          ? dbBelts[Math.floor(Math.random() * dbBelts.length)]
+          : belts[0];
+
+      this.emitOnBelt(chosen, 'read', visual);
       return;
     }
 
     if (component.type === 'shortener') {
-      const pool =
-        this.shortenerDbBelts.length > 0
-          ? this.shortenerDbBelts
-          : this.shortenerRedisBelts;
-      if (pool.length === 0) {
-        this.totalCompleted += 1;
-        return;
-      }
-      this.pushToBelt(pool[0]);
+      const dbBelts = belts.filter((b) => {
+        const port = this.portMap.get(b.toPortId);
+        return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
+      });
+      const belt = dbBelts[0] ?? belts[0];
+      this.emitOnBelt(belt, 'create', visual);
       return;
     }
 
     this.totalCompleted += 1;
+  }
+
+  private takeQueuedVisual(
+    component: PlacedComponent
+  ): { colorIndex: number; celebrity: boolean } | undefined {
+    const idx = this.requests.findIndex(
+      (r) => r.state === 'queued' && r.currentComponentId === component.id
+    );
+    if (idx === -1) return undefined;
+    const req = this.requests[idx];
+    req.state = 'done';
+    return { colorIndex: req.colorIndex, celebrity: req.celebrity };
+  }
+
+  private finishQueuedRequest(componentId: string): void {
+    const idx = this.requests.findIndex(
+      (r) => r.state === 'queued' && r.currentComponentId === componentId
+    );
+    if (idx !== -1) {
+      this.requests[idx].state = 'done';
+    }
+  }
+
+  private emitOnBelt(
+    belt: ConveyorBelt,
+    kind: RequestKind,
+    visual?: { colorIndex: number; celebrity: boolean }
+  ): void {
+    const beltSt = this.beltState.get(belt.id)!;
+    if (beltSt.traveling >= belt.capacity * 0.5) {
+      this.totalDropped += 1;
+      return;
+    }
+
+    const { colorIndex, celebrity } = visual ?? pickRequestColor();
+    this.requests.push({
+      id: nextRequestId++,
+      kind,
+      colorIndex,
+      celebrity,
+      progress: 0,
+      beltId: belt.id,
+      currentComponentId: null,
+      targetPortId: belt.toPortId,
+      state: 'traveling',
+      waitTime: 0,
+    });
+    beltSt.traveling += 1;
   }
 
   private updateLoads(): void {
@@ -602,15 +627,19 @@ export class SimulationEngine {
   }
 
   getSnapshot(): SimulationSnapshot {
-    this.snapshot.time = this.time;
-    this.snapshot.status = this.status;
-    this.snapshot.totalSpawned = this.totalSpawned;
-    this.snapshot.totalCompleted = this.totalCompleted;
-    this.snapshot.totalDropped = this.totalDropped;
-    this.snapshot.currentRps = this.currentRps;
-    this.snapshot.spikeActive = this.spikeActive;
-    this.snapshot.message = this.message;
-    return this.snapshot;
+    return {
+      time: this.time,
+      status: this.status,
+      components: new Map(this.componentState),
+      belts: new Map(this.beltState),
+      activeRequests: [...this.requests],
+      totalSpawned: this.totalSpawned,
+      totalCompleted: this.totalCompleted,
+      totalDropped: this.totalDropped,
+      currentRps: this.currentRps,
+      spikeActive: this.spikeActive,
+      message: this.message,
+    };
   }
 }
 

@@ -1,13 +1,8 @@
-import type { ConveyorBelt, PlacedComponent, Port, SimulationSnapshot } from '../game/types';
+import type { ConveyorBelt, PlacedComponent, Port, Request, SimulationSnapshot } from '../game/types';
 import { COMPONENT_DEFS, REQUEST_COLORS } from '../game/types';
 import { getComponentPorts, getSourcePort, loadColor } from '../game/simulation';
 
-/** Each visible package represents this many simulated requests. */
-const REQUESTS_PER_BATCH = 14;
-const MAX_BATCHES_TOTAL = 16;
-const MAX_BATCHES_PER_BELT = 3;
-const BATCH_TRANSIT_SECONDS = 3.2;
-const BATCH_SPACING = 0.28;
+const MAX_VISIBLE_REQUESTS = 96;
 const LOAD_LERP_SPEED = 1.8;
 
 interface BeltGraphics {
@@ -36,7 +31,7 @@ export class BoardRenderer {
   private portMap = new Map<string, Port>();
   private components: PlacedComponent[] = [];
   private belts: ConveyorBelt[] = [];
-  private flowTime = 0;
+  private beltById = new Map<string, ConveyorBelt>();
 
   mount(
     board: HTMLElement,
@@ -46,7 +41,7 @@ export class BoardRenderer {
     this.board = board;
     this.components = components;
     this.belts = belts;
-    this.flowTime = 0;
+    this.beltById = new Map(belts.map((belt) => [belt.id, belt]));
     this.displayedBeltLoads.clear();
     this.rebuildPortMap();
 
@@ -213,8 +208,6 @@ export class BoardRenderer {
   }
 
   update(snapshot: SimulationSnapshot | null, dt: number): void {
-    this.flowTime += dt;
-
     if (!snapshot) {
       for (const gfx of this.componentGraphics.values()) {
         gfx.displayedLoad = 0;
@@ -269,102 +262,55 @@ export class BoardRenderer {
       fill.style.setProperty('--belt-load', String(Math.min(displayed, 100)));
     }
 
-    this.drawBatches(snapshot);
+    this.drawRequestCircles(snapshot);
   }
 
   private clearParticles(): void {
-    if (!this.ctx || !this.canvas) return;
-    const rect = this.board?.getBoundingClientRect();
-    if (!rect) return;
+    if (!this.ctx || !this.canvas || !this.board) return;
+    const rect = this.board.getBoundingClientRect();
     this.ctx.clearRect(0, 0, rect.width, rect.height);
   }
 
-  private drawBatches(snapshot: SimulationSnapshot): void {
+  private drawRequestCircles(snapshot: SimulationSnapshot): void {
     if (!this.ctx || !this.canvas || !this.board) return;
     const rect = this.board.getBoundingClientRect();
     this.ctx.clearRect(0, 0, rect.width, rect.height);
 
-    const beltLoads = [...this.beltGraphics]
-      .map(({ belt }) => ({
-        belt,
-        traveling: snapshot.belts.get(belt.id)?.traveling ?? 0,
-      }))
-      .filter((entry) => entry.traveling > 0)
-      .sort((a, b) => b.traveling - a.traveling);
+    const traveling = snapshot.activeRequests.filter(
+      (req): req is Request & { beltId: string } =>
+        req.state === 'traveling' && req.beltId !== null
+    );
 
-    if (beltLoads.length === 0) return;
+    if (traveling.length === 0) return;
 
-    const travelingTotal = beltLoads.reduce((sum, entry) => sum + entry.traveling, 0);
-    let batchesLeft = MAX_BATCHES_TOTAL;
+    const stride =
+      traveling.length > MAX_VISIBLE_REQUESTS
+        ? traveling.length / MAX_VISIBLE_REQUESTS
+        : 1;
 
-    for (const { belt, traveling } of beltLoads) {
-      if (batchesLeft <= 0) break;
+    for (let i = 0, drawn = 0; i < traveling.length && drawn < MAX_VISIBLE_REQUESTS; i += stride, drawn++) {
+      const req = traveling[Math.floor(i)];
+      const belt = this.beltById.get(req.beltId);
+      if (!belt) continue;
 
       const from = this.portMap.get(belt.fromPortId);
       const to = this.portMap.get(belt.toPortId);
       if (!from || !to) continue;
 
-      const share = traveling / travelingTotal;
-      const batchCount = Math.min(
-        MAX_BATCHES_PER_BELT,
-        batchesLeft,
-        Math.max(1, Math.round(share * MAX_BATCHES_TOTAL)),
-        Math.ceil(traveling / REQUESTS_PER_BATCH)
-      );
-      batchesLeft -= batchCount;
+      const pos = this.pointOnBelt(from, to, req.progress);
+      const color = REQUEST_COLORS[req.colorIndex];
+      const radius = req.celebrity ? 6 : 4;
 
-      const visual = snapshot.beltVisuals.get(belt.id);
-      const color = REQUEST_COLORS[visual?.colorIndex ?? 0];
-      const celebrity = visual?.celebrity ?? false;
-      const requestsPerBatch = Math.max(1, Math.round(traveling / batchCount));
+      this.ctx.beginPath();
+      this.ctx.fillStyle = color;
+      this.ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      this.ctx.fill();
 
-      for (let i = 0; i < batchCount; i++) {
-        const offset = i * BATCH_SPACING;
-        const phase =
-          (this.flowTime / BATCH_TRANSIT_SECONDS + offset + belt.id.length * 0.013) % 1;
-        const pos = this.pointOnBelt(from, to, phase);
-        this.drawPackage(pos.x, pos.y, color, requestsPerBatch, celebrity);
+      if (req.celebrity) {
+        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+        this.ctx.lineWidth = 1.25;
+        this.ctx.stroke();
       }
     }
-  }
-
-  private drawPackage(
-    x: number,
-    y: number,
-    color: string,
-    count: number,
-    celebrity: boolean
-  ): void {
-    if (!this.ctx) return;
-
-    const w = celebrity ? 22 : 18;
-    const h = celebrity ? 14 : 12;
-    const r = 3;
-
-    this.ctx.save();
-    this.ctx.translate(x, y);
-
-    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.35)';
-    this.ctx.beginPath();
-    this.ctx.roundRect(-w / 2 + 1, -h / 2 + 1, w, h, r);
-    this.ctx.fill();
-
-    this.ctx.fillStyle = color;
-    this.ctx.strokeStyle = celebrity ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)';
-    this.ctx.lineWidth = celebrity ? 1.5 : 1;
-    this.ctx.beginPath();
-    this.ctx.roundRect(-w / 2, -h / 2, w, h, r);
-    this.ctx.fill();
-    this.ctx.stroke();
-
-    if (count > 1) {
-      this.ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-      this.ctx.font = '600 8px JetBrains Mono, monospace';
-      this.ctx.textAlign = 'center';
-      this.ctx.textBaseline = 'middle';
-      this.ctx.fillText(`×${count}`, 0, 0.5);
-    }
-
-    this.ctx.restore();
   }
 }
