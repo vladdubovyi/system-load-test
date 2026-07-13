@@ -14,8 +14,19 @@ const REQUIRED_COMPONENTS: ComponentType[] = [
   'database',
 ];
 
-const SCALED_MAX_THRESHOLD = 82;
-const SCALED_AVG_THRESHOLD = 68;
+const SCALED_MAX_THRESHOLD = 75;
+const SCALED_AVG_THRESHOLD = 58;
+const SCALED_QUEUE_THRESHOLD = 65;
+const SCALED_OVERLOAD_FRACTION = 0.08;
+
+/** Strict bar for a perfect 100 — only well-provisioned architectures should pass. */
+const EXCELLENCE = {
+  minSuccessRate: 0.98,
+  maxDropRate: 0.02,
+  maxOverloadFraction: 0.08,
+  maxQueueFill: 55,
+  maxAvgUtil: 72,
+};
 
 export interface ReportInput {
   components: PlacedComponent[];
@@ -77,11 +88,28 @@ function findMissingComponents(components: PlacedComponent[]): ComponentType[] {
   return REQUIRED_COMPONENTS.filter((type) => !placed.has(type));
 }
 
-function findScaledServices(reports: ComponentReport[]): ComponentReport[] {
+function findScaledServices(
+  reports: ComponentReport[],
+  duration: number
+): ComponentReport[] {
+  return reports.filter((r) => {
+    if (r.failed) return false;
+    const overloadFraction = r.overloadSeconds / Math.max(duration, 0.001);
+    return (
+      r.maxLoad >= SCALED_MAX_THRESHOLD ||
+      r.avgLoad >= SCALED_AVG_THRESHOLD ||
+      r.maxQueueFill >= SCALED_QUEUE_THRESHOLD ||
+      overloadFraction >= SCALED_OVERLOAD_FRACTION
+    );
+  });
+}
+
+function findOverloadedServices(
+  reports: ComponentReport[],
+  duration: number
+): ComponentReport[] {
   return reports.filter(
-    (r) =>
-      !r.failed &&
-      (r.maxLoad >= SCALED_MAX_THRESHOLD || r.avgLoad >= SCALED_AVG_THRESHOLD)
+    (r) => r.overloadSeconds / Math.max(duration, 0.001) >= EXCELLENCE.maxOverloadFraction
   );
 }
 
@@ -119,6 +147,45 @@ function findWastedResources(reports: ComponentReport[]): ComponentReport[] {
   return wasted;
 }
 
+function meetsExcellence(
+  input: ReportInput,
+  reports: ComponentReport[],
+  broken: ComponentReport[],
+  missing: ComponentType[]
+): boolean {
+  if (input.outcome !== 'won' || broken.length > 0 || missing.length > 0) {
+    return false;
+  }
+
+  const successRate =
+    input.totalSpawned > 0 ? input.totalCompleted / input.totalSpawned : 0;
+  const dropRate =
+    input.totalSpawned + input.totalDropped > 0
+      ? input.totalDropped / (input.totalSpawned + input.totalDropped)
+      : 0;
+
+  if (successRate < EXCELLENCE.minSuccessRate) return false;
+  if (dropRate > EXCELLENCE.maxDropRate) return false;
+
+  for (const report of reports) {
+    const overloadFraction = report.overloadSeconds / Math.max(input.duration, 0.001);
+    if (overloadFraction > EXCELLENCE.maxOverloadFraction) return false;
+    if (report.maxQueueFill > EXCELLENCE.maxQueueFill) return false;
+    if (report.avgLoad > EXCELLENCE.maxAvgUtil) return false;
+  }
+
+  const redis = reports.find((r) => r.type === 'redis');
+  const dbReports = reports.filter((r) => r.type === 'database');
+  const backendCount = reports.filter((r) => r.type === 'backend').length;
+  const shortenerCount = reports.filter((r) => r.type === 'shortener').length;
+
+  if (backendCount < 2 || shortenerCount < 2 || dbReports.length < 2) return false;
+  if (!redis || redis.avgLoad < 10) return false;
+  if (dbReports.some((db) => db.avgLoad > 55)) return false;
+
+  return true;
+}
+
 function computeScore(
   input: ReportInput,
   reports: ComponentReport[],
@@ -128,51 +195,72 @@ function computeScore(
 ): number {
   let score = 0;
 
-  // Survival (35 pts)
+  // Survival (30 pts)
   if (input.outcome === 'won') {
-    score += 35;
+    score += 30;
   } else {
     const survivalRatio = input.duration / SCENARIO.duration;
-    score += Math.round(35 * survivalRatio * 0.55);
+    score += Math.round(30 * survivalRatio * 0.5);
   }
 
   // Reliability (25 pts) — completion & drop rate
   const successRate =
     input.totalSpawned > 0 ? input.totalCompleted / input.totalSpawned : 0;
-  score += Math.round(successRate * 18);
+  score += Math.round(Math.min(successRate, 1) * 18);
   const dropRate =
-    input.totalSpawned > 0 ? input.totalDropped / input.totalSpawned : 1;
-  score += Math.round(Math.max(0, 7 - dropRate * 20));
+    input.totalSpawned + input.totalDropped > 0
+      ? input.totalDropped / (input.totalSpawned + input.totalDropped)
+      : 1;
+  score += Math.round(Math.max(0, 7 - dropRate * 35));
 
-  // Availability (15 pts) — downtime across fleet
+  // Capacity headroom (20 pts) — penalize sustained saturation
+  const avgPeakLoad =
+    reports.reduce((s, r) => s + r.maxLoad, 0) / Math.max(reports.length, 1);
+  const headroomScore = Math.max(0, 1 - Math.max(0, avgPeakLoad - 50) / 50);
+  score += Math.round(headroomScore * 12);
+
+  const overloadBurden = reports.reduce(
+    (s, r) => s + r.overloadSeconds / Math.max(input.duration, 0.001),
+    0
+  ) / Math.max(reports.length, 1);
+  score += Math.round(Math.max(0, 8 * (1 - overloadBurden * 3)));
+
+  // Availability (10 pts)
   const totalDowntime = reports.reduce((s, r) => s + r.downtimeSeconds, 0);
   const downtimeRatio = totalDowntime / Math.max(reports.length * input.duration, 1);
-  score += Math.round(Math.max(0, 15 * (1 - downtimeRatio * 4)));
+  score += Math.round(Math.max(0, 10 * (1 - downtimeRatio * 4)));
 
-  // Efficiency (15 pts) — wasted spend & idle time
+  // Efficiency (10 pts)
   const totalCost = reports.reduce((s, r) => s + r.monthlyCost, 0);
   const wastedCost = wasted.reduce((s, r) => s + r.monthlyCost, 0);
   const wasteRatio = totalCost > 0 ? wastedCost / totalCost : 0;
   score += Math.round(Math.max(0, 10 * (1 - wasteRatio)));
-  const avgIdle =
-    reports.reduce((s, r) => s + r.idleSeconds, 0) /
-    Math.max(reports.length * input.duration, 1);
-  score += Math.round(Math.max(0, 5 * (1 - avgIdle * 2)));
 
-  // Architecture completeness (10 pts)
-  score += Math.round(((REQUIRED_COMPONENTS.length - missing.length) / REQUIRED_COMPONENTS.length) * 10);
+  // Architecture completeness (5 pts)
+  score += Math.round(
+    ((REQUIRED_COMPONENTS.length - missing.length) / REQUIRED_COMPONENTS.length) * 5
+  );
 
   // Penalties
-  score -= broken.length * 8;
-  score -= missing.length * 6;
+  score -= broken.length * 10;
+  score -= missing.length * 8;
 
-  const overloadPenalty = reports.reduce(
-    (s, r) => s + Math.min(r.overloadSeconds / input.duration, 1),
+  const queuePenalty = reports.reduce(
+    (s, r) => s + Math.min(r.queuePressureSeconds / input.duration, 1),
     0
   );
-  score -= Math.round(overloadPenalty * 3);
+  score -= Math.round(queuePenalty * 4);
 
-  return Math.max(0, Math.min(100, Math.round(score)));
+  const scaledCount = findScaledServices(reports, input.duration).length;
+  score -= scaledCount * 3;
+
+  score = Math.max(0, Math.min(94, Math.round(score)));
+
+  if (meetsExcellence(input, reports, broken, missing)) {
+    return 100;
+  }
+
+  return score;
 }
 
 function buildRecommendations(
@@ -180,6 +268,7 @@ function buildRecommendations(
   reports: ComponentReport[],
   broken: ComponentReport[],
   scaled: ComponentReport[],
+  overloaded: ComponentReport[],
   wasted: ComponentReport[],
   missing: ComponentType[]
 ): string[] {
@@ -197,9 +286,15 @@ function buildRecommendations(
     );
   }
 
+  if (overloaded.length > 0) {
+    tips.push(
+      `${overloaded.map((r) => r.label).join(', ')} ran at 100% capacity too often — add instances or cache before the database.`
+    );
+  }
+
   if (scaled.length > 0) {
     tips.push(
-      `High load on ${scaled.map((r) => r.label).join(', ')} — consider horizontal scaling or sharding.`
+      `High load on ${scaled.map((r) => r.label).join(', ')} — scale the read path horizontally and keep Redis in front of the database.`
     );
   }
 
@@ -209,19 +304,23 @@ function buildRecommendations(
     );
   }
 
-  const db = reports.find((r) => r.type === 'database');
+  const dbReports = reports.filter((r) => r.type === 'database');
   const redis = reports.find((r) => r.type === 'redis');
-  if (db && db.avgLoad > 65 && (!redis || redis.avgLoad < 20)) {
-    tips.push('Database is hot — route more reads through Redis cache.');
+  const hotDb = dbReports.find((db) => db.avgLoad > 50);
+  if (hotDb && (!redis || redis.avgLoad < 20)) {
+    tips.push('Database is hot — route reads through Redis cache-aside before hitting the database.');
+  }
+
+  const backendCount = reports.filter((r) => r.type === 'backend').length;
+  if (backendCount < 2 && reports.some((r) => r.type === 'backend' && r.maxLoad >= 80)) {
+    tips.push('Read path is the bottleneck — add more Backend instances behind the load balancer.');
   }
 
   if (input.totalDropped > input.totalSpawned * 0.05) {
     tips.push('Too many dropped requests — check bottlenecks and queue limits on belts.');
   }
 
-  const queueHot = reports.filter(
-    (r) => r.maxQueueFill >= 90 && !r.failed
-  );
+  const queueHot = reports.filter((r) => r.maxQueueFill >= 90 && !r.failed);
   if (queueHot.length > 0) {
     tips.push(
       `Queue saturation on ${queueHot.map((r) => r.label).join(', ')} — requests are waiting; scale capacity or add instances.`
@@ -229,23 +328,27 @@ function buildRecommendations(
   }
 
   if (input.outcome === 'won' && tips.length === 0) {
-    tips.push('Solid architecture — try trimming cost or surviving a longer spike window.');
+    tips.push('Production-grade architecture — healthy headroom across all services.');
   }
 
-  return tips.slice(0, 5);
+  return tips.slice(0, 6);
 }
 
 export function buildSimulationReport(input: ReportInput): SimulationReport {
   const components = buildComponentReports(input);
   const brokenServices = components.filter((r) => r.failed);
-  const scaledServices = findScaledServices(components);
+  const scaledServices = findScaledServices(components, input.duration);
+  const overloadedServices = findOverloadedServices(components, input.duration);
   const wastedResources = findWastedResources(components);
   const missingComponents = findMissingComponents(input.components);
   const totalCost = components.reduce((s, r) => s + r.monthlyCost, 0);
   const wastedCost = wastedResources.reduce((s, r) => s + r.monthlyCost, 0);
   const successRate =
     input.totalSpawned > 0
-      ? Math.round((input.totalCompleted / input.totalSpawned) * 1000) / 10
+      ? Math.min(
+          100,
+          Math.round((input.totalCompleted / input.totalSpawned) * 1000) / 10
+        )
       : 0;
   const totalDowntime = components.reduce((s, r) => s + r.downtimeSeconds, 0);
   const availabilityPct =
@@ -259,6 +362,16 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     input,
     components,
     brokenServices,
+    wastedResources,
+    missingComponents
+  );
+
+  const recommendations = buildRecommendations(
+    input,
+    components,
+    brokenServices,
+    scaledServices,
+    overloadedServices,
     wastedResources,
     missingComponents
   );
@@ -282,14 +395,7 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     peakRps: Math.round(input.peakRps),
     spikeEvents: input.spikeEvents,
     availabilityPct,
-    recommendations: buildRecommendations(
-      input,
-      components,
-      brokenServices,
-      scaledServices,
-      wastedResources,
-      missingComponents
-    ),
+    recommendations,
   };
 }
 

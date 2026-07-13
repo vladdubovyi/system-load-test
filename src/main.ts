@@ -116,9 +116,10 @@ function render(): void {
           <ol class="help-steps">
             <li>Place a <strong>Load Balancer</strong> first</li>
             <li>Connect <span class="port-tag">Requests</span> → Load Balancer</li>
-            <li>LB → Shortener (creates) & Backend (reads)</li>
-            <li>Shortener → Database (+ Redis optional)</li>
-            <li>Backend → Redis (cache) → done, or Database on miss</li>
+            <li>LB → Shortener pool (creates) & Backend pool (reads)</li>
+            <li>Shortener → Database (+ Redis cache warm)</li>
+            <li>Backend → Redis first (cache-aside), Database on miss</li>
+            <li>Scale read services horizontally for viral traffic</li>
             <li>Click output port, then input port to add conveyor belts</li>
           </ol>
         </section>
