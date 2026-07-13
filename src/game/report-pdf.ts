@@ -116,8 +116,9 @@ export function downloadReportPdf(report: SimulationReport): void {
     head: [
       [
         'Component',
-        'Max',
-        'Avg',
+        'Peak util.',
+        'Avg util.',
+        'Peak queue',
         'Downtime',
         'Overload',
         'Idle',
@@ -129,6 +130,7 @@ export function downloadReportPdf(report: SimulationReport): void {
       c.label,
       `${Math.round(c.maxLoad)}%`,
       `${Math.round(c.avgLoad)}%`,
+      `${Math.round(c.maxQueueFill)}%`,
       formatSeconds(c.downtimeSeconds),
       formatSeconds(c.overloadSeconds),
       formatSeconds(c.idleSeconds),
@@ -187,12 +189,12 @@ export function downloadReportPdf(report: SimulationReport): void {
   y = ensureSpace(doc, y, 20);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.text('Load profile (peak)', 14, y);
+  doc.text('Utilization profile (peak)', 14, y);
   y += 4;
 
   autoTable(doc, {
     startY: y,
-    head: [['Component', 'Peak load']],
+    head: [['Component', 'Peak utilization']],
     body: report.components.map((c) => [
       c.label,
       `${Math.round(c.maxLoad)}%`,

@@ -19,6 +19,7 @@ function componentRow(report: SimulationReport['components'][0]): string {
       <td><span class="report-emoji">${report.emoji}</span> ${report.label}</td>
       <td>${Math.round(report.maxLoad)}%</td>
       <td>${Math.round(report.avgLoad)}%</td>
+      <td>${Math.round(report.maxQueueFill)}%</td>
       <td>${formatSeconds(report.downtimeSeconds)}</td>
       <td>${formatSeconds(report.overloadSeconds)}</td>
       <td>${formatSeconds(report.idleSeconds)}</td>
@@ -105,8 +106,9 @@ export function renderReportModal(report: SimulationReport): string {
                 <thead>
                   <tr>
                     <th>Component</th>
-                    <th>Max load</th>
-                    <th>Avg load</th>
+                    <th>Peak util.</th>
+                    <th>Avg util.</th>
+                    <th>Peak queue</th>
                     <th>Downtime</th>
                     <th>Overload</th>
                     <th>Idle</th>
@@ -148,7 +150,7 @@ export function renderReportModal(report: SimulationReport): string {
           }
 
           <section class="report-section">
-            <h3>Load profile</h3>
+            <h3>Utilization profile</h3>
             <div class="report-load-profile">
               ${report.components
                 .map(

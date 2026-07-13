@@ -56,16 +56,18 @@ function buildComponentReports(input: ReportInput): ComponentReport[] {
       type: component.type,
       label: component.label,
       emoji: def.emoji,
-      maxLoad: tel?.maxLoad ?? 0,
-      avgLoad,
+      maxLoad: Math.min(tel?.maxLoad ?? 0, 100),
+      avgLoad: Math.min(avgLoad, 100),
+      maxQueueFill: Math.min(tel?.maxQueueFill ?? 0, 100),
       downtimeSeconds: tel?.downtimeSeconds ?? 0,
       overloadSeconds: tel?.overloadSeconds ?? 0,
+      queuePressureSeconds: tel?.queuePressureSeconds ?? 0,
       idleSeconds: tel?.idleSeconds ?? 0,
       processed: Math.round(processed),
       dropped: Math.round(st?.dropped ?? 0),
       failed: st?.failed ?? false,
       monthlyCost: def.monthlyCost,
-      utilizationPct: Math.min(utilizationPct, 150),
+      utilizationPct: Math.min(utilizationPct, 100),
     };
   });
 }
@@ -215,6 +217,15 @@ function buildRecommendations(
 
   if (input.totalDropped > input.totalSpawned * 0.05) {
     tips.push('Too many dropped requests — check bottlenecks and queue limits on belts.');
+  }
+
+  const queueHot = reports.filter(
+    (r) => r.maxQueueFill >= 90 && !r.failed
+  );
+  if (queueHot.length > 0) {
+    tips.push(
+      `Queue saturation on ${queueHot.map((r) => r.label).join(', ')} — requests are waiting; scale capacity or add instances.`
+    );
   }
 
   if (input.outcome === 'won' && tips.length === 0) {

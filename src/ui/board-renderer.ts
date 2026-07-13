@@ -230,7 +230,7 @@ export class BoardRenderer {
       gfx.displayedLoad = this.lerp(gfx.displayedLoad, targetLoad, dt);
       const loadPct = Math.min(gfx.displayedLoad, 100);
       gfx.root.style.setProperty('--load', String(loadPct));
-      gfx.loadEl.textContent = compState ? `${Math.round(gfx.displayedLoad)}%` : '';
+      gfx.loadEl.textContent = compState ? `${Math.round(loadPct)}%` : '';
 
       gfx.root.classList.toggle('failed', compState?.failed ?? false);
 

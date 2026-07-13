@@ -263,8 +263,10 @@ export class SimulationEngine {
       this.telemetry.set(component.id, {
         loadIntegral: 0,
         maxLoad: 0,
+        maxQueueFill: 0,
         downtimeSeconds: 0,
         overloadSeconds: 0,
+        queuePressureSeconds: 0,
         idleSeconds: 0,
         failedAt: null,
       });
@@ -369,6 +371,10 @@ export class SimulationEngine {
       tel.loadIntegral += state.load * dt;
       tel.maxLoad = Math.max(tel.maxLoad, state.load);
 
+      const queueFill =
+        component.queueLimit > 0 ? (state.queue / component.queueLimit) * 100 : 0;
+      tel.maxQueueFill = Math.max(tel.maxQueueFill, queueFill);
+
       if (state.failed) {
         tel.downtimeSeconds += dt;
         if (tel.failedAt === null) {
@@ -378,6 +384,10 @@ export class SimulationEngine {
 
       if (state.load >= 100) {
         tel.overloadSeconds += dt;
+      }
+
+      if (queueFill >= 80) {
+        tel.queuePressureSeconds += dt;
       }
 
       if (state.load < IDLE_LOAD_THRESHOLD && !state.failed) {
@@ -548,9 +558,11 @@ export class SimulationEngine {
         state.processing = 0;
       }
 
-      const loadRatio =
-        (state.queue + state.processing) / Math.max(component.queueLimit, 1);
-      if (loadRatio >= 1) {
+      if (component.type === 'load-balancer') {
+        continue;
+      }
+
+      if (state.queue >= component.queueLimit) {
         const timer = (this.overloadTimers.get(component.id) ?? 0) + dt;
         this.overloadTimers.set(component.id, timer);
         if (timer >= 1.8) {
@@ -669,12 +681,17 @@ export class SimulationEngine {
   private updateLoads(): void {
     for (const component of this.components) {
       const state = this.componentState.get(component.id)!;
-      const ratio = (state.queue + state.processing) / component.capacity;
-      state.load = clamp(ratio * 100, 0, 150);
+      if (component.type === 'load-balancer') {
+        state.load = clamp((this.currentRps / component.capacity) * 100, 0, 100);
+      } else {
+        const utilization =
+          component.capacity > 0 ? (state.processing / component.capacity) * 100 : 0;
+        state.load = clamp(utilization, 0, 100);
+      }
     }
     for (const belt of this.belts) {
       const state = this.beltState.get(belt.id)!;
-      state.load = clamp((state.traveling / belt.capacity) * 100, 0, 150);
+      state.load = clamp((state.traveling / belt.capacity) * 100, 0, 100);
     }
   }
 
