@@ -2,7 +2,13 @@
 
 A browser-based game where you architect systems under interview-style load. Start with the **URL Shortener** scenario: wire up load balancers, services, caches, and databases using conveyor belts, then survive traffic spikes and celebrity URL hotspots.
 
-## Play
+## Play online
+
+**https://vladdubovyi.github.io/system-load-test/**
+
+Hosted free on GitHub Pages — always available, no tunnel required.
+
+## Play locally
 
 ```bash
 npm install
@@ -33,3 +39,9 @@ Open the URL shown in the terminal (typically http://localhost:5173).
 npm run build
 npm run preview
 ```
+
+## Deployment
+
+Pushes to `main` automatically deploy to GitHub Pages via `.github/workflows/deploy.yml`.
+
+To enable Pages for the first time: repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
