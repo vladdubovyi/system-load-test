@@ -1,0 +1,169 @@
+export type ComponentType =
+  | 'load-balancer'
+  | 'shortener'
+  | 'backend'
+  | 'database'
+  | 'redis';
+
+export type RequestKind = 'create' | 'read';
+
+export type PortSide = 'in' | 'out';
+
+export interface Port {
+  id: string;
+  componentId: string;
+  side: PortSide;
+  label: string;
+  x: number;
+  y: number;
+}
+
+export interface PlacedComponent {
+  id: string;
+  type: ComponentType;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  label: string;
+  capacity: number;
+  queueLimit: number;
+}
+
+export interface ConveyorBelt {
+  id: string;
+  fromPortId: string;
+  toPortId: string;
+  capacity: number;
+}
+
+export interface Request {
+  id: number;
+  kind: RequestKind;
+  colorIndex: number;
+  celebrity: boolean;
+  progress: number;
+  beltId: string | null;
+  currentComponentId: string | null;
+  targetPortId: string | null;
+  state: 'traveling' | 'queued' | 'processing' | 'done' | 'dropped';
+  waitTime: number;
+}
+
+export interface ComponentState {
+  load: number;
+  queue: number;
+  processing: number;
+  failed: boolean;
+  processed: number;
+  dropped: number;
+}
+
+export interface BeltState {
+  load: number;
+  traveling: number;
+  dropped: number;
+}
+
+export type SimulationStatus = 'idle' | 'running' | 'won' | 'lost';
+
+export interface SimulationSnapshot {
+  time: number;
+  status: SimulationStatus;
+  components: Map<string, ComponentState>;
+  belts: Map<string, BeltState>;
+  activeRequests: Request[];
+  totalSpawned: number;
+  totalCompleted: number;
+  totalDropped: number;
+  currentRps: number;
+  spikeActive: boolean;
+  message: string;
+}
+
+export const REQUEST_COLORS = [
+  '#22d3ee',
+  '#a78bfa',
+  '#f472b6',
+  '#fbbf24',
+  '#34d399',
+] as const;
+
+export const CELEBRITY_COLOR_INDICES = [1, 2, 3] as const;
+
+export const COMPONENT_DEFS: Record<
+  ComponentType,
+  {
+    label: string;
+    width: number;
+    height: number;
+    capacity: number;
+    queueLimit: number;
+    description: string;
+    emoji: string;
+  }
+> = {
+  'load-balancer': {
+    label: 'Load Balancer',
+    width: 140,
+    height: 72,
+    capacity: 600,
+    queueLimit: 120,
+    description: 'Distributes incoming traffic',
+    emoji: '⚖️',
+  },
+  shortener: {
+    label: 'Shortener Service',
+    width: 150,
+    height: 72,
+    capacity: 180,
+    queueLimit: 80,
+    description: 'Original URL → short URL',
+    emoji: '✂️',
+  },
+  backend: {
+    label: 'Backend Service',
+    width: 150,
+    height: 72,
+    capacity: 220,
+    queueLimit: 90,
+    description: 'Short URL → original URL',
+    emoji: '🔍',
+  },
+  database: {
+    label: 'Database',
+    width: 120,
+    height: 72,
+    capacity: 110,
+    queueLimit: 60,
+    description: 'Persistent URL mappings',
+    emoji: '🗄️',
+  },
+  redis: {
+    label: 'Redis Cache',
+    width: 120,
+    height: 72,
+    capacity: 900,
+    queueLimit: 150,
+    description: 'Hot URL cache layer',
+    emoji: '⚡',
+  },
+};
+
+export const SCENARIO = {
+  id: 'url-shortener',
+  title: 'Design a URL Shortener',
+  duration: 45,
+  requirements: [
+    'Very high sustained load — millions of redirects per day',
+    'Traffic spikes during viral events (celebrity links)',
+    'Mixed request types: creates (shorten) and reads (redirect)',
+    'Colored requests = different original URLs — a few go viral',
+    'Goal: keep every component healthy for the full simulation',
+  ],
+  baseRps: 200,
+  spikeMultiplier: 3.2,
+  spikeChance: 0.08,
+  readRatio: 0.72,
+  celebrityShare: 0.82,
+};
