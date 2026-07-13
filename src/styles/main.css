@@ -295,6 +295,14 @@ body {
   color: var(--text-muted);
 }
 
+.help-subheading {
+  margin: 0.85rem 0 0.5rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
 .help-steps {
   margin: 0;
   padding-left: 1.1rem;

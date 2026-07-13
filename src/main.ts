@@ -19,6 +19,7 @@ import {
   loadColor,
   SOURCE_ID,
 } from './game/simulation';
+import { URL_SHORTENER_PRESET, buildPreset } from './game/presets';
 
 interface GameState {
   components: PlacedComponent[];
@@ -59,6 +60,7 @@ function render(): void {
         </div>
         <div class="header-stats" id="header-stats"></div>
         <div class="header-actions">
+          <button class="btn btn-secondary" id="btn-preset" type="button">⚡ Load Preset</button>
           <button class="btn btn-secondary" id="btn-reset" type="button">Reset Board</button>
           <button class="btn btn-primary" id="btn-play" type="button">▶ Play</button>
         </div>
@@ -89,7 +91,11 @@ function render(): void {
         </section>
 
         <section class="panel help-panel">
-          <h2>How to wire</h2>
+          <h2>Quick start</h2>
+          <p class="panel-hint">
+            New here? Click <strong>Load Preset</strong> for a reference architecture, then hit <strong>Play</strong>.
+          </p>
+          <h2 class="help-subheading">How to wire</h2>
           <ol class="help-steps">
             <li>Place a <strong>Load Balancer</strong> first</li>
             <li>Connect <span class="port-tag">Requests</span> → Load Balancer</li>
@@ -405,6 +411,10 @@ function bindEvents(): void {
     }
   });
 
+  document.getElementById('btn-preset')!.addEventListener('click', () => {
+    loadPreset();
+  });
+
   document.getElementById('btn-reset')!.addEventListener('click', () => {
     stopSimulation();
     state.components = [];
@@ -476,6 +486,24 @@ function setModeLabel(text: string): void {
   if (el) el.textContent = text;
 }
 
+function loadPreset(): void {
+  if (state.snapshot?.status === 'running') {
+    stopSimulation();
+  }
+
+  const { components, belts } = buildPreset(URL_SHORTENER_PRESET);
+  state.components = components;
+  state.belts = belts;
+  state.engine = null;
+  state.snapshot = null;
+  state.selectedPalette = null;
+  state.connectFromPort = null;
+  renderPalette();
+  refreshBoard();
+  updateStatus();
+  setModeLabel('Preset loaded — press Play to simulate');
+}
+
 function startSimulation(): void {
   state.engine = new SimulationEngine(state.components, state.belts);
   state.engine.start();
@@ -514,3 +542,4 @@ function stopSimulation(): void {
 }
 
 render();
+loadPreset();
