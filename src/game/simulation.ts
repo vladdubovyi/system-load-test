@@ -2,14 +2,17 @@ import type {
   BeltState,
   ComponentState,
   ComponentType,
+  ComponentTelemetry,
   ConveyorBelt,
   PlacedComponent,
   Port,
   Request,
   RequestKind,
+  SimulationReport,
   SimulationSnapshot,
   SimulationStatus,
 } from './types';
+import { buildSimulationReport } from './report';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -18,6 +21,7 @@ import {
 } from './types';
 
 const SOURCE_ID = '__source__';
+const IDLE_LOAD_THRESHOLD = 15;
 
 let nextRequestId = 1;
 
@@ -206,6 +210,10 @@ export class SimulationEngine {
   private spikeTimer = 0;
   private message = 'Wire up your system, then press Play.';
   private overloadTimers = new Map<string, number>();
+  private telemetry = new Map<string, ComponentTelemetry>();
+  private peakRps = 0;
+  private spikeEvents = 0;
+  private wasSpikeActive = false;
 
   constructor(components: PlacedComponent[], belts: ConveyorBelt[]) {
     this.components = components;
@@ -242,6 +250,7 @@ export class SimulationEngine {
   private resetStates(): void {
     this.componentState.clear();
     this.beltState.clear();
+    this.telemetry.clear();
     for (const component of this.components) {
       this.componentState.set(component.id, {
         load: 0,
@@ -250,6 +259,14 @@ export class SimulationEngine {
         failed: false,
         processed: 0,
         dropped: 0,
+      });
+      this.telemetry.set(component.id, {
+        loadIntegral: 0,
+        maxLoad: 0,
+        downtimeSeconds: 0,
+        overloadSeconds: 0,
+        idleSeconds: 0,
+        failedAt: null,
       });
     }
     for (const belt of this.belts) {
@@ -266,6 +283,9 @@ export class SimulationEngine {
     this.totalDropped = 0;
     this.requests = [];
     this.overloadTimers.clear();
+    this.peakRps = 0;
+    this.spikeEvents = 0;
+    this.wasSpikeActive = false;
     this.resetStates();
     this.message = 'Simulation running — watch for red overload!';
     nextRequestId = 1;
@@ -305,6 +325,7 @@ export class SimulationEngine {
     this.updateBelts(dt);
     this.updateComponents(dt);
     this.updateLoads();
+    this.recordTelemetry(dt);
 
     if (this.time >= SCENARIO.duration) {
       const anyFailed = [...this.componentState.values()].some((s) => s.failed);
@@ -331,6 +352,37 @@ export class SimulationEngine {
     } else {
       const jitter = 1 + (Math.random() - 0.5) * 0.15;
       this.currentRps = SCENARIO.baseRps * jitter;
+    }
+
+    this.peakRps = Math.max(this.peakRps, this.currentRps);
+    if (this.spikeActive && !this.wasSpikeActive) {
+      this.spikeEvents += 1;
+    }
+    this.wasSpikeActive = this.spikeActive;
+  }
+
+  private recordTelemetry(dt: number): void {
+    for (const component of this.components) {
+      const state = this.componentState.get(component.id)!;
+      const tel = this.telemetry.get(component.id)!;
+
+      tel.loadIntegral += state.load * dt;
+      tel.maxLoad = Math.max(tel.maxLoad, state.load);
+
+      if (state.failed) {
+        tel.downtimeSeconds += dt;
+        if (tel.failedAt === null) {
+          tel.failedAt = this.time;
+        }
+      }
+
+      if (state.load >= 100) {
+        tel.overloadSeconds += dt;
+      }
+
+      if (state.load < IDLE_LOAD_THRESHOLD && !state.failed) {
+        tel.idleSeconds += dt;
+      }
     }
   }
 
@@ -624,6 +676,29 @@ export class SimulationEngine {
       const state = this.beltState.get(belt.id)!;
       state.load = clamp((state.traveling / belt.capacity) * 100, 0, 150);
     }
+  }
+
+  getReport(): SimulationReport {
+    const outcome = this.status === 'won' ? 'won' : 'lost';
+    const componentState = new Map(
+      [...this.componentState.entries()].map(([id, st]) => [
+        id,
+        { processed: st.processed, dropped: st.dropped, failed: st.failed },
+      ])
+    );
+
+    return buildSimulationReport({
+      components: this.components,
+      telemetry: this.telemetry,
+      componentState,
+      duration: this.time,
+      outcome,
+      totalSpawned: this.totalSpawned,
+      totalCompleted: this.totalCompleted,
+      totalDropped: this.totalDropped,
+      peakRps: this.peakRps,
+      spikeEvents: this.spikeEvents,
+    });
   }
 
   getSnapshot(): SimulationSnapshot {

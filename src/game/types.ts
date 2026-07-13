@@ -101,6 +101,7 @@ export const COMPONENT_DEFS: Record<
     queueLimit: number;
     description: string;
     emoji: string;
+    monthlyCost: number;
   }
 > = {
   'load-balancer': {
@@ -111,6 +112,7 @@ export const COMPONENT_DEFS: Record<
     queueLimit: 120,
     description: 'Distributes incoming traffic',
     emoji: '⚖️',
+    monthlyCost: 120,
   },
   shortener: {
     label: 'Shortener Service',
@@ -120,6 +122,7 @@ export const COMPONENT_DEFS: Record<
     queueLimit: 80,
     description: 'Original URL → short URL',
     emoji: '✂️',
+    monthlyCost: 180,
   },
   backend: {
     label: 'Backend Service',
@@ -129,6 +132,7 @@ export const COMPONENT_DEFS: Record<
     queueLimit: 90,
     description: 'Short URL → original URL',
     emoji: '🔍',
+    monthlyCost: 200,
   },
   database: {
     label: 'Database',
@@ -138,6 +142,7 @@ export const COMPONENT_DEFS: Record<
     queueLimit: 60,
     description: 'Persistent URL mappings',
     emoji: '🗄️',
+    monthlyCost: 350,
   },
   redis: {
     label: 'Redis Cache',
@@ -147,8 +152,57 @@ export const COMPONENT_DEFS: Record<
     queueLimit: 150,
     description: 'Hot URL cache layer',
     emoji: '⚡',
+    monthlyCost: 90,
   },
 };
+
+export interface ComponentTelemetry {
+  loadIntegral: number;
+  maxLoad: number;
+  downtimeSeconds: number;
+  overloadSeconds: number;
+  idleSeconds: number;
+  failedAt: number | null;
+}
+
+export interface ComponentReport {
+  id: string;
+  type: ComponentType;
+  label: string;
+  emoji: string;
+  maxLoad: number;
+  avgLoad: number;
+  downtimeSeconds: number;
+  overloadSeconds: number;
+  idleSeconds: number;
+  processed: number;
+  dropped: number;
+  failed: boolean;
+  monthlyCost: number;
+  utilizationPct: number;
+}
+
+export interface SimulationReport {
+  outcome: 'won' | 'lost';
+  duration: number;
+  score: number;
+  grade: string;
+  totalCost: number;
+  wastedCost: number;
+  components: ComponentReport[];
+  brokenServices: ComponentReport[];
+  scaledServices: ComponentReport[];
+  wastedResources: ComponentReport[];
+  missingComponents: ComponentType[];
+  totalSpawned: number;
+  totalCompleted: number;
+  totalDropped: number;
+  successRate: number;
+  peakRps: number;
+  spikeEvents: number;
+  availabilityPct: number;
+  recommendations: string[];
+}
 
 export const SCENARIO = {
   id: 'url-shortener',

@@ -19,6 +19,7 @@ import {
 } from './game/simulation';
 import { URL_SHORTENER_PRESET, buildPreset } from './game/presets';
 import { BoardRenderer } from './ui/board-renderer';
+import { mountReportModal } from './ui/report-modal';
 
 interface GameState {
   components: PlacedComponent[];
@@ -31,6 +32,7 @@ interface GameState {
   lastTick: number;
   lastHudUpdate: number;
   simAccumulator: number;
+  lastRunStatus: 'idle' | 'running' | 'won' | 'lost';
   displayedHud: {
     time: number;
     rps: number;
@@ -55,6 +57,7 @@ const state: GameState = {
   lastTick: 0,
   lastHudUpdate: 0,
   simAccumulator: 0,
+  lastRunStatus: 'idle',
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
 };
 
@@ -421,9 +424,19 @@ function loadPreset(): void {
   setModeLabel('Preset loaded — press Play to simulate');
 }
 
+function showRunReport(): void {
+  if (!state.engine) return;
+  mountReportModal(
+    state.engine.getReport(),
+    () => undefined,
+    () => startSimulation()
+  );
+}
+
 function startSimulation(): void {
   state.engine = new SimulationEngine(state.components, state.belts);
   state.engine.start();
+  state.lastRunStatus = 'running';
   state.lastTick = performance.now();
   state.lastHudUpdate = state.lastTick;
   state.simAccumulator = 0;
@@ -435,6 +448,15 @@ function startSimulation(): void {
       state.animFrame = null;
       refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
       updateStatus();
+
+      if (
+        snap &&
+        (snap.status === 'won' || snap.status === 'lost') &&
+        state.lastRunStatus === 'running'
+      ) {
+        state.lastRunStatus = snap.status;
+        showRunReport();
+      }
       return;
     }
 
@@ -466,7 +488,11 @@ function stopSimulation(): void {
     cancelAnimationFrame(state.animFrame);
     state.animFrame = null;
   }
+  const snap = state.engine?.getSnapshot();
   state.engine?.stop();
+  if (snap?.status === 'running') {
+    state.lastRunStatus = 'idle';
+  }
   refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
   updateStatus();
 }
