@@ -159,8 +159,10 @@ export const COMPONENT_DEFS: Record<
 export interface ComponentTelemetry {
   loadIntegral: number;
   maxLoad: number;
+  maxQueueFill: number;
   downtimeSeconds: number;
   overloadSeconds: number;
+  queuePressureSeconds: number;
   idleSeconds: number;
   failedAt: number | null;
 }
@@ -172,8 +174,10 @@ export interface ComponentReport {
   emoji: string;
   maxLoad: number;
   avgLoad: number;
+  maxQueueFill: number;
   downtimeSeconds: number;
   overloadSeconds: number;
+  queuePressureSeconds: number;
   idleSeconds: number;
   processed: number;
   dropped: number;
