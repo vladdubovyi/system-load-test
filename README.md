@@ -44,4 +44,12 @@ npm run preview
 
 Pushes to `main` automatically deploy to GitHub Pages via `.github/workflows/deploy.yml`.
 
-To enable Pages for the first time: repo **Settings → Pages → Build and deployment → Source: GitHub Actions**.
+**Live URL (after one-time setup):** https://vladdubovyi.github.io/system-load-test/
+
+### One-time enable (required)
+
+1. Open [repo Settings → Pages](https://github.com/vladdubovyi/system-load-test/settings/pages)
+2. Set **Source** to **GitHub Actions**
+3. Re-run the [Deploy workflow](https://github.com/vladdubovyi/system-load-test/actions/workflows/deploy.yml)
+
+See [DEPLOY.md](./DEPLOY.md) for details.
