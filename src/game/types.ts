@@ -72,6 +72,7 @@ export interface SimulationSnapshot {
   status: SimulationStatus;
   components: Map<string, ComponentState>;
   belts: Map<string, BeltState>;
+  scaling: Map<string, { instances: number; verticalMultiplier: number }>;
   activeRequests: Request[];
   totalSpawned: number;
   totalCompleted: number;
@@ -212,7 +213,7 @@ export const SCENARIO = {
   id: 'url-shortener',
   title: 'Design a URL Shortener',
   duration: 45,
-  drainDuration: 4,
+  drainDuration: 10,
   requirements: [
     'Very high sustained load — millions of redirects per day',
     'Traffic spikes during viral events (celebrity links)',
