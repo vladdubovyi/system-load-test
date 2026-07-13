@@ -173,6 +173,150 @@ body {
   overflow-y: auto;
 }
 
+.sidebar-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.35rem;
+  padding: 0.2rem;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.sidebar-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.sidebar-tab.active {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+}
+
+.sidebar-tab-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sidebar-tab-panel {
+  display: none;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sidebar-tab-panel.active {
+  display: flex;
+}
+
+.config-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.config-panel-header h2 {
+  margin: 0;
+}
+
+.btn-sm {
+  padding: 0.3rem 0.55rem;
+  font-size: 0.72rem;
+}
+
+.config-group {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+}
+
+.config-group summary {
+  cursor: pointer;
+  padding: 0.65rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.88rem;
+  list-style: none;
+}
+
+.config-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-group-body {
+  padding: 0 0.75rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.config-toggle {
+  display: flex;
+  gap: 0.6rem;
+  align-items: flex-start;
+  cursor: pointer;
+}
+
+.config-toggle input {
+  margin-top: 0.2rem;
+  accent-color: var(--accent);
+}
+
+.config-toggle-label {
+  display: block;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.config-toggle-desc {
+  display: block;
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 0.15rem;
+}
+
+.config-subgrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.45rem;
+  padding-left: 1.4rem;
+}
+
+.config-subgrid.is-disabled {
+  opacity: 0.45;
+}
+
+.config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.config-field-label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.config-input,
+.config-select {
+  width: 100%;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  padding: 0.35rem 0.45rem;
+}
+
 .panel {
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border);

@@ -226,6 +226,7 @@ export class BoardRenderer {
 
     for (const [id, gfx] of this.componentGraphics) {
       const compState = snapshot.components.get(id);
+      const scaling = snapshot.scaling.get(id);
       const targetLoad = compState?.load ?? 0;
       gfx.displayedLoad = this.lerp(gfx.displayedLoad, targetLoad, dt);
       const loadPct = Math.min(gfx.displayedLoad, 100);
@@ -237,7 +238,14 @@ export class BoardRenderer {
       const warnLoad = gfx.displayedLoad;
       let badgeText = '';
       if (compState?.failed) badgeText = 'FAILED';
-      else if (warnLoad >= 85) badgeText = 'HOT';
+      else if (scaling && scaling.instances > 1) {
+        badgeText =
+          scaling.verticalMultiplier > 1
+            ? `×${scaling.instances} ↑${scaling.verticalMultiplier.toFixed(1)}`
+            : `×${scaling.instances}`;
+      } else if (scaling && scaling.verticalMultiplier > 1) {
+        badgeText = `↑×${scaling.verticalMultiplier.toFixed(1)}`;
+      } else if (warnLoad >= 85) badgeText = 'HOT';
 
       if (badgeText) {
         if (!gfx.badge) {

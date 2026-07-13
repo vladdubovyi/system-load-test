@@ -1,6 +1,7 @@
 import type { ComponentType, ConveyorBelt, PlacedComponent } from './types';
 import { COMPONENT_DEFS } from './types';
 import { SOURCE_ID, createBelt } from './simulation';
+import type { ArchitectureConfig } from './architecture-config';
 
 export interface PresetBlueprint {
   id: string;
@@ -8,60 +9,38 @@ export interface PresetBlueprint {
   description: string;
   components: { id: string; type: ComponentType; x: number; y: number }[];
   connections: { from: string; to: string }[];
+  architectureConfig?: ArchitectureConfig;
 }
 
 /**
  * Reference URL shortener architecture (industry best practices):
  *
  * Requests → L7 Load Balancer
- *   ├─ writes (28%) → Shortener pool (×3) → Database shards (×2) + Redis cache warm
- *   └─ reads  (72%) → Backend pool (×4)  → Redis (primary, ~96% hit) → DB on miss
+ *   ├─ writes (28%) → Shortener (+ auto-scale) → Database (+ sharding/replication) + Redis
+ *   └─ reads  (72%) → Backend (+ auto-scale)  → Redis (primary) → DB on miss
  *
- * Patterns applied: read/write path separation, horizontal scaling on the hot read path,
- * distributed cache before database, and database sharding for write + miss traffic.
+ * Scaling, replication, and sharding are enabled via the Configure tab — not duplicate nodes.
  */
 export const URL_SHORTENER_PRESET: PresetBlueprint = {
   id: 'url-shortener-reference',
   name: 'Reference Architecture',
   description:
-    'Production-style layout: scaled redirect services, Redis cache-aside, and sharded databases.',
+    'Single logical services with auto-scaling, Redis cache-aside, DB replication, and sharding.',
   components: [
-    { id: 'preset-lb', type: 'load-balancer', x: 100, y: 248 },
-    { id: 'preset-shortener-1', type: 'shortener', x: 320, y: 40 },
-    { id: 'preset-shortener-2', type: 'shortener', x: 320, y: 112 },
-    { id: 'preset-shortener-3', type: 'shortener', x: 320, y: 184 },
-    { id: 'preset-backend-1', type: 'backend', x: 320, y: 300 },
-    { id: 'preset-backend-2', type: 'backend', x: 320, y: 388 },
-    { id: 'preset-backend-3', type: 'backend', x: 320, y: 476 },
-    { id: 'preset-backend-4', type: 'backend', x: 320, y: 564 },
-    { id: 'preset-redis', type: 'redis', x: 600, y: 108 },
-    { id: 'preset-db-1', type: 'database', x: 600, y: 300 },
-    { id: 'preset-db-2', type: 'database', x: 600, y: 388 },
-    { id: 'preset-db-3', type: 'database', x: 600, y: 476 },
+    { id: 'preset-lb', type: 'load-balancer', x: 140, y: 248 },
+    { id: 'preset-shortener', type: 'shortener', x: 380, y: 108 },
+    { id: 'preset-backend', type: 'backend', x: 380, y: 368 },
+    { id: 'preset-redis', type: 'redis', x: 620, y: 132 },
+    { id: 'preset-db', type: 'database', x: 620, y: 368 },
   ],
   connections: [
     { from: `${SOURCE_ID}:out`, to: 'preset-lb:in' },
-    { from: 'preset-lb:out', to: 'preset-shortener-1:in' },
-    { from: 'preset-lb:out', to: 'preset-shortener-2:in' },
-    { from: 'preset-lb:out', to: 'preset-shortener-3:in' },
-    { from: 'preset-lb:out', to: 'preset-backend-1:in' },
-    { from: 'preset-lb:out', to: 'preset-backend-2:in' },
-    { from: 'preset-lb:out', to: 'preset-backend-3:in' },
-    { from: 'preset-lb:out', to: 'preset-backend-4:in' },
-    { from: 'preset-shortener-1:out', to: 'preset-db-1:in' },
-    { from: 'preset-shortener-2:out', to: 'preset-db-2:in' },
-    { from: 'preset-shortener-3:out', to: 'preset-db-3:in' },
-    { from: 'preset-shortener-1:out', to: 'preset-redis:in' },
-    { from: 'preset-shortener-2:out', to: 'preset-redis:in' },
-    { from: 'preset-shortener-3:out', to: 'preset-redis:in' },
-    { from: 'preset-backend-1:out', to: 'preset-redis:in' },
-    { from: 'preset-backend-2:out', to: 'preset-redis:in' },
-    { from: 'preset-backend-3:out', to: 'preset-redis:in' },
-    { from: 'preset-backend-4:out', to: 'preset-redis:in' },
-    { from: 'preset-backend-1:out', to: 'preset-db-1:in' },
-    { from: 'preset-backend-2:out', to: 'preset-db-2:in' },
-    { from: 'preset-backend-3:out', to: 'preset-db-3:in' },
-    { from: 'preset-backend-4:out', to: 'preset-db-1:in' },
+    { from: 'preset-lb:out', to: 'preset-shortener:in' },
+    { from: 'preset-lb:out', to: 'preset-backend:in' },
+    { from: 'preset-shortener:out', to: 'preset-db:in' },
+    { from: 'preset-shortener:out', to: 'preset-redis:in' },
+    { from: 'preset-backend:out', to: 'preset-redis:in' },
+    { from: 'preset-backend:out', to: 'preset-db:in' },
   ],
 };
 

@@ -13,6 +13,14 @@ import type {
   SimulationStatus,
 } from './types';
 import { buildSimulationReport } from './report';
+import type {
+  ArchitectureConfig,
+  ComponentScalingState,
+} from './architecture-config';
+import {
+  createDefaultArchitectureConfig,
+  isScalableType,
+} from './architecture-config';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -216,8 +224,17 @@ export class SimulationEngine {
   private spikeEvents = 0;
   private wasSpikeActive = false;
   private draining = false;
+  private architectureConfig: ArchitectureConfig;
+  private scalingState = new Map<string, ComponentScalingState>();
+  private scaleUpTimers = new Map<string, number>();
+  private scaleDownTimers = new Map<string, number>();
 
-  constructor(components: PlacedComponent[], belts: ConveyorBelt[]) {
+  constructor(
+    components: PlacedComponent[],
+    belts: ConveyorBelt[],
+    architectureConfig: ArchitectureConfig = createDefaultArchitectureConfig()
+  ) {
+    this.architectureConfig = architectureConfig;
     this.components = components;
     this.belts = belts;
     this.componentMap = new Map(components.map((c) => [c.id, c]));
@@ -238,6 +255,194 @@ export class SimulationEngine {
     this.resetStates();
   }
 
+  setArchitectureConfig(config: ArchitectureConfig): void {
+    this.architectureConfig = config;
+  }
+
+  private initScalingState(): void {
+    this.scalingState.clear();
+    this.scaleUpTimers.clear();
+    this.scaleDownTimers.clear();
+    for (const component of this.components) {
+      const minInstances =
+        isScalableType(component.type) &&
+        this.architectureConfig.autoScaling[component.type].horizontal.enabled
+          ? this.architectureConfig.autoScaling[component.type].horizontal.minInstances
+          : 1;
+      this.scalingState.set(component.id, {
+        instances: minInstances,
+        verticalMultiplier: 1,
+        maxInstancesReached: minInstances,
+        maxVerticalMultiplier: 1,
+      });
+      this.scaleUpTimers.set(component.id, 0);
+      this.scaleDownTimers.set(component.id, 0);
+    }
+  }
+
+  private getDatabaseMultiplier(): number {
+    const { replication, sharding } = this.architectureConfig.database;
+    let multiplier = 1;
+    if (sharding.enabled) {
+      multiplier *= Math.max(1, sharding.shardCount);
+    }
+    if (replication.enabled) {
+      multiplier *= 1 + Math.max(0, replication.readReplicas) * SCENARIO.readRatio;
+    }
+    return multiplier;
+  }
+
+  private getEffectiveCapacity(component: PlacedComponent): number {
+    if (component.type === 'database') {
+      return component.capacity * this.getDatabaseMultiplier();
+    }
+
+    if (isScalableType(component.type)) {
+      const scaling = this.scalingState.get(component.id);
+      const cfg = this.architectureConfig.autoScaling[component.type];
+      if (
+        scaling &&
+        (cfg.horizontal.enabled || cfg.vertical.enabled || cfg.predictive.enabled)
+      ) {
+        return component.capacity * scaling.instances * scaling.verticalMultiplier;
+      }
+    }
+
+    return component.capacity;
+  }
+
+  private getEffectiveQueueLimit(component: PlacedComponent): number {
+    if (isScalableType(component.type)) {
+      const scaling = this.scalingState.get(component.id);
+      const cfg = this.architectureConfig.autoScaling[component.type];
+      if (scaling && cfg.horizontal.enabled) {
+        return component.queueLimit * scaling.instances;
+      }
+    }
+    if (component.type === 'database') {
+      return Math.round(component.queueLimit * this.getDatabaseMultiplier());
+    }
+    return component.queueLimit;
+  }
+
+  /** Pre-scale before traffic arrives so spikes do not drop at the load balancer. */
+  private applyPredictiveScaling(): void {
+    if (!this.spikeActive) return;
+
+    for (const component of this.components) {
+      if (!isScalableType(component.type)) continue;
+
+      const cfg = this.architectureConfig.autoScaling[component.type];
+      const scaling = this.scalingState.get(component.id)!;
+      if (!cfg.predictive.enabled || !cfg.horizontal.enabled) continue;
+
+      const trafficShare =
+        component.type === 'backend'
+          ? SCENARIO.readRatio
+          : 1 - SCENARIO.readRatio;
+      const needed = Math.ceil((this.currentRps * trafficShare) / component.capacity);
+      const desired = Math.min(
+        cfg.horizontal.maxInstances,
+        Math.max(
+          scaling.instances,
+          Math.ceil(needed * cfg.predictive.preScaleFactor)
+        )
+      );
+      scaling.instances = desired;
+      scaling.maxInstancesReached = Math.max(scaling.maxInstancesReached, scaling.instances);
+    }
+  }
+
+  private updateAutoScaling(dt: number): void {
+    for (const component of this.components) {
+      if (!isScalableType(component.type)) continue;
+
+      const cfg = this.architectureConfig.autoScaling[component.type];
+      const scaling = this.scalingState.get(component.id)!;
+      const state = this.componentState.get(component.id)!;
+      const targetUtil = cfg.horizontal.targetUtilization;
+      const queueLimit = this.getEffectiveQueueLimit(component);
+      const queuePressure =
+        queueLimit > 0 ? (state.queue / queueLimit) * 100 : 0;
+      const effectiveCap = this.getEffectiveCapacity(component);
+      const utilization =
+        effectiveCap > 0 ? (state.processing / effectiveCap) * 100 : state.load;
+
+      if (!cfg.reactive.enabled) {
+        scaling.maxInstancesReached = Math.max(
+          scaling.maxInstancesReached,
+          scaling.instances
+        );
+        scaling.maxVerticalMultiplier = Math.max(
+          scaling.maxVerticalMultiplier,
+          scaling.verticalMultiplier
+        );
+        continue;
+      }
+
+      let upTimer = this.scaleUpTimers.get(component.id) ?? 0;
+      let downTimer = this.scaleDownTimers.get(component.id) ?? 0;
+      const hot = utilization >= targetUtil || queuePressure >= 55;
+
+      if (hot) {
+        upTimer += dt;
+        downTimer = 0;
+      } else if (utilization < targetUtil * 0.5 && queuePressure < 25) {
+        downTimer += dt;
+        upTimer = 0;
+      } else {
+        upTimer = 0;
+        downTimer = 0;
+      }
+
+      this.scaleUpTimers.set(component.id, upTimer);
+      this.scaleDownTimers.set(component.id, downTimer);
+
+      if (
+        upTimer >= cfg.reactive.scaleUpDelaySeconds &&
+        (cfg.horizontal.enabled || cfg.vertical.enabled)
+      ) {
+        if (
+          cfg.horizontal.enabled &&
+          scaling.instances < cfg.horizontal.maxInstances
+        ) {
+          scaling.instances += 1;
+          this.scaleUpTimers.set(component.id, 0);
+          this.message = `${component.label} auto-scaled to ${scaling.instances} instances`;
+        } else if (
+          cfg.vertical.enabled &&
+          scaling.verticalMultiplier < cfg.vertical.maxMultiplier &&
+          utilization >= cfg.vertical.targetUtilization
+        ) {
+          scaling.verticalMultiplier = Math.min(
+            cfg.vertical.maxMultiplier,
+            Math.round((scaling.verticalMultiplier + 0.2) * 10) / 10
+          );
+          this.scaleUpTimers.set(component.id, 0);
+          this.message = `${component.label} vertically scaled to ×${scaling.verticalMultiplier.toFixed(1)}`;
+        }
+      }
+
+      if (
+        cfg.horizontal.enabled &&
+        downTimer >= cfg.reactive.scaleDownDelaySeconds &&
+        scaling.instances > cfg.horizontal.minInstances
+      ) {
+        scaling.instances -= 1;
+        this.scaleDownTimers.set(component.id, 0);
+      }
+
+      scaling.maxInstancesReached = Math.max(
+        scaling.maxInstancesReached,
+        scaling.instances
+      );
+      scaling.maxVerticalMultiplier = Math.max(
+        scaling.maxVerticalMultiplier,
+        scaling.verticalMultiplier
+      );
+    }
+  }
+
   private rebuildPorts(): void {
     this.portMap.clear();
     const source = getSourcePort(this.components);
@@ -254,6 +459,7 @@ export class SimulationEngine {
     this.beltState.clear();
     this.telemetry.clear();
     this.completionDebt.clear();
+    this.initScalingState();
     for (const component of this.components) {
       this.componentState.set(component.id, {
         load: 0,
@@ -326,6 +532,7 @@ export class SimulationEngine {
 
     if (!inDrain) {
       this.updateTrafficPattern(dt);
+      this.applyPredictiveScaling();
       this.spawnAccumulator += this.currentRps * dt;
       while (this.spawnAccumulator >= 1) {
         this.spawnAccumulator -= 1;
@@ -343,6 +550,7 @@ export class SimulationEngine {
     this.syncQueueCounts();
     this.updateComponents(dt);
     this.updateLoads();
+    this.updateAutoScaling(dt);
 
     if (!inDrain) {
       this.recordTelemetry(dt);
@@ -373,6 +581,7 @@ export class SimulationEngine {
       this.spikeActive = true;
       this.spikeTimer = 2.5 + Math.random() * 3;
       this.currentRps = SCENARIO.baseRps * SCENARIO.spikeMultiplier;
+      this.applyPredictiveScaling();
     } else {
       const jitter = 1 + (Math.random() - 0.5) * 0.15;
       this.currentRps = SCENARIO.baseRps * jitter;
@@ -393,8 +602,9 @@ export class SimulationEngine {
       tel.loadIntegral += state.load * dt;
       tel.maxLoad = Math.max(tel.maxLoad, state.load);
 
+      const queueLimit = this.getEffectiveQueueLimit(component);
       const queueFill =
-        component.queueLimit > 0 ? (state.queue / component.queueLimit) * 100 : 0;
+        queueLimit > 0 ? (state.queue / queueLimit) * 100 : 0;
       tel.maxQueueFill = Math.max(tel.maxQueueFill, queueFill);
 
       if (state.failed) {
@@ -535,7 +745,7 @@ export class SimulationEngine {
       return false;
     }
 
-    if (this.queuedCount(component.id) >= component.queueLimit) return false;
+    if (this.queuedCount(component.id) >= this.getEffectiveQueueLimit(component)) return false;
     return true;
   }
 
@@ -562,7 +772,7 @@ export class SimulationEngine {
 
     const targetPort = this.portMap.get(belt.toPortId)!;
     const targetComp = this.componentMap.get(targetPort.componentId)!;
-    if (this.queuedCount(targetComp.id) >= targetComp.queueLimit) return false;
+    if (this.queuedCount(targetComp.id) >= this.getEffectiveQueueLimit(targetComp)) return false;
 
     request.beltId = belt.id;
     request.targetPortId = belt.toPortId;
@@ -577,7 +787,8 @@ export class SimulationEngine {
       const state = this.componentState.get(component.id)!;
       if (state.failed) continue;
 
-      const processRate = component.capacity;
+      const processRate = this.getEffectiveCapacity(component);
+      const queueLimit = this.getEffectiveQueueLimit(component);
       const debt = (this.completionDebt.get(component.id) ?? 0) + processRate * dt;
       let completions = Math.floor(debt);
       this.completionDebt.set(component.id, debt - completions);
@@ -609,7 +820,7 @@ export class SimulationEngine {
         continue;
       }
 
-      if (state.queue >= component.queueLimit) {
+      if (state.queue >= queueLimit) {
         const timer = (this.overloadTimers.get(component.id) ?? 0) + dt;
         this.overloadTimers.set(component.id, timer);
         if (timer >= 1.8) {
@@ -757,11 +968,12 @@ export class SimulationEngine {
   private updateLoads(): void {
     for (const component of this.components) {
       const state = this.componentState.get(component.id)!;
+      const effectiveCapacity = this.getEffectiveCapacity(component);
       if (component.type === 'load-balancer') {
-        state.load = clamp((this.currentRps / component.capacity) * 100, 0, 100);
+        state.load = clamp((this.currentRps / effectiveCapacity) * 100, 0, 100);
       } else {
         const utilization =
-          component.capacity > 0 ? (state.processing / component.capacity) * 100 : 0;
+          effectiveCapacity > 0 ? (state.processing / effectiveCapacity) * 100 : 0;
         state.load = clamp(utilization, 0, 100);
       }
     }
@@ -791,15 +1003,26 @@ export class SimulationEngine {
       totalDropped: this.totalDropped,
       peakRps: this.peakRps,
       spikeEvents: this.spikeEvents,
+      architectureConfig: this.architectureConfig,
+      scalingState: this.scalingState,
     });
   }
 
   getSnapshot(): SimulationSnapshot {
+    const scaling = new Map<string, { instances: number; verticalMultiplier: number }>();
+    for (const [id, st] of this.scalingState) {
+      scaling.set(id, {
+        instances: st.instances,
+        verticalMultiplier: st.verticalMultiplier,
+      });
+    }
+
     return {
       time: this.time,
       status: this.status,
       components: new Map(this.componentState),
       belts: new Map(this.beltState),
+      scaling,
       activeRequests: [...this.requests],
       totalSpawned: this.totalSpawned,
       totalCompleted: this.totalCompleted,
@@ -848,7 +1071,7 @@ export function createBelt(fromPortId: string, toPortId: string): ConveyorBelt {
     id: `belt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     fromPortId,
     toPortId,
-    capacity: isIngress ? 1400 : 500,
+    capacity: isIngress ? 2000 : 1000,
   };
 }
 

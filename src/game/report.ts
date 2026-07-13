@@ -6,6 +6,10 @@ import type {
 } from './types';
 import { COMPONENT_DEFS, SCENARIO } from './types';
 import type { ComponentTelemetry } from './types';
+import type {
+  ArchitectureConfig,
+  ComponentScalingState,
+} from './architecture-config';
 
 const REQUIRED_COMPONENTS: ComponentType[] = [
   'load-balancer',
@@ -21,8 +25,8 @@ const SCALED_OVERLOAD_FRACTION = 0.08;
 
 /** Strict bar for a perfect 100 — only well-provisioned architectures should pass. */
 const EXCELLENCE = {
-  minSuccessRate: 0.98,
-  maxDropRate: 0.02,
+  minSuccessRate: 0.96,
+  maxDropRate: 0.03,
   maxOverloadFraction: 0.08,
   maxQueueFill: 55,
   maxAvgUtil: 72,
@@ -42,6 +46,8 @@ export interface ReportInput {
   totalDropped: number;
   peakRps: number;
   spikeEvents: number;
+  architectureConfig: ArchitectureConfig;
+  scalingState: Map<string, ComponentScalingState>;
 }
 
 function gradeFromScore(score: number): string {
@@ -52,6 +58,29 @@ function gradeFromScore(score: number): string {
   return 'F';
 }
 
+function effectiveMonthlyCost(
+  component: PlacedComponent,
+  input: ReportInput
+): number {
+  const def = COMPONENT_DEFS[component.type];
+  let cost = def.monthlyCost;
+  const scaling = input.scalingState.get(component.id);
+
+  if (component.type === 'shortener' || component.type === 'backend') {
+    const instances = scaling?.maxInstancesReached ?? 1;
+    const vertical = scaling?.maxVerticalMultiplier ?? 1;
+    cost *= instances * vertical;
+  }
+
+  if (component.type === 'database') {
+    const { replication, sharding } = input.architectureConfig.database;
+    if (sharding.enabled) cost *= Math.max(1, sharding.shardCount);
+    if (replication.enabled) cost += def.monthlyCost * replication.readReplicas * 0.55;
+  }
+
+  return cost;
+}
+
 function buildComponentReports(input: ReportInput): ComponentReport[] {
   return input.components.map((component) => {
     const tel = input.telemetry.get(component.id);
@@ -59,8 +88,16 @@ function buildComponentReports(input: ReportInput): ComponentReport[] {
     const def = COMPONENT_DEFS[component.type];
     const avgLoad = tel ? tel.loadIntegral / Math.max(input.duration, 0.001) : 0;
     const processed = st?.processed ?? 0;
+    const scaling = input.scalingState.get(component.id);
+    const effectiveCapacity =
+      component.capacity *
+      (scaling?.maxInstancesReached ?? 1) *
+      (scaling?.maxVerticalMultiplier ?? 1);
     const utilizationPct =
-      component.capacity > 0 ? (processed / (component.capacity * input.duration)) * 100 : 0;
+      effectiveCapacity > 0
+        ? (processed / (effectiveCapacity * input.duration)) * 100
+        : 0;
+    const monthlyCost = effectiveMonthlyCost(component, input);
 
     return {
       id: component.id,
@@ -77,7 +114,7 @@ function buildComponentReports(input: ReportInput): ComponentReport[] {
       processed: Math.round(processed),
       dropped: Math.round(st?.dropped ?? 0),
       failed: st?.failed ?? false,
-      monthlyCost: def.monthlyCost,
+      monthlyCost,
       utilizationPct: Math.min(utilizationPct, 100),
     };
   });
@@ -175,13 +212,23 @@ function meetsExcellence(
   }
 
   const redis = reports.find((r) => r.type === 'redis');
-  const dbReports = reports.filter((r) => r.type === 'database');
-  const backendCount = reports.filter((r) => r.type === 'backend').length;
-  const shortenerCount = reports.filter((r) => r.type === 'shortener').length;
+  const db = reports.find((r) => r.type === 'database');
+  const cfg = input.architectureConfig;
 
-  if (backendCount < 2 || shortenerCount < 2 || dbReports.length < 2) return false;
+  if (
+    !cfg.autoScaling.shortener.horizontal.enabled ||
+    !cfg.autoScaling.backend.horizontal.enabled
+  ) {
+    return false;
+  }
+  if (!cfg.database.sharding.enabled || cfg.database.sharding.shardCount < 2) {
+    return false;
+  }
+  if (!cfg.database.replication.enabled || cfg.database.replication.readReplicas < 1) {
+    return false;
+  }
   if (!redis || redis.avgLoad < 10) return false;
-  if (dbReports.some((db) => db.avgLoad > 55)) return false;
+  if (db && db.avgLoad > 55) return false;
 
   return true;
 }
@@ -311,9 +358,20 @@ function buildRecommendations(
     tips.push('Database is hot — route reads through Redis cache-aside before hitting the database.');
   }
 
-  const backendCount = reports.filter((r) => r.type === 'backend').length;
+  const backendCount =
+    input.scalingState.get(
+      input.components.find((c) => c.type === 'backend')?.id ?? ''
+    )?.maxInstancesReached ?? 1;
   if (backendCount < 2 && reports.some((r) => r.type === 'backend' && r.maxLoad >= 80)) {
-    tips.push('Read path is the bottleneck — add more Backend instances behind the load balancer.');
+    tips.push('Read path is the bottleneck — enable horizontal auto-scaling on Backend.');
+  }
+
+  if (!input.architectureConfig.database.sharding.enabled) {
+    tips.push('Enable database sharding to partition writes and cache misses.');
+  }
+
+  if (!input.architectureConfig.database.replication.enabled) {
+    tips.push('Enable read replicas so cache misses do not hammer the primary database.');
   }
 
   if (input.totalDropped > input.totalSpawned * 0.05) {

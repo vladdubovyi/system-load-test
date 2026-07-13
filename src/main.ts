@@ -20,6 +20,13 @@ import {
 import { URL_SHORTENER_PRESET, buildPreset } from './game/presets';
 import { BoardRenderer } from './ui/board-renderer';
 import { mountReportModal } from './ui/report-modal';
+import {
+  cloneArchitectureConfig,
+  createDefaultArchitectureConfig,
+  createReferenceArchitectureConfig,
+  mountConfigPanel,
+} from './ui/config-panel';
+import type { ArchitectureConfig } from './game/architecture-config';
 
 interface GameState {
   components: PlacedComponent[];
@@ -33,6 +40,8 @@ interface GameState {
   lastHudUpdate: number;
   simAccumulator: number;
   lastRunStatus: 'idle' | 'running' | 'won' | 'lost';
+  activeSidebarTab: 'build' | 'configure';
+  architectureConfig: ArchitectureConfig;
   displayedHud: {
     time: number;
     rps: number;
@@ -58,6 +67,8 @@ const state: GameState = {
   lastHudUpdate: 0,
   simAccumulator: 0,
   lastRunStatus: 'idle',
+  activeSidebarTab: 'build',
+  architectureConfig: createDefaultArchitectureConfig(),
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
 };
 
@@ -84,45 +95,58 @@ function render(): void {
       </header>
 
       <aside class="sidebar">
-        <section class="panel scenario-panel">
-          <h2>${SCENARIO.title}</h2>
-          <ul class="requirements">
-            ${SCENARIO.requirements.map((r) => `<li>${r}</li>`).join('')}
-          </ul>
-          <div class="legend">
-            <p class="legend-title">Request colors (celebrity URLs)</p>
-            <div class="legend-colors">
-              ${REQUEST_COLORS.map(
-                (c, i) =>
-                  `<span class="legend-dot ${[1, 2, 3].includes(i) ? 'celebrity' : ''}" style="background:${c}" title="URL type ${i + 1}"></span>`
-              ).join('')}
-            </div>
-            <p class="legend-hint">Purple, pink & gold = viral celebrity links</p>
+        <nav class="sidebar-tabs" aria-label="Sidebar sections">
+          <button class="sidebar-tab ${state.activeSidebarTab === 'build' ? 'active' : ''}" data-tab="build" type="button">Build</button>
+          <button class="sidebar-tab ${state.activeSidebarTab === 'configure' ? 'active' : ''}" data-tab="configure" type="button">Configure</button>
+        </nav>
+
+        <div class="sidebar-tab-panels">
+          <div class="sidebar-tab-panel ${state.activeSidebarTab === 'build' ? 'active' : ''}" data-tab-panel="build">
+            <section class="panel scenario-panel">
+              <h2>${SCENARIO.title}</h2>
+              <ul class="requirements">
+                ${SCENARIO.requirements.map((r) => `<li>${r}</li>`).join('')}
+              </ul>
+              <div class="legend">
+                <p class="legend-title">Request colors (celebrity URLs)</p>
+                <div class="legend-colors">
+                  ${REQUEST_COLORS.map(
+                    (c, i) =>
+                      `<span class="legend-dot ${[1, 2, 3].includes(i) ? 'celebrity' : ''}" style="background:${c}" title="URL type ${i + 1}"></span>`
+                  ).join('')}
+                </div>
+                <p class="legend-hint">Purple, pink & gold = viral celebrity links</p>
+              </div>
+            </section>
+
+            <section class="panel palette-panel">
+              <h2>Components</h2>
+              <p class="panel-hint">Click to select, then click the board to place. Drag to reposition.</p>
+              <div class="palette" id="palette"></div>
+            </section>
+
+            <section class="panel help-panel">
+              <h2>Quick start</h2>
+              <p class="panel-hint">
+                New here? Click <strong>Load Preset</strong>, open <strong>Configure</strong> for scaling, then hit <strong>Play</strong>.
+              </p>
+              <h2 class="help-subheading">How to wire</h2>
+              <ol class="help-steps">
+                <li>Place a <strong>Load Balancer</strong> first</li>
+                <li>Connect <span class="port-tag">Requests</span> → Load Balancer</li>
+                <li>LB → Shortener (creates) & Backend (reads)</li>
+                <li>Shortener → Database (+ Redis cache warm)</li>
+                <li>Backend → Redis first (cache-aside), Database on miss</li>
+                <li>Use <strong>Configure</strong> for auto-scaling, replication & sharding</li>
+                <li>Click output port, then input port to add conveyor belts</li>
+              </ol>
+            </section>
           </div>
-        </section>
 
-        <section class="panel palette-panel">
-          <h2>Components</h2>
-          <p class="panel-hint">Click to select, then click the board to place. Drag to reposition.</p>
-          <div class="palette" id="palette"></div>
-        </section>
-
-        <section class="panel help-panel">
-          <h2>Quick start</h2>
-          <p class="panel-hint">
-            New here? Click <strong>Load Preset</strong> for a reference architecture, then hit <strong>Play</strong>.
-          </p>
-          <h2 class="help-subheading">How to wire</h2>
-          <ol class="help-steps">
-            <li>Place a <strong>Load Balancer</strong> first</li>
-            <li>Connect <span class="port-tag">Requests</span> → Load Balancer</li>
-            <li>LB → Shortener pool (creates) & Backend pool (reads)</li>
-            <li>Shortener → Database (+ Redis cache warm)</li>
-            <li>Backend → Redis first (cache-aside), Database on miss</li>
-            <li>Scale read services horizontally for viral traffic</li>
-            <li>Click output port, then input port to add conveyor belts</li>
-          </ol>
-        </section>
+          <div class="sidebar-tab-panel ${state.activeSidebarTab === 'configure' ? 'active' : ''}" data-tab-panel="configure">
+            <div id="config-panel-root"></div>
+          </div>
+        </div>
 
         <div class="status-bar" id="status-bar"></div>
       </aside>
@@ -145,8 +169,27 @@ function render(): void {
 
   renderPalette();
   bindEvents();
+  mountConfigPanelUi();
   mountBoard();
   updateStatus();
+}
+
+function mountConfigPanelUi(): void {
+  const root = document.getElementById('config-panel-root');
+  if (!root) return;
+  mountConfigPanel(root, state.architectureConfig, (config) => {
+    state.architectureConfig = cloneArchitectureConfig(config);
+  });
+}
+
+function switchSidebarTab(tab: 'build' | 'configure'): void {
+  state.activeSidebarTab = tab;
+  document.querySelectorAll('.sidebar-tab').forEach((el) => {
+    el.classList.toggle('active', (el as HTMLElement).dataset.tab === tab);
+  });
+  document.querySelectorAll('.sidebar-tab-panel').forEach((el) => {
+    el.classList.toggle('active', (el as HTMLElement).dataset.tabPanel === tab);
+  });
 }
 
 function renderPalette(): void {
@@ -338,11 +381,20 @@ function bindEvents(): void {
     loadPreset();
   });
 
+  document.querySelectorAll('.sidebar-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      const id = (tab as HTMLElement).dataset.tab as 'build' | 'configure';
+      if (id) switchSidebarTab(id);
+    });
+  });
+
   document.getElementById('btn-reset')!.addEventListener('click', () => {
     stopSimulation();
     state.components = [];
     state.belts = [];
     state.engine = null;
+    state.architectureConfig = createDefaultArchitectureConfig();
+    mountConfigPanelUi();
     mountBoard();
     updateStatus();
     setModeLabel('Place mode — select a component');
@@ -416,6 +468,8 @@ function loadPreset(): void {
   const { components, belts } = buildPreset(URL_SHORTENER_PRESET);
   state.components = components;
   state.belts = belts;
+  state.architectureConfig = createReferenceArchitectureConfig();
+  mountConfigPanelUi();
   state.engine = null;
   state.selectedPalette = null;
   state.connectFromPort = null;
@@ -435,7 +489,11 @@ function showRunReport(): void {
 }
 
 function startSimulation(): void {
-  state.engine = new SimulationEngine(state.components, state.belts);
+  state.engine = new SimulationEngine(
+    state.components,
+    state.belts,
+    state.architectureConfig
+  );
   state.engine.start();
   state.lastRunStatus = 'running';
   state.lastTick = performance.now();
