@@ -210,10 +210,12 @@ export class SimulationEngine {
   private spikeTimer = 0;
   private message = 'Wire up your system, then press Play.';
   private overloadTimers = new Map<string, number>();
+  private completionDebt = new Map<string, number>();
   private telemetry = new Map<string, ComponentTelemetry>();
   private peakRps = 0;
   private spikeEvents = 0;
   private wasSpikeActive = false;
+  private draining = false;
 
   constructor(components: PlacedComponent[], belts: ConveyorBelt[]) {
     this.components = components;
@@ -251,6 +253,7 @@ export class SimulationEngine {
     this.componentState.clear();
     this.beltState.clear();
     this.telemetry.clear();
+    this.completionDebt.clear();
     for (const component of this.components) {
       this.componentState.set(component.id, {
         load: 0,
@@ -260,6 +263,7 @@ export class SimulationEngine {
         processed: 0,
         dropped: 0,
       });
+      this.completionDebt.set(component.id, 0);
       this.telemetry.set(component.id, {
         loadIntegral: 0,
         maxLoad: 0,
@@ -285,9 +289,11 @@ export class SimulationEngine {
     this.totalDropped = 0;
     this.requests = [];
     this.overloadTimers.clear();
+    this.completionDebt.clear();
     this.peakRps = 0;
     this.spikeEvents = 0;
     this.wasSpikeActive = false;
+    this.draining = false;
     this.resetStates();
     this.message = 'Simulation running — watch for red overload!';
     nextRequestId = 1;
@@ -315,21 +321,37 @@ export class SimulationEngine {
     }
 
     this.time += dt;
-    this.updateTrafficPattern(dt);
+    const inDrain =
+      this.draining || this.time >= SCENARIO.duration;
 
-    const spawnRate = this.currentRps;
-    this.spawnAccumulator += spawnRate * dt;
-    while (this.spawnAccumulator >= 1) {
-      this.spawnAccumulator -= 1;
-      this.spawnRequest();
+    if (!inDrain) {
+      this.updateTrafficPattern(dt);
+      this.spawnAccumulator += this.currentRps * dt;
+      while (this.spawnAccumulator >= 1) {
+        this.spawnAccumulator -= 1;
+        this.spawnRequest();
+      }
+    } else if (!this.draining) {
+      this.draining = true;
+      this.currentRps = 0;
+      this.spawnAccumulator = 0;
+      this.spikeActive = false;
+      this.message = 'Draining in-flight requests…';
     }
 
     this.updateBelts(dt);
+    this.syncQueueCounts();
     this.updateComponents(dt);
     this.updateLoads();
-    this.recordTelemetry(dt);
 
-    if (this.time >= SCENARIO.duration) {
+    if (!inDrain) {
+      this.recordTelemetry(dt);
+    }
+
+    if (
+      this.draining &&
+      this.time >= SCENARIO.duration + SCENARIO.drainDuration
+    ) {
       const anyFailed = [...this.componentState.values()].some((s) => s.failed);
       this.status = anyFailed ? 'lost' : 'won';
       this.message = anyFailed
@@ -396,6 +418,19 @@ export class SimulationEngine {
     }
   }
 
+  private queuedCount(componentId: string): number {
+    return this.requests.filter(
+      (r) => r.state === 'queued' && r.currentComponentId === componentId
+    ).length;
+  }
+
+  private syncQueueCounts(): void {
+    for (const component of this.components) {
+      const state = this.componentState.get(component.id)!;
+      state.queue = this.queuedCount(component.id);
+    }
+  }
+
   private spawnRequest(): void {
     const sourcePort = getSourcePort(this.components);
     const outgoing = this.beltByFromPort.get(sourcePort.id) ?? [];
@@ -406,7 +441,7 @@ export class SimulationEngine {
 
     const belt = outgoing[0];
     const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.5) {
+    if (beltSt.traveling >= belt.capacity * 0.9) {
       beltSt.dropped += 1;
       this.totalDropped += 1;
       return;
@@ -432,7 +467,7 @@ export class SimulationEngine {
   }
 
   private updateBelts(dt: number): void {
-    const speed = 0.55;
+    const speed = 0.85;
     for (const request of this.requests) {
       if (request.state !== 'traveling' || !request.beltId) continue;
 
@@ -469,7 +504,7 @@ export class SimulationEngine {
         continue;
       }
 
-      if (request.state === 'traveling') {
+      if (component.type === 'load-balancer' && request.state === 'traveling') {
         continue;
       }
 
@@ -500,8 +535,7 @@ export class SimulationEngine {
       return false;
     }
 
-    if (state.queue >= component.queueLimit) return false;
-    state.queue += 1;
+    if (this.queuedCount(component.id) >= component.queueLimit) return false;
     return true;
   }
 
@@ -524,12 +558,11 @@ export class SimulationEngine {
 
     const belt = validBelts[Math.floor(Math.random() * validBelts.length)];
     const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.5) return false;
+    if (beltSt.traveling >= belt.capacity * 0.9) return false;
 
     const targetPort = this.portMap.get(belt.toPortId)!;
     const targetComp = this.componentMap.get(targetPort.componentId)!;
-    const targetSt = this.componentState.get(targetComp.id)!;
-    if (targetSt.queue >= targetComp.queueLimit) return false;
+    if (this.queuedCount(targetComp.id) >= targetComp.queueLimit) return false;
 
     request.beltId = belt.id;
     request.targetPortId = belt.toPortId;
@@ -545,14 +578,28 @@ export class SimulationEngine {
       if (state.failed) continue;
 
       const processRate = component.capacity;
-      const canProcess = Math.min(state.queue, processRate * dt);
-      if (canProcess > 0) {
-        state.queue -= canProcess;
-        state.processing = canProcess / dt;
-        state.processed += canProcess;
+      const debt = (this.completionDebt.get(component.id) ?? 0) + processRate * dt;
+      let completions = Math.floor(debt);
+      this.completionDebt.set(component.id, debt - completions);
+      completions = Math.min(completions, state.queue);
 
-        for (let i = 0; i < Math.ceil(canProcess); i++) {
-          this.completeAtComponent(component);
+      if (completions > 0) {
+        let processed = 0;
+        for (let i = 0; i < completions; i++) {
+          if (this.completeOneRequest(component)) {
+            processed += 1;
+            continue;
+          }
+          break;
+        }
+        state.processing = processed / dt;
+        state.processed += processed;
+        const unused = completions - processed;
+        if (unused > 0) {
+          this.completionDebt.set(
+            component.id,
+            (this.completionDebt.get(component.id) ?? 0) + unused
+          );
         }
       } else {
         state.processing = 0;
@@ -578,23 +625,37 @@ export class SimulationEngine {
     this.requests = this.requests.filter((r) => r.state !== 'done' && r.state !== 'dropped');
   }
 
-  private completeAtComponent(component: PlacedComponent): void {
+  private canEmitOnBelt(belt: ConveyorBelt): boolean {
+    const beltSt = this.beltState.get(belt.id)!;
+    return beltSt.traveling < belt.capacity * 0.9;
+  }
+
+  private pickAvailableBelt(belts: ConveyorBelt[]): ConveyorBelt | undefined {
+    const available = belts.filter((belt) => this.canEmitOnBelt(belt));
+    if (available.length === 0) return undefined;
+    return available[Math.floor(Math.random() * available.length)];
+  }
+
+  private completeOneRequest(component: PlacedComponent): boolean {
     const outPort = getComponentPorts(component).find((p) => p.side === 'out');
     if (!outPort) {
-      this.totalCompleted += 1;
-      return;
+      if (this.finishQueuedRequest(component.id)) {
+        this.totalCompleted += 1;
+        return true;
+      }
+      return false;
     }
 
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
     if (belts.length === 0) {
       if (component.type === 'database' || component.type === 'redis') {
-        this.finishQueuedRequest(component.id);
-        this.totalCompleted += 1;
+        if (this.finishQueuedRequest(component.id)) {
+          this.totalCompleted += 1;
+          return true;
+        }
       }
-      return;
+      return false;
     }
-
-    const visual = this.takeQueuedVisual(component);
 
     if (component.type === 'backend') {
       const redisBelts = belts.filter((b) => {
@@ -606,15 +667,18 @@ export class SimulationEngine {
         return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
       });
 
-      const cacheHit = redisBelts.length > 0 && Math.random() < 0.78;
-      const chosen = cacheHit
-        ? redisBelts[Math.floor(Math.random() * redisBelts.length)]
-        : dbBelts.length > 0
-          ? dbBelts[Math.floor(Math.random() * dbBelts.length)]
-          : belts[0];
-
-      this.emitOnBelt(chosen, 'read', visual);
-      return;
+      const preferRedis =
+        redisBelts.length > 0 &&
+        (dbBelts.length === 0 || Math.random() < 0.97);
+      const candidates = preferRedis ? redisBelts : dbBelts.length > 0 ? dbBelts : belts;
+      const belt = this.pickAvailableBelt(candidates);
+      if (!belt) {
+        if (!preferRedis) return false;
+        const fallback = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
+        if (!fallback) return false;
+        return this.forwardFromComponent(component, fallback, 'read');
+      }
+      return this.forwardFromComponent(component, belt, 'read');
     }
 
     if (component.type === 'shortener') {
@@ -622,12 +686,24 @@ export class SimulationEngine {
         const port = this.portMap.get(b.toPortId);
         return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
       });
-      const belt = dbBelts[0] ?? belts[0];
-      this.emitOnBelt(belt, 'create', visual);
-      return;
+      const belt = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
+      if (!belt) return false;
+      return this.forwardFromComponent(component, belt, 'create');
     }
 
-    this.totalCompleted += 1;
+    return false;
+  }
+
+  private forwardFromComponent(
+    component: PlacedComponent,
+    belt: ConveyorBelt,
+    kind: RequestKind
+  ): boolean {
+    if (!this.canEmitOnBelt(belt)) return false;
+    const visual = this.takeQueuedVisual(component);
+    if (!visual) return false;
+    this.emitOnBelt(belt, kind, visual);
+    return true;
   }
 
   private takeQueuedVisual(
@@ -642,13 +718,13 @@ export class SimulationEngine {
     return { colorIndex: req.colorIndex, celebrity: req.celebrity };
   }
 
-  private finishQueuedRequest(componentId: string): void {
+  private finishQueuedRequest(componentId: string): boolean {
     const idx = this.requests.findIndex(
       (r) => r.state === 'queued' && r.currentComponentId === componentId
     );
-    if (idx !== -1) {
-      this.requests[idx].state = 'done';
-    }
+    if (idx === -1) return false;
+    this.requests[idx].state = 'done';
+    return true;
   }
 
   private emitOnBelt(
@@ -657,7 +733,7 @@ export class SimulationEngine {
     visual?: { colorIndex: number; celebrity: boolean }
   ): void {
     const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.5) {
+    if (beltSt.traveling >= belt.capacity * 0.9) {
       this.totalDropped += 1;
       return;
     }
@@ -708,7 +784,7 @@ export class SimulationEngine {
       components: this.components,
       telemetry: this.telemetry,
       componentState,
-      duration: this.time,
+      duration: SCENARIO.duration,
       outcome,
       totalSpawned: this.totalSpawned,
       totalCompleted: this.totalCompleted,
@@ -767,11 +843,12 @@ export function createComponent(type: ComponentType, x: number, y: number): Plac
 }
 
 export function createBelt(fromPortId: string, toPortId: string): ConveyorBelt {
+  const isIngress = fromPortId.startsWith(SOURCE_ID);
   return {
     id: `belt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     fromPortId,
     toPortId,
-    capacity: 80,
+    capacity: isIngress ? 1400 : 500,
   };
 }
 
