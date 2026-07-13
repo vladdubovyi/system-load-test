@@ -399,6 +399,15 @@ body {
   z-index: 1;
 }
 
+.particles-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+}
+
 .belt-track {
   fill: none;
   stroke: rgba(255, 255, 255, 0.08);
@@ -432,7 +441,7 @@ body {
 .components-layer {
   position: absolute;
   inset: 0;
-  z-index: 2;
+  z-index: 3;
 }
 
 .source-node {
