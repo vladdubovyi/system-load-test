@@ -1,5 +1,6 @@
 import type { SimulationReport } from '../game/types';
 import { formatCost, formatSeconds } from '../game/report';
+import { downloadReportPdf } from '../game/report-pdf';
 import { SCENARIO } from '../game/types';
 
 function loadBar(pct: number): string {
@@ -173,6 +174,7 @@ export function renderReportModal(report: SimulationReport): string {
 
         <footer class="report-footer">
           <button class="btn btn-secondary" id="report-dismiss" type="button">Close</button>
+          <button class="btn btn-secondary" id="report-download" type="button">⬇ Download PDF</button>
           <button class="btn btn-primary" id="report-replay" type="button">▶ Run again</button>
         </footer>
       </div>
@@ -197,6 +199,9 @@ export function mountReportModal(
 
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
+  document.getElementById('report-download')?.addEventListener('click', () => {
+    downloadReportPdf(report);
+  });
   document.getElementById('report-replay')?.addEventListener('click', () => {
     close();
     onReplay();
