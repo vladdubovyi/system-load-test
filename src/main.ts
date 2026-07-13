@@ -31,10 +31,18 @@ interface GameState {
   lastTick: number;
   lastHudUpdate: number;
   simAccumulator: number;
+  displayedHud: {
+    time: number;
+    rps: number;
+    spawned: number;
+    completed: number;
+    dropped: number;
+  };
 }
 
 const SIM_STEP = 1 / 60;
-const HUD_INTERVAL_MS = 100;
+const HUD_INTERVAL_MS = 600;
+const HUD_LERP_SPEED = 2.2;
 
 const state: GameState = {
   components: [],
@@ -47,6 +55,7 @@ const state: GameState = {
   lastTick: 0,
   lastHudUpdate: 0,
   simAccumulator: 0,
+  displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
 };
 
 const boardRenderer = new BoardRenderer();
@@ -187,7 +196,12 @@ function positionSourceNode(): void {
   sourceNode.style.top = `${port.y - 72}px`;
 }
 
-function updateStatus(): void {
+function lerpHud(current: number, target: number, dt: number): number {
+  const factor = 1 - Math.exp(-HUD_LERP_SPEED * dt);
+  return current + (target - current) * factor;
+}
+
+function updateStatus(dt = 0): void {
   const bar = document.getElementById('status-bar')!;
   const stats = document.getElementById('header-stats')!;
   const snap = state.engine?.getSnapshot() ?? null;
@@ -201,12 +215,29 @@ function updateStatus(): void {
   bar.textContent = snap?.message ?? 'Wire up your system, then press Play.';
 
   if (snap) {
+    if (dt > 0) {
+      state.displayedHud.time = lerpHud(state.displayedHud.time, snap.time, dt);
+      state.displayedHud.rps = lerpHud(state.displayedHud.rps, snap.currentRps, dt);
+      state.displayedHud.spawned = lerpHud(state.displayedHud.spawned, snap.totalSpawned, dt);
+      state.displayedHud.completed = lerpHud(state.displayedHud.completed, snap.totalCompleted, dt);
+      state.displayedHud.dropped = lerpHud(state.displayedHud.dropped, snap.totalDropped, dt);
+    } else {
+      state.displayedHud = {
+        time: snap.time,
+        rps: snap.currentRps,
+        spawned: snap.totalSpawned,
+        completed: snap.totalCompleted,
+        dropped: snap.totalDropped,
+      };
+    }
+
+    const hud = state.displayedHud;
     stats.innerHTML = `
-      <div class="stat"><span class="stat-label">Time</span><span class="stat-value">${snap.time.toFixed(1)}s / ${SCENARIO.duration}s</span></div>
-      <div class="stat"><span class="stat-label">RPS</span><span class="stat-value ${snap.spikeActive ? 'spike' : ''}">${Math.round(snap.currentRps)}</span></div>
-      <div class="stat"><span class="stat-label">Spawned</span><span class="stat-value">${snap.totalSpawned}</span></div>
-      <div class="stat"><span class="stat-label">Completed</span><span class="stat-value">${snap.totalCompleted}</span></div>
-      <div class="stat"><span class="stat-label">Dropped</span><span class="stat-value ${snap.totalDropped > 0 ? 'bad' : ''}">${snap.totalDropped}</span></div>
+      <div class="stat"><span class="stat-label">Time</span><span class="stat-value">${hud.time.toFixed(1)}s / ${SCENARIO.duration}s</span></div>
+      <div class="stat"><span class="stat-label">RPS</span><span class="stat-value ${snap.spikeActive ? 'spike' : ''}">${Math.round(hud.rps)}</span></div>
+      <div class="stat"><span class="stat-label">Spawned</span><span class="stat-value">${Math.round(hud.spawned).toLocaleString()}</span></div>
+      <div class="stat"><span class="stat-label">Completed</span><span class="stat-value">${Math.round(hud.completed).toLocaleString()}</span></div>
+      <div class="stat"><span class="stat-label">Dropped</span><span class="stat-value ${snap.totalDropped > 0 ? 'bad' : ''}">${Math.round(hud.dropped).toLocaleString()}</span></div>
     `;
   } else {
     stats.innerHTML = `
@@ -396,6 +427,7 @@ function startSimulation(): void {
   state.lastTick = performance.now();
   state.lastHudUpdate = state.lastTick;
   state.simAccumulator = 0;
+  state.displayedHud = { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 };
 
   const loop = (now: number) => {
     const snap = state.engine?.getSnapshot();
@@ -416,10 +448,10 @@ function startSimulation(): void {
     }
 
     refreshBoardVisuals(state.engine.getSnapshot(), frameDt);
+    updateStatus(frameDt);
 
     if (now - state.lastHudUpdate >= HUD_INTERVAL_MS) {
       state.lastHudUpdate = now;
-      updateStatus();
     }
 
     state.animFrame = requestAnimationFrame(loop);
