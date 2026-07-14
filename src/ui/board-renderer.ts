@@ -1,6 +1,7 @@
 import type { ConveyorBelt, PlacedComponent, Port, Request, SimulationSnapshot } from '../game/types';
 import { COMPONENT_DEFS, REQUEST_COLORS } from '../game/types';
 import { getComponentPorts, getSourcePort, loadColor } from '../game/simulation';
+import { WORLD_HEIGHT, WORLD_WIDTH } from './viewport';
 
 const MAX_VISIBLE_REQUESTS = 96;
 const LOAD_LERP_SPEED = 1.8;
@@ -20,7 +21,6 @@ interface ComponentGraphics {
 }
 
 export class BoardRenderer {
-  private board: HTMLElement | null = null;
   private svg: SVGSVGElement | null = null;
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -38,7 +38,6 @@ export class BoardRenderer {
     components: PlacedComponent[],
     belts: ConveyorBelt[]
   ): void {
-    this.board = board;
     this.components = components;
     this.belts = belts;
     this.beltById = new Map(belts.map((belt) => [belt.id, belt]));
@@ -51,6 +50,8 @@ export class BoardRenderer {
 
     this.svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     this.svg.setAttribute('class', 'belts-layer');
+    this.svg.setAttribute('width', String(WORLD_WIDTH));
+    this.svg.setAttribute('height', String(WORLD_HEIGHT));
 
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'particles-layer';
@@ -59,8 +60,13 @@ export class BoardRenderer {
     this.componentsLayer = document.createElement('div');
     this.componentsLayer.className = 'components-layer';
 
-    board.insertBefore(this.svg, board.querySelector('.source-node'));
-    board.insertBefore(this.canvas, board.querySelector('.source-node'));
+    const sourceNode = board.querySelector('.source-node');
+    if (sourceNode) {
+      board.insertBefore(this.svg, sourceNode);
+      board.insertBefore(this.canvas, sourceNode);
+    } else {
+      board.append(this.svg, this.canvas);
+    }
     board.appendChild(this.componentsLayer);
 
     this.resizeCanvas();
@@ -69,13 +75,12 @@ export class BoardRenderer {
   }
 
   resizeCanvas(): void {
-    if (!this.board || !this.canvas) return;
-    const rect = this.board.getBoundingClientRect();
+    if (!this.canvas) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    this.canvas.width = Math.floor(rect.width * dpr);
-    this.canvas.height = Math.floor(rect.height * dpr);
-    this.canvas.style.width = `${rect.width}px`;
-    this.canvas.style.height = `${rect.height}px`;
+    this.canvas.width = Math.floor(WORLD_WIDTH * dpr);
+    this.canvas.height = Math.floor(WORLD_HEIGHT * dpr);
+    this.canvas.style.width = `${WORLD_WIDTH}px`;
+    this.canvas.style.height = `${WORLD_HEIGHT}px`;
     this.ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
@@ -274,15 +279,13 @@ export class BoardRenderer {
   }
 
   private clearParticles(): void {
-    if (!this.ctx || !this.canvas || !this.board) return;
-    const rect = this.board.getBoundingClientRect();
-    this.ctx.clearRect(0, 0, rect.width, rect.height);
+    if (!this.ctx || !this.canvas) return;
+    this.ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
   }
 
   private drawRequestCircles(snapshot: SimulationSnapshot): void {
-    if (!this.ctx || !this.canvas || !this.board) return;
-    const rect = this.board.getBoundingClientRect();
-    this.ctx.clearRect(0, 0, rect.width, rect.height);
+    if (!this.ctx || !this.canvas) return;
+    this.ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
 
     const traveling = snapshot.activeRequests.filter(
       (req): req is Request & { beltId: string } =>
@@ -315,7 +318,7 @@ export class BoardRenderer {
       this.ctx.fill();
 
       if (req.celebrity) {
-        this.ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
+        this.ctx.strokeStyle = 'rgba(30, 30, 30, 0.45)';
         this.ctx.lineWidth = 1.25;
         this.ctx.stroke();
       }

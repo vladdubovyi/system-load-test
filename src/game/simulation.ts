@@ -55,8 +55,8 @@ function pickRequestColor(): { colorIndex: number; celebrity: boolean } {
   };
 }
 
-const SOURCE_X = 48;
-const SOURCE_Y = 280;
+const SOURCE_X = 400;
+const SOURCE_Y = 300;
 
 export function getSourcePort(_components: PlacedComponent[]): Port {
   return {
