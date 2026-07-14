@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Test - System Design Simulator</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 1200px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    h1 { color: #333; }
+    .section {
+      margin: 30px 0;
+      padding: 20px;
+      background: #f5f5f5;
+      border-radius: 8px;
+    }
+    pre {
+      background: white;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      background: #6965db;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #5b57c9;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 4px;
+    }
+    .status.success {
+      background: #d1f4e0;
+      color: #1e7e34;
+    }
+    .status.error {
+      background: #f8d7da;
+      color: #721c24;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧪 API Integration Test</h1>
+  
+  <div class="section">
+    <h2>Backend Health Check</h2>
+    <button onclick="testHealth()">Test Health Endpoint</button>
+    <div id="health-result"></div>
+  </div>
+
+  <div class="section">
+    <h2>Load Challenges</h2>
+    <button onclick="testChallenges()">Get All Challenges</button>
+    <div id="challenges-result"></div>
+  </div>
+
+  <div class="section">
+    <h2>Load Components</h2>
+    <button onclick="testComponents()">Get All Components</button>
+    <div id="components-result"></div>
+  </div>
+
+  <div class="section">
+    <h2>Initialize App</h2>
+    <button onclick="testInitialization()">Run App Initialization</button>
+    <div id="init-result"></div>
+  </div>
+
+  <script type="module">
+    import { apiClient } from './src/api/client.ts';
+    import { initializeApp } from './src/game/app-init.ts';
+    import { componentRegistry } from './src/game/component-registry.ts';
+
+    window.testHealth = async function() {
+      const result = document.getElementById('health-result');
+      result.innerHTML = '<p>Loading...</p>';
+      
+      try {
+        const response = await fetch('http://localhost:5000/api/health');
+        const data = await response.json();
+        result.innerHTML = `
+          <div class="status success">✓ Backend is healthy!</div>
+          <pre>${JSON.stringify(data, null, 2)}</pre>
+        `;
+      } catch (error) {
+        result.innerHTML = `
+          <div class="status error">✗ Error: ${error.message}</div>
+        `;
+      }
+    };
+
+    window.testChallenges = async function() {
+      const result = document.getElementById('challenges-result');
+      result.innerHTML = '<p>Loading...</p>';
+      
+      try {
+        const challenges = await apiClient.getChallenges();
+        result.innerHTML = `
+          <div class="status success">✓ Loaded ${challenges.length} challenges!</div>
+          <pre>${JSON.stringify(challenges.map(c => ({
+            name: c.name,
+            slug: c.slug,
+            difficulty: c.difficulty,
+            allowedComponents: c.allowedComponents.length,
+            duration: c.scenario.duration
+          })), null, 2)}</pre>
+        `;
+      } catch (error) {
+        result.innerHTML = `
+          <div class="status error">✗ Error: ${error.message}</div>
+        `;
+      }
+    };
+
+    window.testComponents = async function() {
+      const result = document.getElementById('components-result');
+      result.innerHTML = '<p>Loading...</p>';
+      
+      try {
+        const components = await apiClient.getComponentDefinitions();
+        result.innerHTML = `
+          <div class="status success">✓ Loaded ${components.length} component definitions!</div>
+          <pre>${JSON.stringify(components.map(c => ({
+            type: c.componentType,
+            label: c.label,
+            category: c.category,
+            cost: c.monthlyCost
+          })), null, 2)}</pre>
+        `;
+      } catch (error) {
+        result.innerHTML = `
+          <div class="status error">✗ Error: ${error.message}</div>
+        `;
+      }
+    };
+
+    window.testInitialization = async function() {
+      const result = document.getElementById('init-result');
+      result.innerHTML = '<p>Loading...</p>';
+      
+      try {
+        const appData = await initializeApp();
+        
+        // Get component types from registry
+        const componentTypes = componentRegistry.getAllTypes();
+        
+        result.innerHTML = `
+          <div class="status success">✓ App initialized successfully!</div>
+          <h3>Summary:</h3>
+          <ul>
+            <li><strong>Challenges loaded:</strong> ${appData.challenges.length}</li>
+            <li><strong>Components available:</strong> ${componentTypes.length}</li>
+            <li><strong>Selected challenge:</strong> ${appData.selectedChallenge?.name || 'None'}</li>
+          </ul>
+          <h3>Component Types:</h3>
+          <pre>${componentTypes.join(', ')}</pre>
+          <h3>Challenges:</h3>
+          <pre>${JSON.stringify(appData.challenges.map(c => c.name), null, 2)}</pre>
+        `;
+      } catch (error) {
+        result.innerHTML = `
+          <div class="status error">✗ Error: ${error.message}</div>
+          <pre>${error.stack}</pre>
+        `;
+      }
+    };
+  </script>
+</body>
+</html>
