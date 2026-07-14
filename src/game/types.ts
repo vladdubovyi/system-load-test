@@ -30,6 +30,9 @@ export interface PlacedComponent {
   queueLimit: number;
   /** Primary component id when this node was spawned by horizontal scaling. */
   scaleGroupId?: string;
+  /** Fixed top-left anchor for laying out a scale group grid. */
+  scaleAnchorX?: number;
+  scaleAnchorY?: number;
 }
 
 export interface ConveyorBelt {
@@ -230,4 +233,6 @@ export const SCENARIO = {
   spikeChance: 0.08,
   readRatio: 0.72,
   celebrityShare: 0.82,
+  /** Share of backend reads served from Redis without hitting the database. */
+  cacheHitRatio: 0.97,
 };

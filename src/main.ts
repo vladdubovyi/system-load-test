@@ -45,6 +45,11 @@ import {
   type ViewportState,
 } from './ui/viewport';
 import {
+  getScaleGroupMembers,
+  isScalePrimary,
+} from './game/scale-instances';
+import { applyBoardLayout, layoutScaleGroupMembers } from './game/board-layout';
+import {
   renderFloatingChrome,
   toolCursor,
   type BoardTool,
@@ -708,8 +713,27 @@ function bindEvents(): void {
     if (state.dragging.kind === 'component') {
       const c = state.components.find((x) => x.id === state.dragging!.id);
       if (!c) return;
-      c.x = world.x - state.dragging.offsetX;
-      c.y = world.y - state.dragging.offsetY;
+      const newX = world.x - state.dragging.offsetX;
+      const newY = world.y - state.dragging.offsetY;
+
+      if (isScalePrimary(c)) {
+        const members = getScaleGroupMembers(state.components, c.id);
+        if (members.length > 1) {
+          c.scaleAnchorX = newX;
+          c.scaleAnchorY = newY;
+          layoutScaleGroupMembers(members);
+          applyBoardLayout(state.components);
+        } else {
+          c.x = newX;
+          c.y = newY;
+          c.scaleAnchorX = newX;
+          c.scaleAnchorY = newY;
+        }
+      } else {
+        c.x = newX;
+        c.y = newY;
+      }
+
       boardRenderer.updatePositions(state.components);
       positionSourceNode();
       return;
