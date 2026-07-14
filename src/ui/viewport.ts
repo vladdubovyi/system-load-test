@@ -43,10 +43,27 @@ export function worldToScreen(
   };
 }
 
-export function applyViewportStyles(element: HTMLElement, viewport: ViewportState): void {
-  element.style.transform = `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`;
-  element.style.transformOrigin = '0 0';
-  element.style.zoom = '';
+export function applyViewportStyles(
+  panElement: HTMLElement,
+  worldElement: HTMLElement,
+  viewport: ViewportState
+): void {
+  panElement.style.transform = `translate(${Math.round(viewport.panX)}px, ${Math.round(viewport.panY)}px)`;
+  panElement.style.transformOrigin = '0 0';
+
+  worldElement.style.transformOrigin = '0 0';
+  const supportsZoom =
+    typeof CSS !== 'undefined' &&
+    typeof CSS.supports === 'function' &&
+    CSS.supports('zoom', '1');
+
+  if (supportsZoom) {
+    worldElement.style.setProperty('zoom', String(viewport.zoom));
+    worldElement.style.transform = '';
+  } else {
+    worldElement.style.removeProperty('zoom');
+    worldElement.style.transform = `scale(${viewport.zoom})`;
+  }
 }
 
 /** @deprecated use applyViewportStyles */

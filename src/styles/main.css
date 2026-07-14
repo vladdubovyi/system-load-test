@@ -70,12 +70,26 @@ body {
   cursor: grabbing !important;
 }
 
-.board-world {
+.board-pan {
   position: absolute;
   top: 0;
   left: 0;
   transform-origin: 0 0;
-  will-change: transform;
+}
+
+.board-world {
+  position: relative;
+  transform-origin: 0 0;
+}
+
+.board-world,
+.board-world .board-text,
+.board-world .component-name,
+.board-world .problem-frame-inner,
+.board-world .source-label {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
 }
 
 .board {
@@ -156,7 +170,7 @@ body {
 .chrome-menu-btn {
   width: 36px;
   height: 36px;
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -171,7 +185,7 @@ body {
   gap: 0.4rem;
   padding: 0.35rem 0.65rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
@@ -199,7 +213,7 @@ body {
 }
 
 .chrome-action-btn {
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -208,12 +222,12 @@ body {
   font-weight: 600;
   cursor: pointer;
   color: var(--ink);
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, box-shadow 0.12s;
 }
 
 .chrome-action-btn:hover:not(:disabled) {
   background: #f8f9fa;
-  border-color: var(--border-strong);
+  box-shadow: var(--shadow-md);
 }
 
 .chrome-action-btn:disabled {
@@ -223,13 +237,11 @@ body {
 
 .chrome-action-primary {
   background: var(--accent);
-  border-color: var(--accent);
   color: #fff;
 }
 
 .chrome-action-primary:hover:not(:disabled) {
   background: var(--accent-hover);
-  border-color: var(--accent-hover);
 }
 
 /* ── Floating toolbars ── */
@@ -241,7 +253,7 @@ body {
   gap: 0.15rem;
   padding: 0.3rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: var(--toolbar-radius);
   box-shadow: var(--shadow-md);
 }
@@ -315,7 +327,7 @@ body {
   gap: 1rem;
   padding: 0.45rem 0.85rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   font-size: 0.78rem;
@@ -356,7 +368,7 @@ body {
   max-width: min(640px, 90vw);
   padding: 0.4rem 0.85rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   font-size: 0.76rem;
@@ -368,15 +380,15 @@ body {
 }
 
 .floating-status.won {
-  border-color: rgba(47, 158, 68, 0.35);
   color: var(--success);
   background: rgba(47, 158, 68, 0.06);
+  box-shadow: 0 1px 6px rgba(47, 158, 68, 0.15);
 }
 
 .floating-status.lost {
-  border-color: rgba(224, 49, 49, 0.35);
   color: var(--danger);
   background: rgba(224, 49, 49, 0.06);
+  box-shadow: 0 1px 6px rgba(224, 49, 49, 0.15);
 }
 
 .floating-status.spike::before {
@@ -394,7 +406,7 @@ body {
   gap: 0.2rem;
   padding: 0.25rem;
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: none;
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
@@ -774,49 +786,32 @@ body {
   stroke-linecap: round;
 }
 
-/* ── Config palette (right hover panel) ── */
+/* ── Config palette (opens when a component is selected) ── */
 
 .config-palette {
   position: fixed;
   top: 50%;
   right: 0;
-  transform: translateY(-50%) translateX(calc(100% - 28px));
+  transform: translateY(-50%) translateX(100%);
   z-index: 55;
-  transition: transform 0.2s ease;
-  pointer-events: auto;
+  transition: transform 0.22s ease, opacity 0.18s ease;
+  pointer-events: none;
+  opacity: 0;
 }
 
-.config-palette:hover {
+.config-palette.open {
   transform: translateY(-50%) translateX(0);
-}
-
-.config-palette-tab {
-  position: absolute;
-  left: -1px;
-  top: 50%;
-  transform: translate(-100%, -50%) rotate(-90deg);
-  transform-origin: right center;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent);
-  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  opacity: 1;
 }
 
 .config-palette-body {
   width: 220px;
   padding: 0.75rem;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-right: none;
+  border: none;
   border-radius: 12px 0 0 12px;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .config-palette-title {
@@ -942,6 +937,39 @@ body {
   font-size: 0.58rem;
   color: var(--ink-muted);
   margin-top: 0.05rem;
+}
+
+.component-config-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  justify-content: center;
+  margin-top: 0.25rem;
+  max-width: 100%;
+}
+
+.component-config-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.35rem;
+  font-family: var(--font-ui);
+  font-size: 0.52rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.component-config-badge-emoji {
+  font-size: 0.62rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .fail-badge,
