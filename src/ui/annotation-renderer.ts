@@ -119,6 +119,12 @@ export class AnnotationRenderer {
     el.addEventListener('blur', finish);
   }
 
+  updateTextSelection(selectedTextId: string | null): void {
+    this.textsLayer?.querySelectorAll('.board-text').forEach((el) => {
+      el.classList.toggle('selected', (el as HTMLElement).dataset.textId === selectedTextId);
+    });
+  }
+
   destroy(): void {
     this.layer?.remove();
     this.layer = null;

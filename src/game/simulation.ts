@@ -13,14 +13,18 @@ import type {
   SimulationStatus,
 } from './types';
 import { buildSimulationReport } from './report';
-import type {
-  ArchitectureConfig,
-  ComponentScalingState,
-} from './architecture-config';
+import type { ComponentInstanceConfig } from './component-config';
 import {
-  createDefaultArchitectureConfig,
-  isScalableType,
+  aggregateArchitectureConfig,
+  getAutoScalingForComponent,
+  getDatabaseConfigForComponent,
+} from './component-config';
+import type {
+  AutoScalingConfig,
+  ComponentScalingState,
+  DatabaseConfig,
 } from './architecture-config';
+import { isScalableType } from './architecture-config';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -224,7 +228,7 @@ export class SimulationEngine {
   private spikeEvents = 0;
   private wasSpikeActive = false;
   private draining = false;
-  private architectureConfig: ArchitectureConfig;
+  private componentConfigs: Map<string, ComponentInstanceConfig>;
   private scalingState = new Map<string, ComponentScalingState>();
   private scaleUpTimers = new Map<string, number>();
   private scaleDownTimers = new Map<string, number>();
@@ -232,9 +236,9 @@ export class SimulationEngine {
   constructor(
     components: PlacedComponent[],
     belts: ConveyorBelt[],
-    architectureConfig: ArchitectureConfig = createDefaultArchitectureConfig()
+    componentConfigs: Map<string, ComponentInstanceConfig> = new Map()
   ) {
-    this.architectureConfig = architectureConfig;
+    this.componentConfigs = componentConfigs;
     this.components = components;
     this.belts = belts;
     this.componentMap = new Map(components.map((c) => [c.id, c]));
@@ -255,8 +259,16 @@ export class SimulationEngine {
     this.resetStates();
   }
 
-  setArchitectureConfig(config: ArchitectureConfig): void {
-    this.architectureConfig = config;
+  setComponentConfigs(configs: Map<string, ComponentInstanceConfig>): void {
+    this.componentConfigs = configs;
+  }
+
+  private scalingConfig(component: PlacedComponent): AutoScalingConfig | null {
+    return getAutoScalingForComponent(component, this.componentConfigs);
+  }
+
+  private databaseConfig(component: PlacedComponent): DatabaseConfig | null {
+    return getDatabaseConfigForComponent(component, this.componentConfigs);
   }
 
   private initScalingState(): void {
@@ -264,11 +276,9 @@ export class SimulationEngine {
     this.scaleUpTimers.clear();
     this.scaleDownTimers.clear();
     for (const component of this.components) {
+      const cfg = this.scalingConfig(component);
       const minInstances =
-        isScalableType(component.type) &&
-        this.architectureConfig.autoScaling[component.type].horizontal.enabled
-          ? this.architectureConfig.autoScaling[component.type].horizontal.minInstances
-          : 1;
+        cfg?.horizontal.enabled ? cfg.horizontal.minInstances : 1;
       this.scalingState.set(component.id, {
         instances: minInstances,
         verticalMultiplier: 1,
@@ -280,8 +290,10 @@ export class SimulationEngine {
     }
   }
 
-  private getDatabaseMultiplier(): number {
-    const { replication, sharding } = this.architectureConfig.database;
+  private getDatabaseMultiplier(component: PlacedComponent): number {
+    const dbCfg = this.databaseConfig(component);
+    if (!dbCfg) return 1;
+    const { replication, sharding } = dbCfg;
     let multiplier = 1;
     if (sharding.enabled) {
       multiplier *= Math.max(1, sharding.shardCount);
@@ -294,14 +306,15 @@ export class SimulationEngine {
 
   private getEffectiveCapacity(component: PlacedComponent): number {
     if (component.type === 'database') {
-      return component.capacity * this.getDatabaseMultiplier();
+      return component.capacity * this.getDatabaseMultiplier(component);
     }
 
     if (isScalableType(component.type)) {
       const scaling = this.scalingState.get(component.id);
-      const cfg = this.architectureConfig.autoScaling[component.type];
+      const cfg = this.scalingConfig(component);
       if (
         scaling &&
+        cfg &&
         (cfg.horizontal.enabled || cfg.vertical.enabled || cfg.predictive.enabled)
       ) {
         return component.capacity * scaling.instances * scaling.verticalMultiplier;
@@ -314,13 +327,13 @@ export class SimulationEngine {
   private getEffectiveQueueLimit(component: PlacedComponent): number {
     if (isScalableType(component.type)) {
       const scaling = this.scalingState.get(component.id);
-      const cfg = this.architectureConfig.autoScaling[component.type];
-      if (scaling && cfg.horizontal.enabled) {
+      const cfg = this.scalingConfig(component);
+      if (scaling && cfg?.horizontal.enabled) {
         return component.queueLimit * scaling.instances;
       }
     }
     if (component.type === 'database') {
-      return Math.round(component.queueLimit * this.getDatabaseMultiplier());
+      return Math.round(component.queueLimit * this.getDatabaseMultiplier(component));
     }
     return component.queueLimit;
   }
@@ -332,9 +345,9 @@ export class SimulationEngine {
     for (const component of this.components) {
       if (!isScalableType(component.type)) continue;
 
-      const cfg = this.architectureConfig.autoScaling[component.type];
+      const cfg = this.scalingConfig(component);
       const scaling = this.scalingState.get(component.id)!;
-      if (!cfg.predictive.enabled || !cfg.horizontal.enabled) continue;
+      if (!cfg?.predictive.enabled || !cfg.horizontal.enabled) continue;
 
       const trafficShare =
         component.type === 'backend'
@@ -357,7 +370,8 @@ export class SimulationEngine {
     for (const component of this.components) {
       if (!isScalableType(component.type)) continue;
 
-      const cfg = this.architectureConfig.autoScaling[component.type];
+      const cfg = this.scalingConfig(component);
+      if (!cfg) continue;
       const scaling = this.scalingState.get(component.id)!;
       const state = this.componentState.get(component.id)!;
       const targetUtil = cfg.horizontal.targetUtilization;
@@ -1003,7 +1017,8 @@ export class SimulationEngine {
       totalDropped: this.totalDropped,
       peakRps: this.peakRps,
       spikeEvents: this.spikeEvents,
-      architectureConfig: this.architectureConfig,
+      architectureConfig: aggregateArchitectureConfig(this.components, this.componentConfigs),
+      componentConfigs: this.componentConfigs,
       scalingState: this.scalingState,
     });
   }

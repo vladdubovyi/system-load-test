@@ -36,7 +36,8 @@ export class BoardRenderer {
   mount(
     board: HTMLElement,
     components: PlacedComponent[],
-    belts: ConveyorBelt[]
+    belts: ConveyorBelt[],
+    selectedComponentId: string | null = null
   ): void {
     this.components = components;
     this.belts = belts;
@@ -71,7 +72,7 @@ export class BoardRenderer {
 
     this.resizeCanvas();
     this.buildBelts();
-    this.buildComponents();
+    this.buildComponents(selectedComponentId);
   }
 
   resizeCanvas(): void {
@@ -148,7 +149,7 @@ export class BoardRenderer {
     }
   }
 
-  private buildComponents(): void {
+  private buildComponents(selectedComponentId: string | null): void {
     if (!this.componentsLayer) return;
     this.componentsLayer.innerHTML = '';
     this.componentGraphics.clear();
@@ -156,7 +157,7 @@ export class BoardRenderer {
     for (const component of this.components) {
       const def = COMPONENT_DEFS[component.type];
       const root = document.createElement('div');
-      root.className = 'component';
+      root.className = `component${component.id === selectedComponentId ? ' selected' : ''}`;
       root.dataset.id = component.id;
       root.style.left = `${component.x}px`;
       root.style.top = `${component.y}px`;
@@ -182,6 +183,12 @@ export class BoardRenderer {
         badge: null,
         displayedLoad: 0,
       });
+    }
+  }
+
+  updateSelection(selectedComponentId: string | null): void {
+    for (const [id, gfx] of this.componentGraphics) {
+      gfx.root.classList.toggle('selected', id === selectedComponentId);
     }
   }
 

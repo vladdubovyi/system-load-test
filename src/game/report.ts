@@ -10,6 +10,11 @@ import type {
   ArchitectureConfig,
   ComponentScalingState,
 } from './architecture-config';
+import type { ComponentInstanceConfig } from './component-config';
+import {
+  getAutoScalingForComponent,
+  getDatabaseConfigForComponent,
+} from './component-config';
 
 const REQUIRED_COMPONENTS: ComponentType[] = [
   'load-balancer',
@@ -47,6 +52,7 @@ export interface ReportInput {
   peakRps: number;
   spikeEvents: number;
   architectureConfig: ArchitectureConfig;
+  componentConfigs: Map<string, ComponentInstanceConfig>;
   scalingState: Map<string, ComponentScalingState>;
 }
 
@@ -73,9 +79,12 @@ function effectiveMonthlyCost(
   }
 
   if (component.type === 'database') {
-    const { replication, sharding } = input.architectureConfig.database;
-    if (sharding.enabled) cost *= Math.max(1, sharding.shardCount);
-    if (replication.enabled) cost += def.monthlyCost * replication.readReplicas * 0.55;
+    const dbCfg = getDatabaseConfigForComponent(component, input.componentConfigs);
+    if (dbCfg) {
+      const { replication, sharding } = dbCfg;
+      if (sharding.enabled) cost *= Math.max(1, sharding.shardCount);
+      if (replication.enabled) cost += def.monthlyCost * replication.readReplicas * 0.55;
+    }
   }
 
   return cost;
@@ -213,18 +222,28 @@ function meetsExcellence(
 
   const redis = reports.find((r) => r.type === 'redis');
   const db = reports.find((r) => r.type === 'database');
-  const cfg = input.architectureConfig;
 
-  if (
-    !cfg.autoScaling.shortener.horizontal.enabled ||
-    !cfg.autoScaling.backend.horizontal.enabled
-  ) {
+  const shortener = input.components.find((c) => c.type === 'shortener');
+  const backend = input.components.find((c) => c.type === 'backend');
+  const database = input.components.find((c) => c.type === 'database');
+
+  const shortenerCfg = shortener
+    ? getAutoScalingForComponent(shortener, input.componentConfigs)
+    : null;
+  const backendCfg = backend
+    ? getAutoScalingForComponent(backend, input.componentConfigs)
+    : null;
+  const dbCfg = database
+    ? getDatabaseConfigForComponent(database, input.componentConfigs)
+    : null;
+
+  if (!shortenerCfg?.horizontal.enabled || !backendCfg?.horizontal.enabled) {
     return false;
   }
-  if (!cfg.database.sharding.enabled || cfg.database.sharding.shardCount < 2) {
+  if (!dbCfg?.sharding.enabled || dbCfg.sharding.shardCount < 2) {
     return false;
   }
-  if (!cfg.database.replication.enabled || cfg.database.replication.readReplicas < 1) {
+  if (!dbCfg.replication.enabled || dbCfg.replication.readReplicas < 1) {
     return false;
   }
   if (!redis || redis.avgLoad < 10) return false;
