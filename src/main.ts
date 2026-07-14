@@ -92,6 +92,15 @@ interface GameState {
   availableChallenges: Challenge[];
   challengeSelectorOpen: boolean;
   simulationSpeed: 1 | 5 | 20 | 100;
+  history: HistoryEntry[];
+  historyIndex: number;
+  maxHistory: number;
+}
+
+interface HistoryEntry {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  componentConfigs: Map<string, ComponentInstanceConfig>;
 }
 
 const SIM_STEP = 1 / 60;
@@ -124,6 +133,9 @@ const state: GameState = {
   availableChallenges: [],
   challengeSelectorOpen: false,
   simulationSpeed: 1,
+  history: [],
+  historyIndex: -1,
+  maxHistory: 50,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -515,6 +527,7 @@ function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): v
     boardRenderer.updateComponentConfigs(state.componentConfigs);
     selectItem({ kind: 'component', id: componentId });
     invalidateBoardSnapshot();
+    pushHistory();
   }
 }
 
@@ -533,12 +546,14 @@ function deleteSelection(): void {
     state.selection = null;
     mountBoard();
     invalidateBoardSnapshot();
+    pushHistory();
     return;
   }
 
   state.annotations.texts = state.annotations.texts.filter((t) => t.id !== state.selection!.id);
   state.selection = null;
   annotationRenderer.render(state.annotations);
+  pushHistory();
 }
 
 function bindEvents(): void {
@@ -663,6 +678,15 @@ function bindEvents(): void {
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       deleteSelection();
+    }
+    // Undo/Redo shortcuts
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey))) {
+      e.preventDefault();
+      redo();
     }
   });
 
@@ -821,6 +845,7 @@ function bindEvents(): void {
       mountBoard();
       invalidateBoardSnapshot();
       selectItem({ kind: 'component', id: comp.id });
+      pushHistory();
       setTool('hand');
       return;
     }
@@ -900,6 +925,7 @@ function finishConnection(screenX: number, screenY: number): void {
     state.belts.push(createBelt(fromPort.id, toPort.id));
     mountBoard();
     invalidateBoardSnapshot();
+    pushHistory();
   }
 }
 
@@ -1035,6 +1061,50 @@ function stopSimulation(): void {
   if (snap?.status === 'running') state.lastRunStatus = 'idle';
   refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
   updateStatus();
+}
+
+// History management functions
+function pushHistory(): void {
+  // Trim future history if we're not at the end
+  state.history = state.history.slice(0, state.historyIndex + 1);
+  
+  // Add current state
+  state.history.push({
+    components: structuredClone(state.components),
+    belts: structuredClone(state.belts),
+    componentConfigs: cloneComponentConfigMap(state.componentConfigs),
+  });
+  
+  // Limit history size
+  if (state.history.length > state.maxHistory) {
+    state.history.shift();
+  } else {
+    state.historyIndex++;
+  }
+}
+
+function undo(): void {
+  if (state.historyIndex > 0) {
+    state.historyIndex--;
+    const entry = state.history[state.historyIndex];
+    state.components = structuredClone(entry.components);
+    state.belts = structuredClone(entry.belts);
+    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
+    onSimulationTopologyChange();
+    render();
+  }
+}
+
+function redo(): void {
+  if (state.historyIndex < state.history.length - 1) {
+    state.historyIndex++;
+    const entry = state.history[state.historyIndex];
+    state.components = structuredClone(entry.components);
+    state.belts = structuredClone(entry.belts);
+    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
+    onSimulationTopologyChange();
+    render();
+  }
 }
 
 // Challenge selection functions
