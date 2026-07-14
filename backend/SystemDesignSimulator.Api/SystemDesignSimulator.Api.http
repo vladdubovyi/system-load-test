@@ -1,0 +1,6 @@
+@SystemDesignSimulator.Api_HostAddress = http://localhost:5063
+
+GET {{SystemDesignSimulator.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

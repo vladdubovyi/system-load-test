@@ -1,4 +1,8 @@
-export type ComponentType =
+// ComponentType is now a string to support dynamic components from backend
+// Legacy types for backward compatibility
+export type ComponentType = string;
+
+export type LegacyComponentType =
   | 'load-balancer'
   | 'shortener'
   | 'backend'
