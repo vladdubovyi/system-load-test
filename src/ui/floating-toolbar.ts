@@ -72,6 +72,7 @@ export function renderFloatingChrome(
       </div>
 
       <div class="chrome-top-right">
+        <button class="chrome-action-btn" id="btn-traffic" type="button">📊 Traffic</button>
         <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Preset</button>
         <button class="chrome-action-btn" id="btn-reset" type="button">Reset</button>
         <div class="speed-controls">

@@ -52,7 +52,8 @@ import {
 import { initializeApp } from './game/app-init';
 import { componentRegistry } from './game/component-registry';
 import { mountChallengeSelector } from './ui/challenge-selector';
-import type { Challenge } from './game/scenario-types';
+import { mountTrafficConfigPanel } from './ui/traffic-config-panel';
+import type { Challenge, TrafficProfile } from './game/scenario-types';
 
 type BoardSelection =
   | { kind: 'component'; id: string }
@@ -95,6 +96,8 @@ interface GameState {
   history: HistoryEntry[];
   historyIndex: number;
   maxHistory: number;
+  trafficConfigOpen: boolean;
+  customTrafficConfig: TrafficProfile | null;
 }
 
 interface HistoryEntry {
@@ -136,6 +139,8 @@ const state: GameState = {
   history: [],
   historyIndex: -1,
   maxHistory: 50,
+  trafficConfigOpen: false,
+  customTrafficConfig: null,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -606,6 +611,7 @@ function bindEvents(): void {
     if (isSimRunning()) stopSimulation();
     else startSimulation();
   });
+  document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
   document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
   
@@ -1253,6 +1259,43 @@ function selectChallenge(challenge: Challenge): void {
   
   console.log(`Selected challenge: ${challenge.name}`);
   render();
+}
+
+// Traffic configuration functions
+function openTrafficConfig(): void {
+  state.trafficConfigOpen = true;
+  showTrafficConfigPanel();
+}
+
+function showTrafficConfigPanel(): void {
+  const container = document.createElement('div');
+  container.id = 'traffic-config-container';
+  container.className = 'modal-container';
+  
+  document.body.appendChild(container);
+  
+  // Get current or default traffic config
+  const traffic = state.customTrafficConfig || state.currentChallenge?.scenario.traffic || {
+    baseRps: 200,
+    pattern: 'constant' as const,
+    spikeMultiplier: 3.2,
+    spikeChance: 0.08,
+  };
+  
+  mountTrafficConfigPanel(
+    container,
+    traffic,
+    (newTraffic) => {
+      state.customTrafficConfig = newTraffic;
+      console.log('Traffic config updated:', newTraffic);
+    },
+    () => closeTrafficConfig()
+  );
+}
+
+function closeTrafficConfig(): void {
+  state.trafficConfigOpen = false;
+  document.getElementById('traffic-config-container')?.remove();
 }
 
 // Initialize app with backend data
