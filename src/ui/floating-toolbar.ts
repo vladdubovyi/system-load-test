@@ -1,28 +1,18 @@
 import { COMPONENT_DEFS, type ComponentType } from '../game/types';
 
-export type BoardTool =
-  | 'select'
-  | 'hand'
-  | 'pen'
-  | 'text'
-  | 'connect'
-  | 'eraser'
-  | 'component';
+export type BoardTool = 'select' | 'hand' | 'pen' | 'text' | 'component';
 
 const MAIN_TOOLS: { id: BoardTool; icon: string; label: string; shortcut?: string }[] = [
   { id: 'select', icon: '↖', label: 'Select', shortcut: 'V' },
   { id: 'hand', icon: '✋', label: 'Hand', shortcut: 'H' },
   { id: 'pen', icon: '✏️', label: 'Draw', shortcut: 'P' },
   { id: 'text', icon: 'T', label: 'Text', shortcut: 'T' },
-  { id: 'connect', icon: '🔗', label: 'Connect', shortcut: 'C' },
-  { id: 'eraser', icon: '🧹', label: 'Eraser', shortcut: 'E' },
 ];
 
 export function renderFloatingChrome(
   activeTool: BoardTool,
-  selectedComponent: ComponentType | null,
-  zoomPct: number,
-  configOpen: boolean
+  placementType: ComponentType | null,
+  zoomPct: number
 ): string {
   const componentTypes = Object.keys(COMPONENT_DEFS) as ComponentType[];
 
@@ -33,9 +23,8 @@ export function renderFloatingChrome(
         <div class="main-menu-dropdown" id="main-menu" hidden>
           <button class="menu-item" id="menu-preset" type="button">⚡ Load preset</button>
           <button class="menu-item" id="menu-reset" type="button">Reset board</button>
-          <button class="menu-item" id="menu-config" type="button">⚙️ Configure</button>
           <div class="menu-divider"></div>
-          <p class="menu-hint">H hand · V select · P draw · T text · C connect · E eraser</p>
+          <p class="menu-hint">H hand · V select · P draw · T text</p>
           <p class="menu-hint">Middle-click or Space+drag to pan · Scroll to zoom</p>
         </div>
         <div class="chrome-brand">
@@ -66,7 +55,7 @@ export function renderFloatingChrome(
           .map(
             (type) => `
           <button
-            class="component-tool-btn ${activeTool === 'component' && selectedComponent === type ? 'active' : ''}"
+            class="component-tool-btn ${activeTool === 'component' && placementType === type ? 'active' : ''}"
             data-component="${type}"
             type="button"
             title="${COMPONENT_DEFS[type].label}"
@@ -80,9 +69,6 @@ export function renderFloatingChrome(
       </div>
 
       <div class="chrome-top-right">
-        <button class="chrome-action-btn" id="btn-config" type="button" aria-expanded="${configOpen}">
-          ⚙️ Configure
-        </button>
         <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Preset</button>
         <button class="chrome-action-btn" id="btn-reset" type="button">Reset</button>
         <button class="chrome-action-btn chrome-action-primary" id="btn-play" type="button">▶ Play</button>
@@ -114,10 +100,6 @@ export function toolCursor(tool: BoardTool): string {
       return 'crosshair';
     case 'text':
       return 'text';
-    case 'connect':
-      return 'crosshair';
-    case 'eraser':
-      return 'cell';
     case 'component':
       return 'copy';
     default:

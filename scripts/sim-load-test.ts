@@ -1,10 +1,10 @@
 import { SimulationEngine } from '../src/game/simulation';
 import { buildPreset } from '../src/game/presets';
 import { SCENARIO } from '../src/game/types';
-import { createReferenceArchitectureConfig } from '../src/game/architecture-config';
+import { buildReferenceComponentConfigs } from '../src/game/component-config';
 
 const { components, belts } = buildPreset();
-const config = createReferenceArchitectureConfig();
+const componentConfigs = buildReferenceComponentConfigs(components);
 const dt = 1 / 60;
 
 let maxObservedLoad = 0;
@@ -12,7 +12,7 @@ let hundreds = 0;
 const runs = 20;
 
 for (let run = 0; run < runs; run++) {
-  const engine = new SimulationEngine(components, belts, config);
+  const engine = new SimulationEngine(components, belts, componentConfigs);
   engine.start();
 
   while (true) {

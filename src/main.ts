@@ -1,6 +1,7 @@
 import './styles/main.css';
 import {
   SCENARIO,
+  COMPONENT_DEFS,
   type ComponentType,
   type PlacedComponent,
   type ConveyorBelt,
@@ -18,14 +19,17 @@ import {
 import { URL_SHORTENER_PRESET, buildPreset } from './game/presets';
 import { BoardRenderer } from './ui/board-renderer';
 import { AnnotationRenderer } from './ui/annotation-renderer';
+import { ConnectionPreview } from './ui/connection-preview';
 import { mountReportModal } from './ui/report-modal';
+import { renderConfigPalette, getChipFromEvent } from './ui/config-palette';
 import {
-  cloneArchitectureConfig,
-  createDefaultArchitectureConfig,
-  createReferenceArchitectureConfig,
-  mountConfigPanel,
-} from './ui/config-panel';
-import type { ArchitectureConfig } from './game/architecture-config';
+  applyConfigChip,
+  buildReferenceComponentConfigs,
+  cloneComponentConfigMap,
+  createEmptyComponentConfig,
+  type ComponentInstanceConfig,
+  type ConfigChipId,
+} from './game/component-config';
 import {
   createDefaultAnnotations,
   createStrokePoint,
@@ -46,27 +50,33 @@ import {
   type BoardTool,
 } from './ui/floating-toolbar';
 
+type BoardSelection =
+  | { kind: 'component'; id: string }
+  | { kind: 'text'; id: string }
+  | null;
+
 interface GameState {
   components: PlacedComponent[];
   belts: ConveyorBelt[];
   annotations: BoardAnnotations;
+  componentConfigs: Map<string, ComponentInstanceConfig>;
   activeTool: BoardTool;
-  selectedComponent: ComponentType | null;
-  connectFromPort: Port | null;
+  placementType: ComponentType | null;
+  selection: BoardSelection;
+  connectingFromPortId: string | null;
+  configChipDrag: ConfigChipId | null;
   dragging: { kind: 'component' | 'text'; id: string; offsetX: number; offsetY: number } | null;
   panning: { startX: number; startY: number; panX: number; panY: number } | null;
   drawing: DrawStroke | null;
-  erasing: boolean;
   pointerDragged: boolean;
   spaceHeld: boolean;
   viewport: ViewportState;
-  configOpen: boolean;
+  lastPointer: { x: number; y: number };
   engine: SimulationEngine | null;
   animFrame: number | null;
   lastTick: number;
   simAccumulator: number;
   lastRunStatus: 'idle' | 'running' | 'won' | 'lost';
-  architectureConfig: ArchitectureConfig;
   displayedHud: {
     time: number;
     rps: number;
@@ -78,54 +88,56 @@ interface GameState {
 
 const SIM_STEP = 1 / 60;
 const HUD_LERP_SPEED = 2.2;
-const ERASER_RADIUS = 18;
 
 const state: GameState = {
   components: [],
   belts: [],
   annotations: createDefaultAnnotations(),
+  componentConfigs: new Map(),
   activeTool: 'hand',
-  selectedComponent: null,
-  connectFromPort: null,
+  placementType: null,
+  selection: null,
+  connectingFromPortId: null,
+  configChipDrag: null,
   dragging: null,
   panning: null,
   drawing: null,
-  erasing: false,
   pointerDragged: false,
   spaceHeld: false,
   viewport: { ...DEFAULT_VIEWPORT },
-  configOpen: false,
+  lastPointer: { x: 0, y: 0 },
   engine: null,
   animFrame: null,
   lastTick: 0,
   simAccumulator: 0,
   lastRunStatus: 'idle',
-  architectureConfig: createDefaultArchitectureConfig(),
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
 };
 
 const boardRenderer = new BoardRenderer();
 const annotationRenderer = new AnnotationRenderer();
+const connectionPreview = new ConnectionPreview();
 const app = document.getElementById('app')!;
 
 function isSimRunning(): boolean {
   return state.engine?.getSnapshot().status === 'running';
 }
 
+function selectedComponentId(): string | null {
+  return state.selection?.kind === 'component' ? state.selection.id : null;
+}
+
+function selectedComponentType(): ComponentType | null {
+  if (state.selection?.kind !== 'component') return null;
+  return state.components.find((c) => c.id === state.selection!.id)?.type ?? null;
+}
+
 function render(): void {
   const zoomPct = Math.round(state.viewport.zoom * 100);
   app.innerHTML = `
     <div class="canvas-app">
-      ${renderFloatingChrome(state.activeTool, state.selectedComponent, zoomPct, state.configOpen)}
-
-      <div class="config-drawer ${state.configOpen ? 'open' : ''}" id="config-drawer">
-        <div class="config-drawer-header">
-          <h2>Configurations</h2>
-          <button class="drawer-close" id="btn-config-close" type="button" aria-label="Close">×</button>
-        </div>
-        <div id="config-panel-root"></div>
-      </div>
-      <div class="config-backdrop ${state.configOpen ? 'open' : ''}" id="config-backdrop"></div>
+      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct)}
+      ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
 
       <div class="board-viewport" id="board-viewport">
         <div class="board-world" id="board-world">
@@ -133,7 +145,7 @@ function render(): void {
             <div class="source-node" id="source-node">
               <div class="source-icon">📨</div>
               <div class="source-label">Incoming Requests</div>
-              <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Output port"></button>
+              <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Drag to connect"></button>
             </div>
           </div>
         </div>
@@ -142,30 +154,31 @@ function render(): void {
   `;
 
   bindEvents();
-  mountConfigPanelUi();
   mountBoard();
   updateStatus();
   applyViewport();
   updateToolUi();
+  refreshConfigPalette();
 }
 
-function mountConfigPanelUi(): void {
-  const root = document.getElementById('config-panel-root');
-  if (!root) return;
-  mountConfigPanel(root, state.architectureConfig, (config) => {
-    state.architectureConfig = cloneArchitectureConfig(config);
-  });
+function refreshConfigPalette(): void {
+  const palette = document.getElementById('config-palette');
+  if (!palette) return;
+  const hint = palette.querySelector('.palette-selection');
+  if (hint) {
+    const type = selectedComponentType();
+    hint.className = `palette-selection${type ? '' : ' muted'}`;
+    hint.innerHTML = type
+      ? `Selected: <strong>${COMPONENT_DEFS[type].label}</strong>`
+      : 'Select a component to inspect configs';
+  }
 }
 
 function applyViewport(): void {
   const world = document.getElementById('board-world');
-  if (world) {
-    applyViewportStyles(world, state.viewport);
-  }
+  if (world) applyViewportStyles(world, state.viewport);
   const zoomLabel = document.getElementById('zoom-label');
-  if (zoomLabel) {
-    zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
-  }
+  if (zoomLabel) zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
 }
 
 function clearTextSelection(): void {
@@ -173,15 +186,59 @@ function clearTextSelection(): void {
 }
 
 function getEffectiveTool(): BoardTool {
-  if (
-    state.spaceHeld &&
-    state.activeTool !== 'pen' &&
-    state.activeTool !== 'text' &&
-    state.activeTool !== 'eraser'
-  ) {
+  if (state.spaceHeld && state.activeTool !== 'pen' && state.activeTool !== 'text') {
     return 'hand';
   }
   return state.activeTool;
+}
+
+function pointInComponent(world: { x: number; y: number }, c: PlacedComponent): boolean {
+  return (
+    world.x >= c.x &&
+    world.x <= c.x + c.width &&
+    world.y >= c.y &&
+    world.y <= c.y + c.height
+  );
+}
+
+function selectItem(selection: BoardSelection): void {
+  state.selection = selection;
+  boardRenderer.updateSelection(selectedComponentId());
+  annotationRenderer.updateTextSelection(
+    selection?.kind === 'text' ? selection.id : null
+  );
+  refreshConfigPalette();
+}
+
+function findDragTarget(
+  e: PointerEvent,
+  world: { x: number; y: number }
+): BoardSelection {
+  if (state.selection?.kind === 'component') {
+    const selected = state.components.find((c) => c.id === state.selection!.id);
+    if (selected && pointInComponent(world, selected)) return state.selection;
+  }
+  if (state.selection?.kind === 'text') {
+    const selected = state.annotations.texts.find((t) => t.id === state.selection!.id);
+    if (
+      selected &&
+      world.x >= selected.x &&
+      world.x <= selected.x + selected.width &&
+      world.y >= selected.y &&
+      world.y <= selected.y + selected.minHeight
+    ) {
+      return state.selection;
+    }
+  }
+
+  const elements = document.elementsFromPoint(e.clientX, e.clientY);
+  for (const el of elements) {
+    const comp = (el as HTMLElement).closest('.component') as HTMLElement | null;
+    if (comp) return { kind: 'component', id: comp.dataset.id! };
+    const text = (el as HTMLElement).closest('.board-text') as HTMLElement | null;
+    if (text) return { kind: 'text', id: text.dataset.textId! };
+  }
+  return null;
 }
 
 function startPan(e: PointerEvent, viewport: HTMLElement): void {
@@ -196,49 +253,38 @@ function startPan(e: PointerEvent, viewport: HTMLElement): void {
   updateToolUi();
 }
 
-function tryStartComponentDrag(
-  e: PointerEvent,
+function tryStartDrag(
+  target: BoardSelection,
+  world: { x: number; y: number },
   viewport: HTMLElement,
-  world: { x: number; y: number }
+  e: PointerEvent
 ): boolean {
-  const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
-  if (!comp || isSimRunning()) return false;
+  if (!target || isSimRunning()) return false;
 
-  const id = comp.dataset.id!;
-  const c = state.components.find((x) => x.id === id);
-  if (!c) return false;
+  if (target.kind === 'component') {
+    const c = state.components.find((x) => x.id === target.id);
+    if (!c) return false;
+    selectItem(target);
+    state.dragging = {
+      kind: 'component',
+      id: target.id,
+      offsetX: world.x - c.x,
+      offsetY: world.y - c.y,
+    };
+    document.querySelector(`[data-id="${target.id}"]`)?.classList.add('dragging');
+    viewport.setPointerCapture(e.pointerId);
+    return true;
+  }
 
-  state.dragging = {
-    kind: 'component',
-    id,
-    offsetX: world.x - c.x,
-    offsetY: world.y - c.y,
-  };
-  comp.classList.add('dragging');
-  clearTextSelection();
-  viewport.setPointerCapture(e.pointerId);
-  return true;
-}
-
-function tryStartTextDrag(
-  e: PointerEvent,
-  viewport: HTMLElement,
-  world: { x: number; y: number }
-): boolean {
-  const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
-  if (!textEl || isSimRunning() || textEl.classList.contains('editing')) return false;
-
-  const id = textEl.dataset.textId!;
-  const text = state.annotations.texts.find((t) => t.id === id);
+  const text = state.annotations.texts.find((t) => t.id === target.id);
   if (!text) return false;
-
+  selectItem(target);
   state.dragging = {
     kind: 'text',
-    id,
+    id: target.id,
     offsetX: world.x - text.x,
     offsetY: world.y - text.y,
   };
-  clearTextSelection();
   viewport.setPointerCapture(e.pointerId);
   return true;
 }
@@ -253,8 +299,9 @@ function beginTextEdit(textId: string): void {
 function updateToolUi(): void {
   const viewport = document.getElementById('board-viewport');
   if (!viewport) return;
-  const effectiveTool = getEffectiveTool();
-  viewport.style.cursor = state.panning ? 'grabbing' : toolCursor(effectiveTool);
+  viewport.style.cursor = state.panning || state.connectingFromPortId
+    ? 'grabbing'
+    : toolCursor(getEffectiveTool());
   viewport.classList.toggle('is-panning', Boolean(state.panning));
 }
 
@@ -278,13 +325,29 @@ function getPortById(id: string): Port | undefined {
   return getAllPorts().find((p) => p.id === id);
 }
 
+function findPortAtScreen(x: number, y: number): Port | null {
+  const elements = document.elementsFromPoint(x, y);
+  for (const el of elements) {
+    const portBtn = (el as HTMLElement).closest('.port') as HTMLElement | null;
+    if (portBtn?.dataset.portId) {
+      return getPortById(portBtn.dataset.portId) ?? null;
+    }
+  }
+  return null;
+}
+
 function mountBoard(): void {
   const board = document.getElementById('board');
   if (!board) return;
   annotationRenderer.destroy();
+  connectionPreview.destroy();
   annotationRenderer.mount(board);
   annotationRenderer.render(state.annotations);
-  boardRenderer.mount(board, state.components, state.belts);
+  annotationRenderer.updateTextSelection(
+    state.selection?.kind === 'text' ? state.selection.id : null
+  );
+  connectionPreview.mount(board);
+  boardRenderer.mount(board, state.components, state.belts, selectedComponentId());
   boardRenderer.update(null, 0);
   positionSourceNode();
 }
@@ -319,7 +382,9 @@ function updateStatus(dt = 0): void {
   if (snap?.status === 'won') bar.classList.add('won');
   if (snap?.status === 'lost') bar.classList.add('lost');
   if (snap?.spikeActive) bar.classList.add('spike');
-  bar.textContent = snap?.message ?? 'Wire components, configure scaling, then press Play.';
+  bar.textContent =
+    snap?.message ??
+    'Drag configs onto components, drag ports to connect, then press Play.';
 
   if (snap) {
     if (dt > 0) {
@@ -359,10 +424,11 @@ function updateStatus(dt = 0): void {
   }
 }
 
-function setTool(tool: BoardTool, componentType: ComponentType | null = null): void {
+function setTool(tool: BoardTool, placementType: ComponentType | null = null): void {
   state.activeTool = tool;
-  state.selectedComponent = componentType;
-  state.connectFromPort = null;
+  state.placementType = placementType;
+  state.connectingFromPortId = null;
+  connectionPreview.clear();
   clearPortHighlights();
 
   document.querySelectorAll('[data-tool]').forEach((el) => {
@@ -370,10 +436,51 @@ function setTool(tool: BoardTool, componentType: ComponentType | null = null): v
   });
   document.querySelectorAll('[data-component]').forEach((el) => {
     const type = (el as HTMLElement).dataset.component as ComponentType;
-    el.classList.toggle('active', tool === 'component' && type === componentType);
+    el.classList.toggle('active', tool === 'component' && type === placementType);
   });
 
   updateToolUi();
+}
+
+function getOrCreateComponentConfig(componentId: string): ComponentInstanceConfig {
+  let cfg = state.componentConfigs.get(componentId);
+  if (!cfg) {
+    cfg = createEmptyComponentConfig();
+    state.componentConfigs.set(componentId, cfg);
+  }
+  return cfg;
+}
+
+function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): void {
+  const component = state.components.find((c) => c.id === componentId);
+  if (!component) return;
+  const cfg = getOrCreateComponentConfig(componentId);
+  if (applyConfigChip(cfg, chipId, component.type)) {
+    state.componentConfigs.set(componentId, cfg);
+    selectItem({ kind: 'component', id: componentId });
+  }
+}
+
+function deleteSelection(): void {
+  if (!state.selection || isSimRunning()) return;
+
+  if (state.selection.kind === 'component') {
+    const id = state.selection.id;
+    state.components = state.components.filter((c) => c.id !== id);
+    state.componentConfigs.delete(id);
+    state.belts = state.belts.filter((b) => {
+      const from = getPortById(b.fromPortId);
+      const to = getPortById(b.toPortId);
+      return from?.componentId !== id && to?.componentId !== id;
+    });
+    state.selection = null;
+    mountBoard();
+    return;
+  }
+
+  state.annotations.texts = state.annotations.texts.filter((t) => t.id !== state.selection!.id);
+  state.selection = null;
+  annotationRenderer.render(state.annotations);
 }
 
 function bindEvents(): void {
@@ -396,78 +503,78 @@ function bindEvents(): void {
   const menu = document.getElementById('main-menu');
   document.getElementById('btn-menu')?.addEventListener('click', (e) => {
     e.stopPropagation();
-    if (!menu) return;
-    menu.hidden = !menu.hidden;
+    if (menu) menu.hidden = !menu.hidden;
   });
-
   document.getElementById('menu-preset')?.addEventListener('click', () => {
-    menu!.hidden = true;
+    if (menu) menu.hidden = true;
     loadPreset();
   });
   document.getElementById('menu-reset')?.addEventListener('click', () => {
-    menu!.hidden = true;
+    if (menu) menu.hidden = true;
     resetBoard();
   });
-  document.getElementById('menu-config')?.addEventListener('click', () => {
-    menu!.hidden = true;
-    openConfig();
-  });
-
   window.addEventListener('click', (e) => {
-    if (!(e.target as HTMLElement).closest('#btn-menu, #main-menu')) {
-      if (menu) menu.hidden = true;
+    if (!(e.target as HTMLElement).closest('#btn-menu, #main-menu') && menu) {
+      menu.hidden = true;
     }
   });
 
-  const openConfig = (): void => {
-    state.configOpen = true;
-    document.getElementById('config-drawer')?.classList.add('open');
-    document.getElementById('config-backdrop')?.classList.add('open');
-    document.getElementById('btn-config')?.setAttribute('aria-expanded', 'true');
-  };
-
-  document.getElementById('btn-config')?.addEventListener('click', openConfig);
-
-  const closeConfig = (): void => {
-    state.configOpen = false;
-    document.getElementById('config-drawer')?.classList.remove('open');
-    document.getElementById('config-backdrop')?.classList.remove('open');
-    document.getElementById('btn-config')?.setAttribute('aria-expanded', 'false');
-  };
-
-  document.getElementById('btn-config-close')?.addEventListener('click', closeConfig);
-  document.getElementById('config-backdrop')?.addEventListener('click', closeConfig);
-
   document.getElementById('btn-play')?.addEventListener('click', () => {
-    if (state.engine?.getSnapshot().status === 'running') stopSimulation();
+    if (isSimRunning()) stopSimulation();
     else startSimulation();
   });
-
   document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
 
   document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
-    const rect = getViewportRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    zoomAt(cx, cy, 1.15);
+    zoomAt(state.lastPointer.x, state.lastPointer.y, 1.15);
   });
-
   document.getElementById('btn-zoom-out')?.addEventListener('click', () => {
+    zoomAt(state.lastPointer.x, state.lastPointer.y, 1 / 1.15);
+  });
+  document.getElementById('btn-zoom-reset')?.addEventListener('click', () => {
     const rect = getViewportRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    zoomAt(cx, cy, 1 / 1.15);
+    zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1 / state.viewport.zoom);
   });
 
-  document.getElementById('btn-zoom-reset')?.addEventListener('click', () => {
-    state.viewport.zoom = 1;
-    applyViewport();
+  document.querySelectorAll('[data-config-chip]').forEach((chip) => {
+    chip.addEventListener('dragstart', (e) => {
+      const chipId = getChipFromEvent(e.target);
+      if (!chipId) return;
+      state.configChipDrag = chipId;
+      (e as DragEvent).dataTransfer?.setData('text/plain', chipId);
+      if (e instanceof DragEvent) e.dataTransfer!.effectAllowed = 'copy';
+    });
+    chip.addEventListener('dragend', () => {
+      state.configChipDrag = null;
+    });
+  });
+
+  viewport.addEventListener('dragover', (e) => {
+    if (!state.configChipDrag) return;
+    e.preventDefault();
+  });
+
+  viewport.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const chipId = state.configChipDrag ?? (e.dataTransfer?.getData('text/plain') as ConfigChipId);
+    state.configChipDrag = null;
+    if (!chipId) return;
+
+    const elements = document.elementsFromPoint(e.clientX, e.clientY);
+    for (const el of elements) {
+      const comp = (el as HTMLElement).closest('.component') as HTMLElement | null;
+      if (comp?.dataset.id) {
+        dropConfigChipOnComponent(comp.dataset.id, chipId);
+        return;
+      }
+    }
   });
 
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if ((e.target as HTMLElement).isContentEditable) return;
+
     if (e.code === 'Space' && !state.spaceHeld) {
       e.preventDefault();
       state.spaceHeld = true;
@@ -477,12 +584,14 @@ function bindEvents(): void {
     if (e.key === 'h' || e.key === 'H') setTool('hand');
     if (e.key === 'p' || e.key === 'P') setTool('pen');
     if (e.key === 't' || e.key === 'T') setTool('text');
-    if (e.key === 'c' || e.key === 'C') setTool('connect');
-    if (e.key === 'e' || e.key === 'E') setTool('eraser');
     if (e.key === 'Escape') {
       setTool('hand');
-      closeConfig();
+      selectItem(null);
       if (menu) menu.hidden = true;
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      e.preventDefault();
+      deleteSelection();
     }
   });
 
@@ -495,37 +604,10 @@ function bindEvents(): void {
   });
 
   viewport.addEventListener('selectstart', (e) => {
-    const target = e.target as HTMLElement;
-    if (target.closest('.board-text.editing')) return;
+    if ((e.target as HTMLElement).closest('.board-text.editing')) return;
     e.preventDefault();
   });
-
   viewport.addEventListener('dragstart', (e) => e.preventDefault());
-
-  viewport.addEventListener('contextmenu', (e) => {
-    e.preventDefault();
-    if (isSimRunning()) return;
-
-    const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
-    if (comp) {
-      const id = comp.dataset.id!;
-      state.components = state.components.filter((c) => c.id !== id);
-      state.belts = state.belts.filter((b) => {
-        const from = getPortById(b.fromPortId);
-        const to = getPortById(b.toPortId);
-        return from?.componentId !== id && to?.componentId !== id;
-      });
-      mountBoard();
-      return;
-    }
-
-    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
-    if (textEl) {
-      const id = textEl.dataset.textId!;
-      state.annotations.texts = state.annotations.texts.filter((t) => t.id !== id);
-      annotationRenderer.render(state.annotations);
-    }
-  });
 
   viewport.addEventListener(
     'wheel',
@@ -537,86 +619,17 @@ function bindEvents(): void {
     { passive: false }
   );
 
-  viewport.addEventListener('pointerdown', (e) => {
-    const isMiddle = e.button === 1;
-    const isLeft = e.button === 0;
-    if (!isLeft && !isMiddle) return;
-
-    if (isMiddle) e.preventDefault();
-
-    state.pointerDragged = false;
-    const world = eventToWorld(e);
-    const effectiveTool = isMiddle ? 'hand' : getEffectiveTool();
-
-    if (effectiveTool === 'hand') {
-      if (isLeft && tryStartComponentDrag(e, viewport, world)) return;
-      if (isLeft && tryStartTextDrag(e, viewport, world)) return;
-
-      if ((e.target as HTMLElement).closest('.board-text.editing')) return;
-
-      startPan(e, viewport);
-      return;
-    }
-
-    if (isSimRunning()) return;
-
-    if (effectiveTool === 'pen') {
-      state.drawing = createStrokePoint(world.x, world.y);
-      annotationRenderer.renderLiveStroke(state.drawing);
-      viewport.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    if (effectiveTool === 'eraser') {
-      state.erasing = true;
-      eraseAtScreen(e.clientX, e.clientY);
-      viewport.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    if (effectiveTool === 'select') {
-      if (tryStartTextDrag(e, viewport, world)) return;
-      if (tryStartComponentDrag(e, viewport, world)) return;
-    }
-  });
-
-  viewport.addEventListener('click', (e) => {
-    if (state.pointerDragged) return;
-
-    const portBtn = (e.target as HTMLElement).closest('.port') as HTMLElement | null;
-    if (portBtn) {
-      e.stopPropagation();
-      handlePortClick(portBtn.dataset.portId!);
-      return;
-    }
-
-    if (isSimRunning()) return;
-    if ((e.target as HTMLElement).closest('.board-text')) return;
-
-    const world = eventToWorld(e);
-
-    if (state.activeTool === 'component' && state.selectedComponent) {
-      state.components.push(
-        createComponent(
-          state.selectedComponent,
-          Math.max(20, world.x - 70),
-          Math.max(20, world.y - 36)
-        )
-      );
-      mountBoard();
-      return;
-    }
-
-    if (state.activeTool === 'text') {
-      const annotation = createTextAnnotation(world.x, world.y);
-      state.annotations.texts.push(annotation);
-      annotationRenderer.render(state.annotations);
-      setTool('hand');
-      requestAnimationFrame(() => beginTextEdit(annotation.id));
-    }
-  });
-
   viewport.addEventListener('pointermove', (e) => {
+    state.lastPointer = { x: e.clientX, y: e.clientY };
+
+    if (state.connectingFromPortId) {
+      const from = getPortById(state.connectingFromPortId);
+      if (from) {
+        connectionPreview.update(from, eventToWorld(e));
+        highlightNearestPort(e.clientX, e.clientY);
+      }
+    }
+
     if (state.panning) {
       const dx = e.clientX - state.panning.startX;
       const dy = e.clientY - state.panning.startY;
@@ -641,12 +654,6 @@ function bindEvents(): void {
       return;
     }
 
-    if (state.erasing && (e.buttons & 1) === 1) {
-      state.pointerDragged = true;
-      eraseAtScreen(e.clientX, e.clientY);
-      return;
-    }
-
     if (!state.dragging || isSimRunning()) return;
 
     state.pointerDragged = true;
@@ -667,12 +674,113 @@ function bindEvents(): void {
       text.x = world.x - state.dragging.offsetX;
       text.y = world.y - state.dragging.offsetY;
       annotationRenderer.render(state.annotations);
+      annotationRenderer.updateTextSelection(text.id);
+    }
+  });
+
+  viewport.addEventListener('pointerdown', (e) => {
+    const isMiddle = e.button === 1;
+    const isLeft = e.button === 0;
+    if (!isLeft && !isMiddle) return;
+    if (isMiddle) e.preventDefault();
+
+    state.pointerDragged = false;
+    state.lastPointer = { x: e.clientX, y: e.clientY };
+    const world = eventToWorld(e);
+
+    const portBtn = (e.target as HTMLElement).closest('.port') as HTMLElement | null;
+    if (portBtn && isLeft && !isSimRunning()) {
+      e.stopPropagation();
+      const port = getPortById(portBtn.dataset.portId!);
+      if (port) {
+        state.connectingFromPortId = port.id;
+        highlightPort(port.id);
+        connectionPreview.update(port, world);
+        viewport.setPointerCapture(e.pointerId);
+        updateToolUi();
+      }
+      return;
+    }
+
+    const effectiveTool = isMiddle ? 'hand' : getEffectiveTool();
+    const dragTarget = findDragTarget(e, world);
+
+    if (
+      dragTarget &&
+      (effectiveTool === 'hand' || effectiveTool === 'select' || state.selection)
+    ) {
+      if (tryStartDrag(dragTarget, world, viewport, e)) return;
+    }
+
+    if (effectiveTool === 'hand' || isMiddle) {
+      if ((e.target as HTMLElement).closest('.board-text.editing')) return;
+      startPan(e, viewport);
+      return;
+    }
+
+    if (isSimRunning()) return;
+
+    if (effectiveTool === 'pen') {
+      state.drawing = createStrokePoint(world.x, world.y);
+      annotationRenderer.renderLiveStroke(state.drawing);
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (effectiveTool === 'select' && dragTarget) {
+      selectItem(dragTarget);
+      return;
+    }
+  });
+
+  viewport.addEventListener('click', (e) => {
+    if (state.pointerDragged) return;
+    if (isSimRunning()) return;
+    if ((e.target as HTMLElement).closest('.port')) return;
+
+    const world = eventToWorld(e);
+
+    if (state.activeTool === 'component' && state.placementType) {
+      const comp = createComponent(
+        state.placementType,
+        Math.max(20, world.x - 70),
+        Math.max(20, world.y - 36)
+      );
+      state.components.push(comp);
+      mountBoard();
+      selectItem({ kind: 'component', id: comp.id });
+      setTool('hand');
+      return;
+    }
+
+    if (state.activeTool === 'text') {
+      const annotation = createTextAnnotation(world.x, world.y);
+      state.annotations.texts.push(annotation);
+      annotationRenderer.render(state.annotations);
+      selectItem({ kind: 'text', id: annotation.id });
+      setTool('hand');
+      requestAnimationFrame(() => beginTextEdit(annotation.id));
+      return;
+    }
+
+    if (getEffectiveTool() === 'select' || getEffectiveTool() === 'hand') {
+      const target = findDragTarget(e, world);
+      if (target?.kind === 'text' && !state.pointerDragged) {
+        selectItem(target);
+        beginTextEdit(target.id);
+        return;
+      }
+      if (!target) selectItem(null);
     }
   });
 
   viewport.addEventListener('pointerup', (e) => {
-    if (state.dragging?.kind === 'text' && !state.pointerDragged && !isSimRunning()) {
-      beginTextEdit(state.dragging.id);
+    if (state.connectingFromPortId) {
+      finishConnection(e.clientX, e.clientY);
+      state.connectingFromPortId = null;
+      connectionPreview.clear();
+      clearPortHighlights();
+      updateToolUi();
     }
 
     if (state.drawing) {
@@ -685,7 +793,6 @@ function bindEvents(): void {
 
     state.panning = null;
     state.dragging = null;
-    state.erasing = false;
     document.querySelectorAll('.component.dragging').forEach((el) => el.classList.remove('dragging'));
     updateToolUi();
     try {
@@ -700,78 +807,36 @@ function bindEvents(): void {
   });
 }
 
-function zoomAt(screenX: number, screenY: number, factor: number): void {
-  const rect = getViewportRect();
-  const before = screenToWorld(screenX, screenY, rect, state.viewport);
-  state.viewport.zoom = clampZoom(state.viewport.zoom * factor);
-  state.viewport.panX = screenX - rect.left - before.x * state.viewport.zoom;
-  state.viewport.panY = screenY - rect.top - before.y * state.viewport.zoom;
-  applyViewport();
-}
+function finishConnection(screenX: number, screenY: number): void {
+  const from = getPortById(state.connectingFromPortId!);
+  if (!from) return;
 
-function eraseAtScreen(screenX: number, screenY: number): void {
-  const rect = getViewportRect();
-  const world = screenToWorld(screenX, screenY, rect, state.viewport);
-  const radius = ERASER_RADIUS / state.viewport.zoom;
+  const to = findPortAtScreen(screenX, screenY);
+  if (!to || to.id === from.id) return;
 
-  const beforeStrokes = state.annotations.strokes.length;
-  state.annotations.strokes = state.annotations.strokes.filter((stroke) => {
-    return !stroke.points.some((p) => Math.hypot(p.x - world.x, p.y - world.y) < radius);
-  });
+  const componentMap = new Map(state.components.map((c) => [c.id, c]));
+  const fromPort = from.side === 'out' ? from : to;
+  const toPort = to.side === 'in' ? to : from;
 
-  const textHit = state.annotations.texts.find((text) => {
-    return (
-      world.x >= text.x &&
-      world.x <= text.x + text.width &&
-      world.y >= text.y &&
-      world.y <= text.y + text.minHeight
-    );
-  });
+  if (fromPort.side !== 'out' || toPort.side !== 'in') return;
+  if (!canConnect(fromPort, toPort, componentMap)) return;
 
-  if (textHit) {
-    state.annotations.texts = state.annotations.texts.filter((t) => t.id !== textHit.id);
-  }
-
-  if (state.annotations.strokes.length !== beforeStrokes || textHit) {
-    annotationRenderer.render(state.annotations);
+  const exists = state.belts.some(
+    (b) => b.fromPortId === fromPort.id && b.toPortId === toPort.id
+  );
+  if (!exists) {
+    state.belts.push(createBelt(fromPort.id, toPort.id));
+    mountBoard();
   }
 }
 
-function handlePortClick(portId: string): void {
-  if (state.activeTool !== 'connect' && !state.connectFromPort) {
-    setTool('connect');
-  }
-
-  const port = getPortById(portId);
-  if (!port) return;
-
-  if (!state.connectFromPort) {
-    if (port.side === 'out') {
-      state.connectFromPort = port;
-      highlightPort(portId);
-    }
-    return;
-  }
-
-  if (port.side === 'in' && port.id !== state.connectFromPort.id) {
-    const componentMap = new Map(state.components.map((c) => [c.id, c]));
-    if (canConnect(state.connectFromPort, port, componentMap)) {
-      const exists = state.belts.some(
-        (b) => b.fromPortId === state.connectFromPort!.id && b.toPortId === port.id
-      );
-      if (!exists) {
-        state.belts.push(createBelt(state.connectFromPort.id, port.id));
-        mountBoard();
-      }
-    }
-  }
-
-  state.connectFromPort = null;
+function highlightNearestPort(screenX: number, screenY: number): void {
   clearPortHighlights();
+  const port = findPortAtScreen(screenX, screenY);
+  if (port) highlightPort(port.id);
 }
 
 function highlightPort(portId: string): void {
-  clearPortHighlights();
   document.querySelector(`[data-port-id="${portId}"]`)?.classList.add('port-active');
 }
 
@@ -779,14 +844,24 @@ function clearPortHighlights(): void {
   document.querySelectorAll('.port-active').forEach((el) => el.classList.remove('port-active'));
 }
 
+function zoomAt(screenX: number, screenY: number, factor: number): void {
+  const rect = getViewportRect();
+  const before = screenToWorld(screenX, screenY, rect, state.viewport);
+  const newZoom = clampZoom(state.viewport.zoom * factor);
+  state.viewport.zoom = newZoom;
+  state.viewport.panX = screenX - rect.left - before.x * newZoom;
+  state.viewport.panY = screenY - rect.top - before.y * newZoom;
+  applyViewport();
+}
+
 function resetBoard(): void {
   stopSimulation();
   state.components = [];
   state.belts = [];
   state.annotations = createDefaultAnnotations();
+  state.componentConfigs = new Map();
   state.engine = null;
-  state.architectureConfig = createDefaultArchitectureConfig();
-  mountConfigPanelUi();
+  state.selection = null;
   mountBoard();
   updateStatus();
   setTool('hand');
@@ -799,9 +874,9 @@ function loadPreset(): void {
   state.components = components;
   state.belts = belts;
   state.annotations = createDefaultAnnotations();
-  state.architectureConfig = createReferenceArchitectureConfig();
-  mountConfigPanelUi();
+  state.componentConfigs = cloneComponentConfigMap(buildReferenceComponentConfigs(components));
   state.engine = null;
+  state.selection = null;
   setTool('hand');
   mountBoard();
   updateStatus();
@@ -820,7 +895,7 @@ function startSimulation(): void {
   state.engine = new SimulationEngine(
     state.components,
     state.belts,
-    state.architectureConfig
+    cloneComponentConfigMap(state.componentConfigs)
   );
   state.engine.start();
   state.lastRunStatus = 'running';
@@ -871,9 +946,7 @@ function stopSimulation(): void {
   }
   const snap = state.engine?.getSnapshot();
   state.engine?.stop();
-  if (snap?.status === 'running') {
-    state.lastRunStatus = 'idle';
-  }
+  if (snap?.status === 'running') state.lastRunStatus = 'idle';
   refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
   updateStatus();
 }

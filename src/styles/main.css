@@ -739,6 +739,143 @@ body {
   z-index: 10;
 }
 
+.component.selected .component-inner {
+  box-shadow: 0 0 0 3px rgba(105, 101, 219, 0.45);
+}
+
+.component.selected .component-glow {
+  opacity: calc(0.65 + var(--load) * 0.005);
+}
+
+.board-text.selected {
+  border-color: var(--accent);
+  background: rgba(105, 101, 219, 0.06);
+}
+
+.connection-preview-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  overflow: visible;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.connection-preview-layer.visible {
+  opacity: 1;
+}
+
+.connection-preview-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+  stroke-dasharray: 8 10;
+  stroke-linecap: round;
+}
+
+/* ── Config palette (right hover panel) ── */
+
+.config-palette {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%) translateX(calc(100% - 28px));
+  z-index: 55;
+  transition: transform 0.2s ease;
+  pointer-events: auto;
+}
+
+.config-palette:hover {
+  transform: translateY(-50%) translateX(0);
+}
+
+.config-palette-tab {
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  transform: translate(-100%, -50%) rotate(-90deg);
+  transform-origin: right center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.config-palette-body {
+  width: 220px;
+  padding: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: 12px 0 0 12px;
+  box-shadow: var(--shadow-md);
+}
+
+.config-palette-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.palette-selection {
+  margin: 0 0 0.55rem;
+  font-size: 0.72rem;
+  color: var(--ink);
+}
+
+.palette-selection.muted {
+  color: var(--ink-muted);
+}
+
+.config-chip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.config-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fafafa;
+  cursor: grab;
+  text-align: left;
+  font-size: 0.76rem;
+}
+
+.config-chip:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.config-chip-emoji {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.config-chip-label {
+  font-weight: 600;
+}
+
+.config-palette-hint {
+  margin: 0.55rem 0 0;
+  font-size: 0.65rem;
+  color: var(--ink-muted);
+  line-height: 1.35;
+}
+
 .component-glow {
   position: absolute;
   inset: -2px;

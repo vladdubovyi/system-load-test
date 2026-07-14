@@ -44,8 +44,9 @@ export function worldToScreen(
 }
 
 export function applyViewportStyles(element: HTMLElement, viewport: ViewportState): void {
-  element.style.transform = `translate(${viewport.panX}px, ${viewport.panY}px)`;
-  element.style.zoom = `${viewport.zoom}`;
+  element.style.transform = `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`;
+  element.style.transformOrigin = '0 0';
+  element.style.zoom = '';
 }
 
 /** @deprecated use applyViewportStyles */
