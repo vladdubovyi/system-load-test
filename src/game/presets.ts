@@ -27,11 +27,11 @@ export const URL_SHORTENER_PRESET: PresetBlueprint = {
   description:
     'Single logical services with auto-scaling, Redis cache-aside, DB replication, and sharding.',
   components: [
-    { id: 'preset-lb', type: 'load-balancer', x: 140, y: 248 },
-    { id: 'preset-shortener', type: 'shortener', x: 380, y: 108 },
-    { id: 'preset-backend', type: 'backend', x: 380, y: 368 },
-    { id: 'preset-redis', type: 'redis', x: 620, y: 132 },
-    { id: 'preset-db', type: 'database', x: 620, y: 368 },
+    { id: 'preset-lb', type: 'load-balancer', x: 520, y: 268 },
+    { id: 'preset-shortener', type: 'shortener', x: 760, y: 128 },
+    { id: 'preset-backend', type: 'backend', x: 760, y: 388 },
+    { id: 'preset-redis', type: 'redis', x: 1000, y: 152 },
+    { id: 'preset-db', type: 'database', x: 1000, y: 388 },
   ],
   connections: [
     { from: `${SOURCE_ID}:out`, to: 'preset-lb:in' },

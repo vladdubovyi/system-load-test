@@ -1,8 +1,6 @@
 import './styles/main.css';
 import {
   SCENARIO,
-  COMPONENT_DEFS,
-  REQUEST_COLORS,
   type ComponentType,
   type PlacedComponent,
   type ConveyorBelt,
@@ -19,6 +17,7 @@ import {
 } from './game/simulation';
 import { URL_SHORTENER_PRESET, buildPreset } from './game/presets';
 import { BoardRenderer } from './ui/board-renderer';
+import { AnnotationRenderer } from './ui/annotation-renderer';
 import { mountReportModal } from './ui/report-modal';
 import {
   cloneArchitectureConfig,
@@ -27,20 +26,44 @@ import {
   mountConfigPanel,
 } from './ui/config-panel';
 import type { ArchitectureConfig } from './game/architecture-config';
+import {
+  createDefaultAnnotations,
+  createStrokePoint,
+  createTextAnnotation,
+  type BoardAnnotations,
+  type DrawStroke,
+} from './game/board-annotations';
+import {
+  clampZoom,
+  DEFAULT_VIEWPORT,
+  screenToWorld,
+  viewportTransform,
+  type ViewportState,
+} from './ui/viewport';
+import {
+  renderFloatingChrome,
+  toolCursor,
+  type BoardTool,
+} from './ui/floating-toolbar';
 
 interface GameState {
   components: PlacedComponent[];
   belts: ConveyorBelt[];
-  selectedPalette: ComponentType | null;
+  annotations: BoardAnnotations;
+  activeTool: BoardTool;
+  selectedComponent: ComponentType | null;
   connectFromPort: Port | null;
-  dragging: { id: string; offsetX: number; offsetY: number } | null;
+  dragging: { kind: 'component' | 'text'; id: string; offsetX: number; offsetY: number } | null;
+  panning: { startX: number; startY: number; panX: number; panY: number } | null;
+  drawing: DrawStroke | null;
+  spaceHeld: boolean;
+  viewport: ViewportState;
+  configOpen: boolean;
   engine: SimulationEngine | null;
   animFrame: number | null;
   lastTick: number;
-  lastHudUpdate: number;
   simAccumulator: number;
   lastRunStatus: 'idle' | 'running' | 'won' | 'lost';
-  activeSidebarTab: 'build' | 'configure';
   architectureConfig: ArchitectureConfig;
   displayedHud: {
     time: number;
@@ -52,126 +75,74 @@ interface GameState {
 }
 
 const SIM_STEP = 1 / 60;
-const HUD_INTERVAL_MS = 600;
 const HUD_LERP_SPEED = 2.2;
+const ERASER_RADIUS = 18;
 
 const state: GameState = {
   components: [],
   belts: [],
-  selectedPalette: null,
+  annotations: createDefaultAnnotations(),
+  activeTool: 'select',
+  selectedComponent: null,
   connectFromPort: null,
   dragging: null,
+  panning: null,
+  drawing: null,
+  spaceHeld: false,
+  viewport: { ...DEFAULT_VIEWPORT },
+  configOpen: false,
   engine: null,
   animFrame: null,
   lastTick: 0,
-  lastHudUpdate: 0,
   simAccumulator: 0,
   lastRunStatus: 'idle',
-  activeSidebarTab: 'build',
   architectureConfig: createDefaultArchitectureConfig(),
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
 };
 
 const boardRenderer = new BoardRenderer();
+const annotationRenderer = new AnnotationRenderer();
 const app = document.getElementById('app')!;
 
+function isSimRunning(): boolean {
+  return state.engine?.getSnapshot().status === 'running';
+}
+
 function render(): void {
+  const zoomPct = Math.round(state.viewport.zoom * 100);
   app.innerHTML = `
-    <div class="layout">
-      <header class="header">
-        <div class="brand">
-          <span class="brand-icon">🏗️</span>
-          <div>
-            <h1>System Design Game</h1>
-            <p class="subtitle">Architect under pressure</p>
+    <div class="canvas-app">
+      ${renderFloatingChrome(state.activeTool, state.selectedComponent, zoomPct, state.configOpen)}
+
+      <div class="config-drawer ${state.configOpen ? 'open' : ''}" id="config-drawer">
+        <div class="config-drawer-header">
+          <h2>Configurations</h2>
+          <button class="drawer-close" id="btn-config-close" type="button" aria-label="Close">×</button>
+        </div>
+        <div id="config-panel-root"></div>
+      </div>
+      <div class="config-backdrop ${state.configOpen ? 'open' : ''}" id="config-backdrop"></div>
+
+      <div class="board-viewport" id="board-viewport">
+        <div class="board-world" id="board-world" style="transform: ${viewportTransform(state.viewport)}">
+          <div class="board" id="board">
+            <div class="source-node" id="source-node">
+              <div class="source-icon">📨</div>
+              <div class="source-label">Incoming Requests</div>
+              <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Output port"></button>
+            </div>
           </div>
         </div>
-        <div class="header-stats" id="header-stats"></div>
-        <div class="header-actions">
-          <button class="btn btn-secondary" id="btn-preset" type="button">⚡ Load Preset</button>
-          <button class="btn btn-secondary" id="btn-reset" type="button">Reset Board</button>
-          <button class="btn btn-primary" id="btn-play" type="button">▶ Play</button>
-        </div>
-      </header>
-
-      <aside class="sidebar">
-        <nav class="sidebar-tabs" aria-label="Sidebar sections">
-          <button class="sidebar-tab ${state.activeSidebarTab === 'build' ? 'active' : ''}" data-tab="build" type="button">Build</button>
-          <button class="sidebar-tab ${state.activeSidebarTab === 'configure' ? 'active' : ''}" data-tab="configure" type="button">Configure</button>
-        </nav>
-
-        <div class="sidebar-tab-panels">
-          <div class="sidebar-tab-panel ${state.activeSidebarTab === 'build' ? 'active' : ''}" data-tab-panel="build">
-            <section class="panel scenario-panel">
-              <h2>${SCENARIO.title}</h2>
-              <ul class="requirements">
-                ${SCENARIO.requirements.map((r) => `<li>${r}</li>`).join('')}
-              </ul>
-              <div class="legend">
-                <p class="legend-title">Request colors (celebrity URLs)</p>
-                <div class="legend-colors">
-                  ${REQUEST_COLORS.map(
-                    (c, i) =>
-                      `<span class="legend-dot ${[1, 2, 3].includes(i) ? 'celebrity' : ''}" style="background:${c}" title="URL type ${i + 1}"></span>`
-                  ).join('')}
-                </div>
-                <p class="legend-hint">Purple, pink & gold = viral celebrity links</p>
-              </div>
-            </section>
-
-            <section class="panel palette-panel">
-              <h2>Components</h2>
-              <p class="panel-hint">Click to select, then click the board to place. Drag to reposition.</p>
-              <div class="palette" id="palette"></div>
-            </section>
-
-            <section class="panel help-panel">
-              <h2>Quick start</h2>
-              <p class="panel-hint">
-                New here? Click <strong>Load Preset</strong>, open <strong>Configure</strong> for scaling, then hit <strong>Play</strong>.
-              </p>
-              <h2 class="help-subheading">How to wire</h2>
-              <ol class="help-steps">
-                <li>Place a <strong>Load Balancer</strong> first</li>
-                <li>Connect <span class="port-tag">Requests</span> → Load Balancer</li>
-                <li>LB → Shortener (creates) & Backend (reads)</li>
-                <li>Shortener → Database (+ Redis cache warm)</li>
-                <li>Backend → Redis first (cache-aside), Database on miss</li>
-                <li>Use <strong>Configure</strong> for auto-scaling, replication & sharding</li>
-                <li>Click output port, then input port to add conveyor belts</li>
-              </ol>
-            </section>
-          </div>
-
-          <div class="sidebar-tab-panel ${state.activeSidebarTab === 'configure' ? 'active' : ''}" data-tab-panel="configure">
-            <div id="config-panel-root"></div>
-          </div>
-        </div>
-
-        <div class="status-bar" id="status-bar"></div>
-      </aside>
-
-      <main class="board-wrap">
-        <div class="board-toolbar">
-          <span id="mode-label" class="mode-label">Place mode — select a component</span>
-          <button class="btn btn-ghost" id="btn-connect" type="button">🔗 Connect Mode</button>
-        </div>
-        <div class="board" id="board">
-          <div class="source-node" id="source-node">
-            <div class="source-icon">📨</div>
-            <div class="source-label">Incoming Requests</div>
-            <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Output port"></button>
-          </div>
-        </div>
-      </main>
+      </div>
     </div>
   `;
 
-  renderPalette();
   bindEvents();
   mountConfigPanelUi();
   mountBoard();
   updateStatus();
+  applyViewport();
+  updateToolUi();
 }
 
 function mountConfigPanelUi(): void {
@@ -182,33 +153,33 @@ function mountConfigPanelUi(): void {
   });
 }
 
-function switchSidebarTab(tab: 'build' | 'configure'): void {
-  state.activeSidebarTab = tab;
-  document.querySelectorAll('.sidebar-tab').forEach((el) => {
-    el.classList.toggle('active', (el as HTMLElement).dataset.tab === tab);
-  });
-  document.querySelectorAll('.sidebar-tab-panel').forEach((el) => {
-    el.classList.toggle('active', (el as HTMLElement).dataset.tabPanel === tab);
-  });
+function applyViewport(): void {
+  const world = document.getElementById('board-world');
+  if (world) {
+    world.style.transform = viewportTransform(state.viewport);
+  }
+  const zoomLabel = document.getElementById('zoom-label');
+  if (zoomLabel) {
+    zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
+  }
 }
 
-function renderPalette(): void {
-  const palette = document.getElementById('palette')!;
-  palette.innerHTML = (Object.keys(COMPONENT_DEFS) as ComponentType[])
-    .map(
-      (type) => `
-      <button
-        class="palette-item ${state.selectedPalette === type ? 'selected' : ''}"
-        data-type="${type}"
-        type="button"
-      >
-        <span class="palette-emoji">${COMPONENT_DEFS[type].emoji}</span>
-        <span class="palette-label">${COMPONENT_DEFS[type].label}</span>
-        <span class="palette-desc">${COMPONENT_DEFS[type].description}</span>
-      </button>
-    `
-    )
-    .join('');
+function updateToolUi(): void {
+  const viewport = document.getElementById('board-viewport');
+  if (!viewport) return;
+  const effectiveTool =
+    state.spaceHeld && state.activeTool !== 'pen' && state.activeTool !== 'text'
+      ? 'hand'
+      : state.activeTool;
+  viewport.style.cursor = state.panning ? 'grabbing' : toolCursor(effectiveTool);
+}
+
+function getViewportRect(): DOMRect {
+  return document.getElementById('board-viewport')!.getBoundingClientRect();
+}
+
+function eventToWorld(e: MouseEvent | PointerEvent): { x: number; y: number } {
+  return screenToWorld(e.clientX, e.clientY, getViewportRect(), state.viewport);
 }
 
 function getAllPorts(): Port[] {
@@ -226,6 +197,9 @@ function getPortById(id: string): Port | undefined {
 function mountBoard(): void {
   const board = document.getElementById('board');
   if (!board) return;
+  annotationRenderer.destroy();
+  annotationRenderer.mount(board);
+  annotationRenderer.render(state.annotations);
   boardRenderer.mount(board, state.components, state.belts);
   boardRenderer.update(null, 0);
   positionSourceNode();
@@ -240,6 +214,7 @@ function positionSourceNode(): void {
   const sourceNode = document.getElementById('source-node');
   if (!sourceNode) return;
   const port = getSourcePort(state.components);
+  sourceNode.style.left = `${port.x - 36}px`;
   sourceNode.style.top = `${port.y - 72}px`;
 }
 
@@ -249,17 +224,18 @@ function lerpHud(current: number, target: number, dt: number): number {
 }
 
 function updateStatus(dt = 0): void {
-  const bar = document.getElementById('status-bar')!;
-  const stats = document.getElementById('header-stats')!;
+  const bar = document.getElementById('status-bar');
+  const stats = document.getElementById('header-stats');
+  if (!bar || !stats) return;
+
   const snap = state.engine?.getSnapshot() ?? null;
   const running = snap?.status === 'running';
 
-  bar.className = 'status-bar';
+  bar.className = 'floating-status';
   if (snap?.status === 'won') bar.classList.add('won');
   if (snap?.status === 'lost') bar.classList.add('lost');
   if (snap?.spikeActive) bar.classList.add('spike');
-
-  bar.textContent = snap?.message ?? 'Wire up your system, then press Play.';
+  bar.textContent = snap?.message ?? 'Wire components, configure scaling, then press Play.';
 
   if (snap) {
     if (dt > 0) {
@@ -280,47 +256,209 @@ function updateStatus(dt = 0): void {
 
     const hud = state.displayedHud;
     stats.innerHTML = `
-      <div class="stat"><span class="stat-label">Time</span><span class="stat-value">${hud.time.toFixed(1)}s / ${SCENARIO.duration}s</span></div>
-      <div class="stat"><span class="stat-label">RPS</span><span class="stat-value ${snap.spikeActive ? 'spike' : ''}">${Math.round(hud.rps)}</span></div>
-      <div class="stat"><span class="stat-label">Spawned</span><span class="stat-value">${Math.round(hud.spawned).toLocaleString()}</span></div>
-      <div class="stat"><span class="stat-label">Completed</span><span class="stat-value">${Math.round(hud.completed).toLocaleString()}</span></div>
-      <div class="stat"><span class="stat-label">Dropped</span><span class="stat-value ${snap.totalDropped > 0 ? 'bad' : ''}">${Math.round(hud.dropped).toLocaleString()}</span></div>
+      <div class="hud-stat"><span class="hud-label">Time</span><span class="hud-value">${hud.time.toFixed(1)}s / ${SCENARIO.duration}s</span></div>
+      <div class="hud-stat"><span class="hud-label">RPS</span><span class="hud-value ${snap.spikeActive ? 'spike' : ''}">${Math.round(hud.rps)}</span></div>
+      <div class="hud-stat"><span class="hud-label">Done</span><span class="hud-value">${Math.round(hud.completed).toLocaleString()}</span></div>
+      <div class="hud-stat"><span class="hud-label">Dropped</span><span class="hud-value ${snap.totalDropped > 0 ? 'bad' : ''}">${Math.round(hud.dropped).toLocaleString()}</span></div>
     `;
   } else {
     stats.innerHTML = `
-      <div class="stat"><span class="stat-label">Scenario</span><span class="stat-value">URL Shortener</span></div>
-      <div class="stat"><span class="stat-label">Duration</span><span class="stat-value">${SCENARIO.duration}s</span></div>
+      <div class="hud-stat"><span class="hud-label">Scenario</span><span class="hud-value">URL Shortener</span></div>
+      <div class="hud-stat"><span class="hud-label">Duration</span><span class="hud-value">${SCENARIO.duration}s</span></div>
     `;
   }
 
-  const playBtn = document.getElementById('btn-play') as HTMLButtonElement;
-  playBtn.textContent = running ? '⏸ Pause' : '▶ Play';
-  playBtn.disabled = state.components.length === 0;
+  const playBtn = document.getElementById('btn-play') as HTMLButtonElement | null;
+  if (playBtn) {
+    playBtn.textContent = running ? '⏸ Pause' : '▶ Play';
+    playBtn.disabled = state.components.length === 0;
+  }
+}
+
+function setTool(tool: BoardTool, componentType: ComponentType | null = null): void {
+  state.activeTool = tool;
+  state.selectedComponent = componentType;
+  state.connectFromPort = null;
+  clearPortHighlights();
+
+  document.querySelectorAll('[data-tool]').forEach((el) => {
+    el.classList.toggle('active', (el as HTMLElement).dataset.tool === tool);
+  });
+  document.querySelectorAll('[data-component]').forEach((el) => {
+    const type = (el as HTMLElement).dataset.component as ComponentType;
+    el.classList.toggle('active', tool === 'component' && type === componentType);
+  });
+
+  updateToolUi();
 }
 
 function bindEvents(): void {
-  const board = document.getElementById('board')!;
-  const palette = document.getElementById('palette')!;
+  const viewport = document.getElementById('board-viewport')!;
 
   window.addEventListener('resize', () => boardRenderer.resizeCanvas());
 
-  palette.addEventListener('click', (e) => {
-    const btn = (e.target as HTMLElement).closest('[data-type]') as HTMLElement | null;
-    if (!btn) return;
-    state.selectedPalette = btn.dataset.type as ComponentType;
-    state.connectFromPort = null;
-    renderPalette();
-    setModeLabel('Place mode — click the board to place');
+  document.querySelectorAll('[data-tool]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setTool((btn as HTMLElement).dataset.tool as BoardTool);
+    });
   });
 
-  document.getElementById('btn-connect')!.addEventListener('click', () => {
-    state.selectedPalette = null;
-    state.connectFromPort = null;
-    renderPalette();
-    setModeLabel('Connect mode — click output port, then input port');
+  document.querySelectorAll('[data-component]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setTool('component', (btn as HTMLElement).dataset.component as ComponentType);
+    });
   });
 
-  board.addEventListener('click', (e) => {
+  document.getElementById('btn-config')?.addEventListener('click', () => {
+    state.configOpen = true;
+    document.getElementById('config-drawer')?.classList.add('open');
+    document.getElementById('config-backdrop')?.classList.add('open');
+    document.getElementById('btn-config')?.setAttribute('aria-expanded', 'true');
+  });
+
+  const closeConfig = (): void => {
+    state.configOpen = false;
+    document.getElementById('config-drawer')?.classList.remove('open');
+    document.getElementById('config-backdrop')?.classList.remove('open');
+    document.getElementById('btn-config')?.setAttribute('aria-expanded', 'false');
+  };
+
+  document.getElementById('btn-config-close')?.addEventListener('click', closeConfig);
+  document.getElementById('config-backdrop')?.addEventListener('click', closeConfig);
+
+  document.getElementById('btn-play')?.addEventListener('click', () => {
+    if (state.engine?.getSnapshot().status === 'running') stopSimulation();
+    else startSimulation();
+  });
+
+  document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
+  document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
+
+  document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
+    state.viewport.zoom = clampZoom(state.viewport.zoom * 1.15);
+    applyViewport();
+  });
+
+  document.getElementById('btn-zoom-out')?.addEventListener('click', () => {
+    state.viewport.zoom = clampZoom(state.viewport.zoom / 1.15);
+    applyViewport();
+  });
+
+  document.getElementById('btn-zoom-reset')?.addEventListener('click', () => {
+    state.viewport.zoom = 1;
+    applyViewport();
+  });
+
+  window.addEventListener('keydown', (e) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if (e.code === 'Space' && !state.spaceHeld) {
+      e.preventDefault();
+      state.spaceHeld = true;
+      updateToolUi();
+    }
+    if (e.key === 'v' || e.key === 'V') setTool('select');
+    if (e.key === 'h' || e.key === 'H') setTool('hand');
+    if (e.key === 'p' || e.key === 'P') setTool('pen');
+    if (e.key === 't' || e.key === 'T') setTool('text');
+    if (e.key === 'c' || e.key === 'C') setTool('connect');
+    if (e.key === 'e' || e.key === 'E') setTool('eraser');
+    if (e.key === 'Escape') {
+      setTool('select');
+      closeConfig();
+    }
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (e.code === 'Space') {
+      state.spaceHeld = false;
+      state.panning = null;
+      updateToolUi();
+    }
+  });
+
+  viewport.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const rect = getViewportRect();
+      const before = screenToWorld(e.clientX, e.clientY, rect, state.viewport);
+      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      state.viewport.zoom = clampZoom(state.viewport.zoom * factor);
+      state.viewport.panX = e.clientX - rect.left - before.x * state.viewport.zoom;
+      state.viewport.panY = e.clientY - rect.top - before.y * state.viewport.zoom;
+      applyViewport();
+    },
+    { passive: false }
+  );
+
+  viewport.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const world = eventToWorld(e);
+    const effectiveTool =
+      state.spaceHeld && state.activeTool !== 'pen' && state.activeTool !== 'text'
+        ? 'hand'
+        : state.activeTool;
+
+    if (effectiveTool === 'hand') {
+      state.panning = {
+        startX: e.clientX,
+        startY: e.clientY,
+        panX: state.viewport.panX,
+        panY: state.viewport.panY,
+      };
+      viewport.setPointerCapture(e.pointerId);
+      updateToolUi();
+      return;
+    }
+
+    if (isSimRunning()) return;
+
+    if (effectiveTool === 'pen') {
+      state.drawing = createStrokePoint(world.x, world.y);
+      annotationRenderer.renderLiveStroke(state.drawing);
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (effectiveTool === 'eraser') {
+      eraseAt(world.x, world.y);
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
+    if (textEl && effectiveTool === 'select') {
+      const id = textEl.dataset.textId!;
+      const text = state.annotations.texts.find((t) => t.id === id);
+      if (text) {
+        state.dragging = {
+          kind: 'text',
+          id,
+          offsetX: world.x - text.x,
+          offsetY: world.y - text.y,
+        };
+        viewport.setPointerCapture(e.pointerId);
+      }
+      return;
+    }
+
+    const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
+    if (comp && effectiveTool === 'select') {
+      const id = comp.dataset.id!;
+      const c = state.components.find((x) => x.id === id);
+      if (!c) return;
+      state.dragging = {
+        kind: 'component',
+        id,
+        offsetX: world.x - c.x,
+        offsetY: world.y - c.y,
+      };
+      comp.classList.add('dragging');
+      viewport.setPointerCapture(e.pointerId);
+    }
+  });
+
+  viewport.addEventListener('click', (e) => {
     const portBtn = (e.target as HTMLElement).closest('.port') as HTMLElement | null;
     if (portBtn) {
       e.stopPropagation();
@@ -328,94 +466,156 @@ function bindEvents(): void {
       return;
     }
 
-    if (state.selectedPalette && !state.dragging) {
-      const rect = board.getBoundingClientRect();
-      const x = (e as MouseEvent).clientX - rect.left - 70;
-      const y = (e as MouseEvent).clientY - rect.top - 36;
-      state.components.push(createComponent(state.selectedPalette, Math.max(80, x), Math.max(60, y)));
+    if (isSimRunning()) return;
+
+    const world = eventToWorld(e);
+
+    if (state.activeTool === 'component' && state.selectedComponent && !state.dragging) {
+      state.components.push(
+        createComponent(
+          state.selectedComponent,
+          Math.max(20, world.x - 70),
+          Math.max(20, world.y - 36)
+        )
+      );
       mountBoard();
+      return;
+    }
+
+    if (state.activeTool === 'text') {
+      state.annotations.texts.push(createTextAnnotation(world.x, world.y));
+      annotationRenderer.render(state.annotations);
     }
   });
 
-  board.addEventListener('mousedown', (e) => {
-    const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
-    if (!comp || state.engine?.getSnapshot().status === 'running') return;
-    const id = comp.dataset.id!;
-    const c = state.components.find((x) => x.id === id);
-    if (!c) return;
-    const rect = board.getBoundingClientRect();
-    state.dragging = {
-      id,
-      offsetX: (e as MouseEvent).clientX - rect.left - c.x,
-      offsetY: (e as MouseEvent).clientY - rect.top - c.y,
-    };
-    comp.classList.add('dragging');
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (!state.dragging || state.engine?.getSnapshot().status === 'running') return;
-    const boardEl = document.getElementById('board')!;
-    const rect = boardEl.getBoundingClientRect();
-    const c = state.components.find((x) => x.id === state.dragging!.id);
-    if (!c) return;
-    c.x = Math.max(10, Math.min(rect.width - c.width - 10, e.clientX - rect.left - state.dragging.offsetX));
-    c.y = Math.max(10, Math.min(rect.height - c.height - 10, e.clientY - rect.top - state.dragging.offsetY));
-    boardRenderer.updatePositions(state.components);
-    positionSourceNode();
-  });
-
-  window.addEventListener('mouseup', () => {
-    state.dragging = null;
-  });
-
-  document.getElementById('btn-play')!.addEventListener('click', () => {
-    const snap = state.engine?.getSnapshot();
-    if (snap?.status === 'running') {
-      stopSimulation();
-    } else {
-      startSimulation();
-    }
-  });
-
-  document.getElementById('btn-preset')!.addEventListener('click', () => {
-    loadPreset();
-  });
-
-  document.querySelectorAll('.sidebar-tab').forEach((tab) => {
-    tab.addEventListener('click', () => {
-      const id = (tab as HTMLElement).dataset.tab as 'build' | 'configure';
-      if (id) switchSidebarTab(id);
-    });
-  });
-
-  document.getElementById('btn-reset')!.addEventListener('click', () => {
-    stopSimulation();
-    state.components = [];
-    state.belts = [];
-    state.engine = null;
-    state.architectureConfig = createDefaultArchitectureConfig();
-    mountConfigPanelUi();
-    mountBoard();
-    updateStatus();
-    setModeLabel('Place mode — select a component');
-  });
-
-  board.addEventListener('contextmenu', (e) => {
+  viewport.addEventListener('dblclick', (e) => {
+    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
+    if (!textEl || isSimRunning()) return;
     e.preventDefault();
+    const id = textEl.dataset.textId!;
+    const text = state.annotations.texts.find((t) => t.id === id);
+    if (!text) return;
+
+    textEl.contentEditable = 'true';
+    textEl.classList.add('editing');
+    textEl.focus();
+    document.execCommand('selectAll', false);
+
+    const finish = (): void => {
+      text.content = textEl.textContent ?? '';
+      textEl.contentEditable = 'false';
+      textEl.classList.remove('editing');
+      textEl.removeEventListener('blur', finish);
+    };
+    textEl.addEventListener('blur', finish);
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    if (state.panning) {
+      state.viewport.panX = state.panning.panX + (e.clientX - state.panning.startX);
+      state.viewport.panY = state.panning.panY + (e.clientY - state.panning.startY);
+      applyViewport();
+      return;
+    }
+
+    if (state.drawing) {
+      const world = eventToWorld(e);
+      const last = state.drawing.points[state.drawing.points.length - 1];
+      if (!last || Math.hypot(world.x - last.x, world.y - last.y) > 2) {
+        state.drawing.points.push({ x: world.x, y: world.y });
+        annotationRenderer.renderLiveStroke(state.drawing);
+      }
+      return;
+    }
+
+    if (state.activeTool === 'eraser' && e.buttons === 1 && !isSimRunning()) {
+      const world = eventToWorld(e);
+      eraseAt(world.x, world.y);
+      return;
+    }
+
+    if (!state.dragging || isSimRunning()) return;
+    const world = eventToWorld(e);
+
+    if (state.dragging.kind === 'component') {
+      const c = state.components.find((x) => x.id === state.dragging!.id);
+      if (!c) return;
+      c.x = Math.max(10, world.x - state.dragging.offsetX);
+      c.y = Math.max(10, world.y - state.dragging.offsetY);
+      boardRenderer.updatePositions(state.components);
+      positionSourceNode();
+      return;
+    }
+
+    const text = state.annotations.texts.find((t) => t.id === state.dragging!.id);
+    if (text) {
+      text.x = world.x - state.dragging.offsetX;
+      text.y = world.y - state.dragging.offsetY;
+      annotationRenderer.render(state.annotations);
+    }
+  });
+
+  viewport.addEventListener('pointerup', (e) => {
+    if (state.drawing) {
+      if (state.drawing.points.length > 1) {
+        state.annotations.strokes.push(state.drawing);
+      }
+      state.drawing = null;
+      annotationRenderer.render(state.annotations);
+    }
+
+    state.panning = null;
+    state.dragging = null;
+    document.querySelectorAll('.component.dragging').forEach((el) => el.classList.remove('dragging'));
+    updateToolUi();
+    try {
+      viewport.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  viewport.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if (isSimRunning()) return;
+
     const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
-    if (!comp || state.engine?.getSnapshot().status === 'running') return;
-    const id = comp.dataset.id!;
-    state.components = state.components.filter((c) => c.id !== id);
-    state.belts = state.belts.filter((b) => {
-      const from = getPortById(b.fromPortId);
-      const to = getPortById(b.toPortId);
-      return from?.componentId !== id && to?.componentId !== id;
-    });
-    mountBoard();
+    if (comp) {
+      const id = comp.dataset.id!;
+      state.components = state.components.filter((c) => c.id !== id);
+      state.belts = state.belts.filter((b) => {
+        const from = getPortById(b.fromPortId);
+        const to = getPortById(b.toPortId);
+        return from?.componentId !== id && to?.componentId !== id;
+      });
+      mountBoard();
+      return;
+    }
+
+    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
+    if (textEl) {
+      const id = textEl.dataset.textId!;
+      state.annotations.texts = state.annotations.texts.filter((t) => t.id !== id);
+      annotationRenderer.render(state.annotations);
+    }
   });
 }
 
+function eraseAt(x: number, y: number): void {
+  const before = state.annotations.strokes.length;
+  state.annotations.strokes = state.annotations.strokes.filter((stroke) => {
+    return !stroke.points.some((p) => Math.hypot(p.x - x, p.y - y) < ERASER_RADIUS);
+  });
+  if (state.annotations.strokes.length !== before) {
+    annotationRenderer.render(state.annotations);
+  }
+}
+
 function handlePortClick(portId: string): void {
+  if (state.activeTool !== 'connect' && !state.connectFromPort) {
+    setTool('connect');
+  }
+
   const port = getPortById(portId);
   if (!port) return;
 
@@ -423,7 +623,6 @@ function handlePortClick(portId: string): void {
     if (port.side === 'out') {
       state.connectFromPort = port;
       highlightPort(portId);
-      setModeLabel(`Connect from ${port.label} — click an input port`);
     }
     return;
   }
@@ -443,7 +642,6 @@ function handlePortClick(portId: string): void {
 
   state.connectFromPort = null;
   clearPortHighlights();
-  setModeLabel('Connect mode — click output port, then input port');
 }
 
 function highlightPort(portId: string): void {
@@ -455,28 +653,32 @@ function clearPortHighlights(): void {
   document.querySelectorAll('.port-active').forEach((el) => el.classList.remove('port-active'));
 }
 
-function setModeLabel(text: string): void {
-  const el = document.getElementById('mode-label');
-  if (el) el.textContent = text;
+function resetBoard(): void {
+  stopSimulation();
+  state.components = [];
+  state.belts = [];
+  state.annotations = createDefaultAnnotations();
+  state.engine = null;
+  state.architectureConfig = createDefaultArchitectureConfig();
+  mountConfigPanelUi();
+  mountBoard();
+  updateStatus();
+  setTool('select');
 }
 
 function loadPreset(): void {
-  if (state.engine?.getSnapshot().status === 'running') {
-    stopSimulation();
-  }
+  if (isSimRunning()) stopSimulation();
 
   const { components, belts } = buildPreset(URL_SHORTENER_PRESET);
   state.components = components;
   state.belts = belts;
+  state.annotations = createDefaultAnnotations();
   state.architectureConfig = createReferenceArchitectureConfig();
   mountConfigPanelUi();
   state.engine = null;
-  state.selectedPalette = null;
-  state.connectFromPort = null;
-  renderPalette();
+  setTool('select');
   mountBoard();
   updateStatus();
-  setModeLabel('Preset loaded — press Play to simulate');
 }
 
 function showRunReport(): void {
@@ -497,7 +699,6 @@ function startSimulation(): void {
   state.engine.start();
   state.lastRunStatus = 'running';
   state.lastTick = performance.now();
-  state.lastHudUpdate = state.lastTick;
   state.simAccumulator = 0;
   state.displayedHud = { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 };
 
@@ -530,11 +731,6 @@ function startSimulation(): void {
 
     refreshBoardVisuals(state.engine.getSnapshot(), frameDt);
     updateStatus(frameDt);
-
-    if (now - state.lastHudUpdate >= HUD_INTERVAL_MS) {
-      state.lastHudUpdate = now;
-    }
-
     state.animFrame = requestAnimationFrame(loop);
   };
 
