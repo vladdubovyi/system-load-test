@@ -91,6 +91,7 @@ interface GameState {
   currentChallenge: Challenge | null;
   availableChallenges: Challenge[];
   challengeSelectorOpen: boolean;
+  simulationSpeed: 1 | 5 | 20 | 100;
 }
 
 const SIM_STEP = 1 / 60;
@@ -122,6 +123,7 @@ const state: GameState = {
   currentChallenge: null,
   availableChallenges: [],
   challengeSelectorOpen: false,
+  simulationSpeed: 1,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -175,7 +177,7 @@ function render(): void {
   const zoomPct = Math.round(state.viewport.zoom * 100);
   app.innerHTML = `
     <div class="canvas-app">
-      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct)}
+      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct, state.simulationSpeed)}
       ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
 
       <div class="board-viewport" id="board-viewport">
@@ -585,6 +587,15 @@ function bindEvents(): void {
   });
   document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
+  
+  // Speed control buttons
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const speed = parseInt(btn.getAttribute('data-speed') || '1');
+      state.simulationSpeed = speed as 1 | 5 | 20 | 100;
+      render();
+    });
+  });
 
   document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
     zoomAt(state.lastPointer.x, state.lastPointer.y, 1.15);
@@ -998,7 +1009,7 @@ function startSimulation(): void {
 
     const frameDt = Math.min((now - state.lastTick) / 1000, 0.05);
     state.lastTick = now;
-    state.simAccumulator += frameDt;
+    state.simAccumulator += frameDt * state.simulationSpeed;
 
     while (state.simAccumulator >= SIM_STEP) {
       state.engine.tick(SIM_STEP);
