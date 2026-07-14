@@ -5,9 +5,7 @@ on:
     types: [opened, synchronize, reopened, closed]
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -34,15 +32,12 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          GITHUB_PAGES: 'true'
+          VITE_BASE: /system-load-test/previews/pr/${{ github.event.pull_request.number }}/
 
   deploy-preview:
     if: github.event.action != 'closed'
     needs: verify
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,24 +54,21 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          GITHUB_PAGES: 'true'
+          VITE_BASE: /system-load-test/previews/pr/${{ github.event.pull_request.number }}/
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - name: Deploy to gh-pages preview folder
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          path: dist
-
-      - name: Deploy preview
-        id: deployment
-        uses: actions/deploy-pages@v4
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          destination_dir: previews/pr/${{ github.event.pull_request.number }}
+          keep_files: true
 
       - name: Comment preview URL on PR
         uses: actions/github-script@v7
         env:
-          PREVIEW_URL: ${{ steps.deployment.outputs.page_url }}
+          PREVIEW_URL: https://${{ github.repository_owner }}.github.io/system-load-test/previews/pr/${{ github.event.pull_request.number }}/
         with:
           script: |
             const marker = '<!-- pr-preview-url -->';
@@ -112,3 +104,35 @@ jobs:
                 body,
               });
             }
+
+  cleanup-preview:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gh-pages
+        uses: actions/checkout@v4
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+
+      - name: Remove preview folder
+        run: |
+          rm -rf "previews/pr/${{ github.event.pull_request.number }}"
+          if [ -d previews/pr ] && [ -z "$(ls -A previews/pr)" ]; then
+            rmdir previews/pr
+          fi
+          if [ -d previews ] && [ -z "$(ls -A previews)" ]; then
+            rmdir previews
+          fi
+
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "Nothing to clean up"
+            exit 0
+          fi
+          git commit -m "Remove preview for PR #${{ github.event.pull_request.number }}"
+          git push
