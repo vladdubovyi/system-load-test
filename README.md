@@ -42,14 +42,7 @@ npm run preview
 
 ## Deployment
 
-Pushes to `main` automatically deploy to GitHub Pages via `.github/workflows/deploy.yml`.
+- Pushes to `main` deploy production to the `gh-pages` branch (`.github/workflows/deploy.yml`).
+- Pull requests deploy previews to `gh-pages/previews/pr-<number>/` (`.github/workflows/pr-preview.yml`).
 
-**Live URL (after one-time setup):** https://vladdubovyi.github.io/system-load-test/
-
-### One-time enable (required)
-
-1. Open [repo Settings → Pages](https://github.com/vladdubovyi/system-load-test/settings/pages)
-2. Set **Source** to **GitHub Actions**
-3. Re-run the [Deploy workflow](https://github.com/vladdubovyi/system-load-test/actions/workflows/deploy.yml)
-
-See [DEPLOY.md](./DEPLOY.md) for details.
+**Pages source must be the `gh-pages` branch** (not GitHub Actions). See [DEPLOY.md](./DEPLOY.md).

@@ -17,7 +17,7 @@ jobs:
     if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout PR
         uses: actions/checkout@v4
 
       - name: Setup Node
@@ -39,8 +39,12 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      # gh-pages branch must be the Pages source. Seed the site root from main so
+      # production URLs keep working after switching away from Actions deploys.
+      - name: Checkout main
         uses: actions/checkout@v4
+        with:
+          ref: main
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -48,15 +52,36 @@ jobs:
           node-version: 20
           cache: npm
 
-      - name: Install dependencies
+      - name: Install dependencies (main)
         run: npm ci
 
-      - name: Build
+      - name: Build main
+        run: npm run build
+        env:
+          GITHUB_PAGES: 'true'
+
+      - name: Deploy production baseline to gh-pages root
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          publish_branch: gh-pages
+          keep_files: true
+
+      - name: Checkout PR
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install dependencies (PR)
+        run: npm ci
+
+      - name: Build PR
         run: npm run build
         env:
           VITE_BASE: /system-load-test/previews/pr/${{ github.event.pull_request.number }}/
 
-      - name: Deploy to gh-pages preview folder
+      - name: Deploy PR preview
         uses: peaceiris/actions-gh-pages@v4
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -77,6 +102,8 @@ jobs:
             ## Preview deployed
 
             Quick verification: [Open preview](${url})
+
+            If you see a 404, set **Settings → Pages → Build and deployment → Deploy from a branch** with branch \`gh-pages\` and folder \`/(root)\`. Previews are published to the \`gh-pages\` branch; the default GitHub Actions Pages source does not serve them.
             `;
 
             const { data: comments } = await github.rest.issues.listComments({
