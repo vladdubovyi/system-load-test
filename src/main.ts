@@ -49,6 +49,10 @@ import {
   toolCursor,
   type BoardTool,
 } from './ui/floating-toolbar';
+import { initializeApp } from './game/app-init';
+import { componentRegistry } from './game/component-registry';
+import { mountChallengeSelector } from './ui/challenge-selector';
+import type { Challenge } from './game/scenario-types';
 
 type BoardSelection =
   | { kind: 'component'; id: string }
@@ -84,6 +88,9 @@ interface GameState {
     completed: number;
     dropped: number;
   };
+  currentChallenge: Challenge | null;
+  availableChallenges: Challenge[];
+  challengeSelectorOpen: boolean;
 }
 
 const SIM_STEP = 1 / 60;
@@ -112,6 +119,9 @@ const state: GameState = {
   simAccumulator: 0,
   lastRunStatus: 'idle',
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
+  currentChallenge: null,
+  availableChallenges: [],
+  challengeSelectorOpen: false,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -550,6 +560,10 @@ function bindEvents(): void {
   document.getElementById('btn-menu')?.addEventListener('click', (e) => {
     e.stopPropagation();
     if (menu) menu.hidden = !menu.hidden;
+  });
+  document.getElementById('menu-challenge')?.addEventListener('click', () => {
+    if (menu) menu.hidden = true;
+    openChallengeSelector();
   });
   document.getElementById('menu-preset')?.addEventListener('click', () => {
     if (menu) menu.hidden = true;
@@ -1012,5 +1026,68 @@ function stopSimulation(): void {
   updateStatus();
 }
 
-render();
-loadPreset();
+// Challenge selection functions
+function openChallengeSelector(): void {
+  state.challengeSelectorOpen = true;
+  showChallengeSelectorModal();
+}
+
+function showChallengeSelectorModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'challenge-selector-overlay';
+  overlay.id = 'challenge-overlay';
+  
+  const container = document.createElement('div');
+  container.id = 'challenge-selector-container';
+  
+  document.body.appendChild(overlay);
+  document.body.appendChild(container);
+  
+  mountChallengeSelector(container, state.availableChallenges, (challenge) => {
+    selectChallenge(challenge);
+  });
+  
+  overlay.addEventListener('click', closeChallengeSelector);
+}
+
+function closeChallengeSelector(): void {
+  state.challengeSelectorOpen = false;
+  document.getElementById('challenge-overlay')?.remove();
+  document.getElementById('challenge-selector-container')?.remove();
+}
+
+function selectChallenge(challenge: Challenge): void {
+  state.currentChallenge = challenge;
+  closeChallengeSelector();
+  
+  // Reset board for new challenge
+  state.components = [];
+  state.belts = [];
+  state.annotations = createDefaultAnnotations();
+  state.componentConfigs = new Map();
+  
+  console.log(`Selected challenge: ${challenge.name}`);
+  render();
+}
+
+// Initialize app with backend data
+async function initApp(): Promise<void> {
+  try {
+    console.log('Initializing app...');
+    const appData = await initializeApp();
+    state.availableChallenges = appData.challenges;
+    state.currentChallenge = appData.selectedChallenge;
+    
+    console.log(`Loaded ${appData.challenges.length} challenges from backend`);
+    console.log(`Selected challenge: ${state.currentChallenge?.name}`);
+  } catch (error) {
+    console.error('Failed to initialize app:', error);
+    // App will fall back to legacy components
+  }
+  
+  render();
+  loadPreset();
+}
+
+// Start the app
+initApp();

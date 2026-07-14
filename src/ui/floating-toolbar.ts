@@ -21,6 +21,8 @@ export function renderFloatingChrome(
       <div class="chrome-top-left">
         <button class="chrome-menu-btn" id="btn-menu" type="button" title="Menu" aria-label="Menu" aria-haspopup="true">☰</button>
         <div class="main-menu-dropdown" id="main-menu" hidden>
+          <button class="menu-item" id="menu-challenge" type="button">🎯 Choose Challenge</button>
+          <div class="menu-divider"></div>
           <button class="menu-item" id="menu-preset" type="button">⚡ Load preset</button>
           <button class="menu-item" id="menu-reset" type="button">Reset board</button>
           <div class="menu-divider"></div>
