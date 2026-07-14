@@ -33,13 +33,16 @@ export function strokeToPath(stroke: DrawStroke): string {
   return d;
 }
 
+export const DEFAULT_TEXT_WIDTH = 220;
+export const DEFAULT_TEXT_MIN_HEIGHT = 48;
+
 export function createTextAnnotation(x: number, y: number): TextAnnotation {
   return {
     id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    x,
-    y,
-    width: 220,
-    minHeight: 48,
+    x: x - DEFAULT_TEXT_WIDTH / 2,
+    y: y - DEFAULT_TEXT_MIN_HEIGHT / 2,
+    width: DEFAULT_TEXT_WIDTH,
+    minHeight: DEFAULT_TEXT_MIN_HEIGHT,
     content: '',
   };
 }

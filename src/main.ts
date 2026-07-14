@@ -677,8 +677,8 @@ function bindEvents(): void {
     if (state.dragging.kind === 'component') {
       const c = state.components.find((x) => x.id === state.dragging!.id);
       if (!c) return;
-      c.x = Math.max(10, world.x - state.dragging.offsetX);
-      c.y = Math.max(10, world.y - state.dragging.offsetY);
+      c.x = world.x - state.dragging.offsetX;
+      c.y = world.y - state.dragging.offsetY;
       boardRenderer.updatePositions(state.components);
       positionSourceNode();
       return;
@@ -758,8 +758,8 @@ function bindEvents(): void {
     if (state.activeTool === 'component' && state.placementType) {
       const comp = createComponent(
         state.placementType,
-        Math.max(20, world.x - 70),
-        Math.max(20, world.y - 36)
+        world.x - 70,
+        world.y - 36
       );
       state.components.push(comp);
       mountBoard();

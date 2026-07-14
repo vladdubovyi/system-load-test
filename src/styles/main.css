@@ -170,7 +170,7 @@ body {
 .chrome-menu-btn {
   width: 36px;
   height: 36px;
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -185,7 +185,7 @@ body {
   gap: 0.4rem;
   padding: 0.35rem 0.65rem;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
@@ -213,7 +213,7 @@ body {
 }
 
 .chrome-action-btn {
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
@@ -222,12 +222,12 @@ body {
   font-weight: 600;
   cursor: pointer;
   color: var(--ink);
-  transition: background 0.12s, box-shadow 0.12s;
+  transition: background 0.12s, border-color 0.12s;
 }
 
 .chrome-action-btn:hover:not(:disabled) {
   background: #f8f9fa;
-  box-shadow: var(--shadow-md);
+  border-color: var(--border-strong);
 }
 
 .chrome-action-btn:disabled {
@@ -237,11 +237,13 @@ body {
 
 .chrome-action-primary {
   background: var(--accent);
+  border-color: var(--accent);
   color: #fff;
 }
 
 .chrome-action-primary:hover:not(:disabled) {
   background: var(--accent-hover);
+  border-color: var(--accent-hover);
 }
 
 /* ── Floating toolbars ── */
@@ -253,7 +255,7 @@ body {
   gap: 0.15rem;
   padding: 0.3rem;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: var(--toolbar-radius);
   box-shadow: var(--shadow-md);
 }
@@ -327,7 +329,7 @@ body {
   gap: 1rem;
   padding: 0.45rem 0.85rem;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   font-size: 0.78rem;
@@ -368,7 +370,7 @@ body {
   max-width: min(640px, 90vw);
   padding: 0.4rem 0.85rem;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 999px;
   box-shadow: var(--shadow-sm);
   font-size: 0.76rem;
@@ -380,15 +382,15 @@ body {
 }
 
 .floating-status.won {
+  border-color: rgba(47, 158, 68, 0.35);
   color: var(--success);
   background: rgba(47, 158, 68, 0.06);
-  box-shadow: 0 1px 6px rgba(47, 158, 68, 0.15);
 }
 
 .floating-status.lost {
+  border-color: rgba(224, 49, 49, 0.35);
   color: var(--danger);
   background: rgba(224, 49, 49, 0.06);
-  box-shadow: 0 1px 6px rgba(224, 49, 49, 0.15);
 }
 
 .floating-status.spike::before {
@@ -406,7 +408,7 @@ body {
   gap: 0.2rem;
   padding: 0.25rem;
   background: var(--surface);
-  border: none;
+  border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: var(--shadow-sm);
 }
@@ -638,6 +640,7 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   user-select: none;
+  text-align: center;
 }
 
 .board-text:empty::before {
