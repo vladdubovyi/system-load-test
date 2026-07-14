@@ -40,7 +40,7 @@ export function createTextAnnotation(x: number, y: number): TextAnnotation {
     y,
     width: 220,
     minHeight: 48,
-    content: 'Double-click to edit',
+    content: '',
   };
 }
 

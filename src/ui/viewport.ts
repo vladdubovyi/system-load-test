@@ -43,6 +43,12 @@ export function worldToScreen(
   };
 }
 
+export function applyViewportStyles(element: HTMLElement, viewport: ViewportState): void {
+  element.style.transform = `translate(${viewport.panX}px, ${viewport.panY}px)`;
+  element.style.zoom = `${viewport.zoom}`;
+}
+
+/** @deprecated use applyViewportStyles */
 export function viewportTransform(viewport: ViewportState): string {
-  return `translate(${viewport.panX}px, ${viewport.panY}px) scale(${viewport.zoom})`;
+  return `translate(${viewport.panX}px, ${viewport.panY}px)`;
 }

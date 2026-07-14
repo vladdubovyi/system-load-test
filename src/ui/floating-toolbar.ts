@@ -29,7 +29,15 @@ export function renderFloatingChrome(
   return `
     <div class="canvas-chrome">
       <div class="chrome-top-left">
-        <button class="chrome-menu-btn" id="btn-menu" type="button" title="Menu" aria-label="Menu">☰</button>
+        <button class="chrome-menu-btn" id="btn-menu" type="button" title="Menu" aria-label="Menu" aria-haspopup="true">☰</button>
+        <div class="main-menu-dropdown" id="main-menu" hidden>
+          <button class="menu-item" id="menu-preset" type="button">⚡ Load preset</button>
+          <button class="menu-item" id="menu-reset" type="button">Reset board</button>
+          <button class="menu-item" id="menu-config" type="button">⚙️ Configure</button>
+          <div class="menu-divider"></div>
+          <p class="menu-hint">H hand · V select · P draw · T text · C connect · E eraser</p>
+          <p class="menu-hint">Middle-click or Space+drag to pan · Scroll to zoom</p>
+        </div>
         <div class="chrome-brand">
           <span class="chrome-brand-icon">🏗️</span>
           <span class="chrome-brand-name">System Design Game</span>
@@ -92,7 +100,7 @@ export function renderFloatingChrome(
       </div>
 
       <div class="canvas-hint" id="canvas-hint">
-        Scroll to zoom · Space + drag to pan · Double-click text to edit
+        Scroll to zoom · Middle-click or Space+drag to pan · Click text to edit
       </div>
     </div>
   `;
