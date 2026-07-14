@@ -119,6 +119,35 @@ const annotationRenderer = new AnnotationRenderer();
 const connectionPreview = new ConnectionPreview();
 const app = document.getElementById('app')!;
 
+interface BoardSnapshot {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  componentConfigs: Map<string, ComponentInstanceConfig>;
+}
+
+let boardSnapshotBeforeSim: BoardSnapshot | null = null;
+
+function invalidateBoardSnapshot(): void {
+  boardSnapshotBeforeSim = null;
+}
+
+function captureBoardSnapshot(): void {
+  boardSnapshotBeforeSim = {
+    components: structuredClone(state.components),
+    belts: structuredClone(state.belts),
+    componentConfigs: cloneComponentConfigMap(state.componentConfigs),
+  };
+}
+
+function onSimulationTopologyChange(): void {
+  mountBoard();
+  const selected = selectedComponentId();
+  if (selected && !state.components.some((component) => component.id === selected)) {
+    state.selection = null;
+    refreshConfigPalette();
+  }
+}
+
 function isSimRunning(): boolean {
   return state.engine?.getSnapshot().status === 'running';
 }
@@ -473,6 +502,7 @@ function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): v
     state.componentConfigs.set(componentId, cfg);
     boardRenderer.updateComponentConfigs(state.componentConfigs);
     selectItem({ kind: 'component', id: componentId });
+    invalidateBoardSnapshot();
   }
 }
 
@@ -490,6 +520,7 @@ function deleteSelection(): void {
     });
     state.selection = null;
     mountBoard();
+    invalidateBoardSnapshot();
     return;
   }
 
@@ -763,6 +794,7 @@ function bindEvents(): void {
       );
       state.components.push(comp);
       mountBoard();
+      invalidateBoardSnapshot();
       selectItem({ kind: 'component', id: comp.id });
       setTool('hand');
       return;
@@ -842,6 +874,7 @@ function finishConnection(screenX: number, screenY: number): void {
   if (!exists) {
     state.belts.push(createBelt(fromPort.id, toPort.id));
     mountBoard();
+    invalidateBoardSnapshot();
   }
 }
 
@@ -871,6 +904,7 @@ function zoomAt(screenX: number, screenY: number, factor: number): void {
 
 function resetBoard(): void {
   stopSimulation();
+  invalidateBoardSnapshot();
   state.components = [];
   state.belts = [];
   state.annotations = createDefaultAnnotations();
@@ -884,6 +918,7 @@ function resetBoard(): void {
 
 function loadPreset(): void {
   if (isSimRunning()) stopSimulation();
+  invalidateBoardSnapshot();
 
   const { components, belts } = buildPreset(URL_SHORTENER_PRESET);
   state.components = components;
@@ -907,10 +942,21 @@ function showRunReport(): void {
 }
 
 function startSimulation(): void {
+  if (!boardSnapshotBeforeSim) {
+    captureBoardSnapshot();
+  }
+
+  state.components = structuredClone(boardSnapshotBeforeSim!.components);
+  state.belts = structuredClone(boardSnapshotBeforeSim!.belts);
+  state.componentConfigs = cloneComponentConfigMap(boardSnapshotBeforeSim!.componentConfigs);
+  state.selection = null;
+  mountBoard();
+
   state.engine = new SimulationEngine(
     state.components,
     state.belts,
-    cloneComponentConfigMap(state.componentConfigs)
+    cloneComponentConfigMap(state.componentConfigs),
+    onSimulationTopologyChange
   );
   state.engine.start();
   state.lastRunStatus = 'running';

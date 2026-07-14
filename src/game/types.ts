@@ -28,6 +28,8 @@ export interface PlacedComponent {
   label: string;
   capacity: number;
   queueLimit: number;
+  /** Primary component id when this node was spawned by horizontal scaling. */
+  scaleGroupId?: string;
 }
 
 export interface ConveyorBelt {
@@ -57,6 +59,8 @@ export interface ComponentState {
   failed: boolean;
   processed: number;
   dropped: number;
+  startingUp: boolean;
+  startupProgress: number;
 }
 
 export interface BeltState {

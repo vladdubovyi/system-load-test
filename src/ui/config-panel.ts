@@ -74,6 +74,7 @@ function serviceScalingSection(
           ${numberField(`${p}-h-min`, 'Min instances', cfg.horizontal.minInstances, 1, 8)}
           ${numberField(`${p}-h-max`, 'Max instances', cfg.horizontal.maxInstances, 1, 12)}
           ${numberField(`${p}-h-target`, 'Target utilization %', cfg.horizontal.targetUtilization, 40, 90)}
+          ${numberField(`${p}-h-boot`, 'Instance startup (s)', cfg.horizontal.startupTimeSeconds, 0, 15, 0.5)}
         </div>
 
         ${toggleRow(
@@ -176,6 +177,7 @@ function readServiceConfig(
       minInstances: num(`${p}-h-min`, 1),
       maxInstances: num(`${p}-h-max`, 4),
       targetUtilization: num(`${p}-h-target`, 70),
+      startupTimeSeconds: num(`${p}-h-boot`, 4),
     },
     vertical: {
       enabled: on(`${p}-vertical`),

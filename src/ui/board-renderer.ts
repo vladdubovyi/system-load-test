@@ -162,7 +162,9 @@ export class BoardRenderer {
     for (const component of this.components) {
       const def = COMPONENT_DEFS[component.type];
       const root = document.createElement('div');
-      root.className = `component${component.id === selectedComponentId ? ' selected' : ''}`;
+      root.className = `component${component.id === selectedComponentId ? ' selected' : ''}${
+        component.scaleGroupId && component.scaleGroupId !== component.id ? ' scale-instance' : ''
+      }`;
       root.dataset.id = component.id;
       root.style.left = `${component.x}px`;
       root.style.top = `${component.y}px`;
@@ -262,7 +264,9 @@ export class BoardRenderer {
 
     for (const [id, gfx] of this.componentGraphics) {
       const compState = snapshot.components.get(id);
-      const scaling = snapshot.scaling.get(id);
+      const primaryId = gfx.component.scaleGroupId ?? id;
+      const isPrimary = primaryId === id;
+      const scaling = snapshot.scaling.get(primaryId);
       const targetLoad = compState?.load ?? 0;
       gfx.displayedLoad = this.lerp(gfx.displayedLoad, targetLoad, dt);
       const loadPct = Math.min(gfx.displayedLoad, 100);
@@ -270,16 +274,19 @@ export class BoardRenderer {
       gfx.loadEl.textContent = compState ? `${Math.round(loadPct)}%` : '';
 
       gfx.root.classList.toggle('failed', compState?.failed ?? false);
+      gfx.root.classList.toggle('starting-up', compState?.startingUp ?? false);
 
       const warnLoad = gfx.displayedLoad;
       let badgeText = '';
       if (compState?.failed) badgeText = 'FAILED';
-      else if (scaling && scaling.instances > 1) {
+      else if (compState?.startingUp) {
+        badgeText = `BOOT ${Math.round((compState.startupProgress ?? 0) * 100)}%`;
+      } else if (isPrimary && scaling && scaling.instances > 1) {
         badgeText =
           scaling.verticalMultiplier > 1
             ? `×${scaling.instances} ↑${scaling.verticalMultiplier.toFixed(1)}`
             : `×${scaling.instances}`;
-      } else if (scaling && scaling.verticalMultiplier > 1) {
+      } else if (isPrimary && scaling && scaling.verticalMultiplier > 1) {
         badgeText = `↑×${scaling.verticalMultiplier.toFixed(1)}`;
       } else if (warnLoad >= 85) badgeText = 'HOT';
 
@@ -288,7 +295,10 @@ export class BoardRenderer {
           gfx.badge = document.createElement('div');
           gfx.root.appendChild(gfx.badge);
         }
-        gfx.badge.className = badgeText === 'FAILED' ? 'fail-badge' : 'warn-badge';
+        let badgeClass = 'warn-badge';
+        if (badgeText === 'FAILED') badgeClass = 'fail-badge';
+        else if (compState?.startingUp) badgeClass = 'startup-badge';
+        gfx.badge.className = badgeClass;
         gfx.badge.textContent = badgeText;
       } else if (gfx.badge) {
         gfx.badge.remove();

@@ -7,6 +7,7 @@ export interface HorizontalScalingConfig {
   minInstances: number;
   maxInstances: number;
   targetUtilization: number;
+  startupTimeSeconds: number;
 }
 
 export interface VerticalScalingConfig {
@@ -71,6 +72,7 @@ export function createDefaultAutoScaling(): AutoScalingConfig {
       minInstances: 1,
       maxInstances: 4,
       targetUtilization: 70,
+      startupTimeSeconds: 4,
     },
     vertical: {
       enabled: false,
@@ -119,6 +121,7 @@ export function createReferenceArchitectureConfig(): ArchitectureConfig {
           minInstances: 1,
           maxInstances: 5,
           targetUtilization: 65,
+          startupTimeSeconds: 3,
         },
         vertical: {
           enabled: true,
@@ -141,6 +144,7 @@ export function createReferenceArchitectureConfig(): ArchitectureConfig {
           minInstances: 3,
           maxInstances: 8,
           targetUtilization: 62,
+          startupTimeSeconds: 2.5,
         },
         vertical: {
           enabled: true,
