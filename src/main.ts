@@ -140,12 +140,14 @@ function render(): void {
       ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
 
       <div class="board-viewport" id="board-viewport">
-        <div class="board-world" id="board-world">
-          <div class="board" id="board">
-            <div class="source-node" id="source-node">
-              <div class="source-icon">📨</div>
-              <div class="source-label">Incoming Requests</div>
-              <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Drag to connect"></button>
+        <div class="board-pan" id="board-pan">
+          <div class="board-world" id="board-world">
+            <div class="board" id="board">
+              <div class="source-node" id="source-node">
+                <div class="source-icon">📨</div>
+                <div class="source-label">Incoming Requests</div>
+                <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Drag to connect"></button>
+              </div>
             </div>
           </div>
         </div>
@@ -164,19 +166,25 @@ function render(): void {
 function refreshConfigPalette(): void {
   const palette = document.getElementById('config-palette');
   if (!palette) return;
+
+  const isOpen = selectedComponentId() !== null;
+  palette.classList.toggle('open', isOpen);
+  palette.setAttribute('aria-hidden', String(!isOpen));
+
   const hint = palette.querySelector('.palette-selection');
   if (hint) {
     const type = selectedComponentType();
     hint.className = `palette-selection${type ? '' : ' muted'}`;
     hint.innerHTML = type
-      ? `Selected: <strong>${COMPONENT_DEFS[type].label}</strong>`
-      : 'Select a component to inspect configs';
+      ? `Configuring <strong>${COMPONENT_DEFS[type].label}</strong>`
+      : 'Select a component to configure it';
   }
 }
 
 function applyViewport(): void {
+  const pan = document.getElementById('board-pan');
   const world = document.getElementById('board-world');
-  if (world) applyViewportStyles(world, state.viewport);
+  if (pan && world) applyViewportStyles(pan, world, state.viewport);
   const zoomLabel = document.getElementById('zoom-label');
   if (zoomLabel) zoomLabel.textContent = `${Math.round(state.viewport.zoom * 100)}%`;
 }
@@ -347,7 +355,13 @@ function mountBoard(): void {
     state.selection?.kind === 'text' ? state.selection.id : null
   );
   connectionPreview.mount(board);
-  boardRenderer.mount(board, state.components, state.belts, selectedComponentId());
+  boardRenderer.mount(
+    board,
+    state.components,
+    state.belts,
+    selectedComponentId(),
+    state.componentConfigs
+  );
   boardRenderer.update(null, 0);
   positionSourceNode();
 }
@@ -457,6 +471,7 @@ function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): v
   const cfg = getOrCreateComponentConfig(componentId);
   if (applyConfigChip(cfg, chipId, component.type)) {
     state.componentConfigs.set(componentId, cfg);
+    boardRenderer.updateComponentConfigs(state.componentConfigs);
     selectItem({ kind: 'component', id: componentId });
   }
 }
@@ -662,8 +677,8 @@ function bindEvents(): void {
     if (state.dragging.kind === 'component') {
       const c = state.components.find((x) => x.id === state.dragging!.id);
       if (!c) return;
-      c.x = Math.max(10, world.x - state.dragging.offsetX);
-      c.y = Math.max(10, world.y - state.dragging.offsetY);
+      c.x = world.x - state.dragging.offsetX;
+      c.y = world.y - state.dragging.offsetY;
       boardRenderer.updatePositions(state.components);
       positionSourceNode();
       return;
@@ -743,8 +758,8 @@ function bindEvents(): void {
     if (state.activeTool === 'component' && state.placementType) {
       const comp = createComponent(
         state.placementType,
-        Math.max(20, world.x - 70),
-        Math.max(20, world.y - 36)
+        world.x - 70,
+        world.y - 36
       );
       state.components.push(comp);
       mountBoard();
@@ -847,7 +862,7 @@ function clearPortHighlights(): void {
 function zoomAt(screenX: number, screenY: number, factor: number): void {
   const rect = getViewportRect();
   const before = screenToWorld(screenX, screenY, rect, state.viewport);
-  const newZoom = clampZoom(state.viewport.zoom * factor);
+  const newZoom = clampZoom(Math.round(state.viewport.zoom * factor * 1000) / 1000);
   state.viewport.zoom = newZoom;
   state.viewport.panX = screenX - rect.left - before.x * newZoom;
   state.viewport.panY = screenY - rect.top - before.y * newZoom;

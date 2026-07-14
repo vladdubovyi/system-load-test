@@ -70,12 +70,26 @@ body {
   cursor: grabbing !important;
 }
 
-.board-world {
+.board-pan {
   position: absolute;
   top: 0;
   left: 0;
   transform-origin: 0 0;
-  will-change: transform;
+}
+
+.board-world {
+  position: relative;
+  transform-origin: 0 0;
+}
+
+.board-world,
+.board-world .board-text,
+.board-world .component-name,
+.board-world .problem-frame-inner,
+.board-world .source-label {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: geometricPrecision;
 }
 
 .board {
@@ -626,6 +640,7 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
   user-select: none;
+  text-align: center;
 }
 
 .board-text:empty::before {
@@ -774,49 +789,32 @@ body {
   stroke-linecap: round;
 }
 
-/* ── Config palette (right hover panel) ── */
+/* ── Config palette (opens when a component is selected) ── */
 
 .config-palette {
   position: fixed;
   top: 50%;
   right: 0;
-  transform: translateY(-50%) translateX(calc(100% - 28px));
+  transform: translateY(-50%) translateX(100%);
   z-index: 55;
-  transition: transform 0.2s ease;
-  pointer-events: auto;
+  transition: transform 0.22s ease, opacity 0.18s ease;
+  pointer-events: none;
+  opacity: 0;
 }
 
-.config-palette:hover {
+.config-palette.open {
   transform: translateY(-50%) translateX(0);
-}
-
-.config-palette-tab {
-  position: absolute;
-  left: -1px;
-  top: 50%;
-  transform: translate(-100%, -50%) rotate(-90deg);
-  transform-origin: right center;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--accent);
-  box-shadow: var(--shadow-sm);
+  pointer-events: auto;
+  opacity: 1;
 }
 
 .config-palette-body {
   width: 220px;
   padding: 0.75rem;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-right: none;
+  border: none;
   border-radius: 12px 0 0 12px;
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--shadow-lg);
 }
 
 .config-palette-title {
@@ -942,6 +940,39 @@ body {
   font-size: 0.58rem;
   color: var(--ink-muted);
   margin-top: 0.05rem;
+}
+
+.component-config-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  justify-content: center;
+  margin-top: 0.25rem;
+  max-width: 100%;
+}
+
+.component-config-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.35rem;
+  font-family: var(--font-ui);
+  font-size: 0.52rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.component-config-badge-emoji {
+  font-size: 0.62rem;
+  line-height: 1;
+  flex-shrink: 0;
 }
 
 .fail-badge,

@@ -216,3 +216,56 @@ export function buildReferenceComponentConfigs(
 
   return map;
 }
+
+export interface ConfigBadge {
+  emoji: string;
+  label: string;
+}
+
+export function getActiveConfigBadges(
+  _component: PlacedComponent,
+  config: ComponentInstanceConfig | undefined
+): ConfigBadge[] {
+  if (!config) return [];
+  const badges: ConfigBadge[] = [];
+
+  if (config.autoScaling) {
+    const a = config.autoScaling;
+    if (a.horizontal.enabled) badges.push({ emoji: '↔️', label: 'H-scale' });
+    if (a.vertical.enabled) badges.push({ emoji: '↕️', label: 'V-scale' });
+    if (a.reactive.enabled) badges.push({ emoji: '⚡', label: 'Reactive' });
+    if (a.predictive.enabled) badges.push({ emoji: '📈', label: 'Predictive' });
+  }
+
+  if (config.database) {
+    const d = config.database;
+    if (d.replication.enabled) {
+      badges.push({
+        emoji: '📚',
+        label: `${d.replication.readReplicas} replica${d.replication.readReplicas > 1 ? 's' : ''}`,
+      });
+    }
+    if (d.sharding.enabled) {
+      badges.push({
+        emoji: '🧩',
+        label: `${d.sharding.shardCount} shards`,
+      });
+    }
+  }
+
+  return badges;
+}
+
+export function renderConfigBadgesHtml(
+  component: PlacedComponent,
+  config: ComponentInstanceConfig | undefined
+): string {
+  const badges = getActiveConfigBadges(component, config);
+  if (badges.length === 0) return '';
+  return `<div class="component-config-badges">${badges
+    .map(
+      (b) =>
+        `<span class="component-config-badge" title="${b.label}"><span class="component-config-badge-emoji">${b.emoji}</span>${b.label}</span>`
+    )
+    .join('')}</div>`;
+}

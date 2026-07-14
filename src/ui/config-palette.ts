@@ -6,6 +6,7 @@ export function renderConfigPalette(
   selectedComponentId: string | null,
   selectedComponentType: ComponentType | null
 ): string {
+  const isOpen = selectedComponentId !== null;
   const chips = CONFIG_CHIPS.map(
     (chip) => `
     <button
@@ -22,19 +23,18 @@ export function renderConfigPalette(
   ).join('');
 
   const selectionHint = selectedComponentId
-    ? `<p class="palette-selection">Selected: <strong>${COMPONENT_DEFS[selectedComponentType!]?.label ?? 'Component'}</strong></p>`
-    : `<p class="palette-selection muted">Select a component to inspect configs</p>`;
+    ? `<p class="palette-selection">Configuring <strong>${COMPONENT_DEFS[selectedComponentType!]?.label ?? 'Component'}</strong></p>`
+    : `<p class="palette-selection muted">Select a component to configure it</p>`;
 
   return `
-    <aside class="config-palette" id="config-palette" aria-label="Configuration palette">
-      <div class="config-palette-tab">Configs</div>
+    <aside class="config-palette ${isOpen ? 'open' : ''}" id="config-palette" aria-label="Configuration palette" aria-hidden="${!isOpen}">
       <div class="config-palette-body">
-        <h3 class="config-palette-title">Drag onto components</h3>
+        <h3 class="config-palette-title">Configurations</h3>
         ${selectionHint}
         <div class="config-chip-list">
           ${chips}
         </div>
-        <p class="config-palette-hint">Drop scaling on services, replication/sharding on databases.</p>
+        <p class="config-palette-hint">Drag a config onto the selected component.</p>
       </div>
     </aside>
   `;

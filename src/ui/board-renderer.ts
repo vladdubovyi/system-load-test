@@ -1,6 +1,8 @@
 import type { ConveyorBelt, PlacedComponent, Port, Request, SimulationSnapshot } from '../game/types';
 import { COMPONENT_DEFS, REQUEST_COLORS } from '../game/types';
 import { getComponentPorts, getSourcePort, loadColor } from '../game/simulation';
+import type { ComponentInstanceConfig } from '../game/component-config';
+import { renderConfigBadgesHtml } from '../game/component-config';
 import { WORLD_HEIGHT, WORLD_WIDTH } from './viewport';
 
 const MAX_VISIBLE_REQUESTS = 96;
@@ -32,15 +34,18 @@ export class BoardRenderer {
   private components: PlacedComponent[] = [];
   private belts: ConveyorBelt[] = [];
   private beltById = new Map<string, ConveyorBelt>();
+  private componentConfigs = new Map<string, ComponentInstanceConfig>();
 
   mount(
     board: HTMLElement,
     components: PlacedComponent[],
     belts: ConveyorBelt[],
-    selectedComponentId: string | null = null
+    selectedComponentId: string | null = null,
+    componentConfigs: Map<string, ComponentInstanceConfig> = new Map()
   ): void {
     this.components = components;
     this.belts = belts;
+    this.componentConfigs = componentConfigs;
     this.beltById = new Map(belts.map((belt) => [belt.id, belt]));
     this.displayedBeltLoads.clear();
     this.rebuildPortMap();
@@ -170,6 +175,7 @@ export class BoardRenderer {
           <span class="component-emoji">${def.emoji}</span>
           <span class="component-name">${def.label}</span>
           <span class="component-load"></span>
+          ${renderConfigBadgesHtml(component, this.componentConfigs.get(component.id))}
         </div>
         <button class="port port-in" data-port-id="${component.id}:in" type="button" title="Input"></button>
         <button class="port port-out" data-port-id="${component.id}:out" type="button" title="Output"></button>
@@ -189,6 +195,24 @@ export class BoardRenderer {
   updateSelection(selectedComponentId: string | null): void {
     for (const [id, gfx] of this.componentGraphics) {
       gfx.root.classList.toggle('selected', id === selectedComponentId);
+    }
+  }
+
+  updateComponentConfigs(componentConfigs: Map<string, ComponentInstanceConfig>): void {
+    this.componentConfigs = componentConfigs;
+    for (const component of this.components) {
+      const gfx = this.componentGraphics.get(component.id);
+      if (!gfx) continue;
+      const inner = gfx.root.querySelector('.component-inner');
+      if (!inner) continue;
+      inner.querySelector('.component-config-badges')?.remove();
+      const badgesHtml = renderConfigBadgesHtml(
+        component,
+        componentConfigs.get(component.id)
+      );
+      if (badgesHtml) {
+        inner.insertAdjacentHTML('beforeend', badgesHtml);
+      }
     }
   }
 
