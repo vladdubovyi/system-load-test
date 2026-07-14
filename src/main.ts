@@ -143,6 +143,12 @@ const annotationRenderer = new AnnotationRenderer();
 const connectionPreview = new ConnectionPreview();
 const app = document.getElementById('app')!;
 
+let clipboard: {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  configs: Map<string, ComponentInstanceConfig>;
+} | null = null;
+
 interface BoardSnapshot {
   components: PlacedComponent[];
   belts: ConveyorBelt[];
@@ -688,6 +694,15 @@ function bindEvents(): void {
       e.preventDefault();
       redo();
     }
+    // Copy/Paste shortcuts
+    if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+      e.preventDefault();
+      copySelection();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+      e.preventDefault();
+      pasteSelection();
+    }
   });
 
   window.addEventListener('keyup', (e) => {
@@ -1061,6 +1076,95 @@ function stopSimulation(): void {
   if (snap?.status === 'running') state.lastRunStatus = 'idle';
   refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
   updateStatus();
+}
+
+// Copy/Paste functions
+function copySelection(): void {
+  if (!state.selection || state.selection.kind !== 'component') return;
+  
+  const selectedId = state.selection.id;
+  const selectedComponent = state.components.find(c => c.id === selectedId);
+  if (!selectedComponent) return;
+  
+  clipboard = {
+    components: [selectedComponent],
+    belts: state.belts.filter(b => {
+      const fromParts = b.fromPortId.split(':');
+      const toParts = b.toPortId.split(':');
+      return fromParts[0] === selectedId || toParts[0] === selectedId;
+    }).filter(b => {
+      // Only include belts that connect to other selected components
+      const fromParts = b.fromPortId.split(':');
+      const toParts = b.toPortId.split(':');
+      return fromParts[0] === selectedId && toParts[0] === selectedId;
+    }),
+    configs: state.componentConfigs.has(selectedId)
+      ? new Map([[selectedId, state.componentConfigs.get(selectedId)!]])
+      : new Map(),
+  };
+  
+  console.log('Copied component to clipboard');
+}
+
+function pasteSelection(): void {
+  if (!clipboard || clipboard.components.length === 0) return;
+  
+  const idMap = new Map<string, string>();
+  const newComponents: PlacedComponent[] = [];
+  
+  // Clone components with new IDs and offset position
+  for (const comp of clipboard.components) {
+    const newId = `${comp.type}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    idMap.set(comp.id, newId);
+    
+    newComponents.push({
+      ...comp,
+      id: newId,
+      x: comp.x + 40,
+      y: comp.y + 40,
+    });
+  }
+  
+  // Clone belts with remapped IDs
+  const newBelts: ConveyorBelt[] = [];
+  for (const belt of clipboard.belts) {
+    const fromParts = belt.fromPortId.split(':');
+    const toParts = belt.toPortId.split(':');
+    const newFromId = idMap.get(fromParts[0]);
+    const newToId = idMap.get(toParts[0]);
+    
+    if (newFromId && newToId) {
+      newBelts.push({
+        ...belt,
+        id: `belt-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        fromPortId: `${newFromId}:${fromParts[1]}`,
+        toPortId: `${newToId}:${toParts[1]}`,
+      });
+    }
+  }
+  
+  // Clone configs with remapped IDs
+  for (const [oldId, config] of clipboard.configs) {
+    const newId = idMap.get(oldId);
+    if (newId) {
+      state.componentConfigs.set(newId, structuredClone(config));
+    }
+  }
+  
+  // Add to state
+  state.components.push(...newComponents);
+  state.belts.push(...newBelts);
+  
+  // Select the pasted component
+  if (newComponents.length > 0) {
+    selectItem({ kind: 'component', id: newComponents[0].id });
+  }
+  
+  mountBoard();
+  invalidateBoardSnapshot();
+  pushHistory();
+  
+  console.log('Pasted component from clipboard');
 }
 
 // History management functions
