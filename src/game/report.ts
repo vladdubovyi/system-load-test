@@ -15,6 +15,7 @@ import {
   getAutoScalingForComponent,
   getDatabaseConfigForComponent,
 } from './component-config';
+import { getScaleGroupMembers } from './scale-instances';
 
 const REQUIRED_COMPONENTS: ComponentType[] = [
   'load-balancer',
@@ -69,11 +70,15 @@ function effectiveMonthlyCost(
   input: ReportInput
 ): number {
   const def = COMPONENT_DEFS[component.type];
+  if (component.scaleGroupId && component.scaleGroupId !== component.id) {
+    return 0;
+  }
+
   let cost = def.monthlyCost;
   const scaling = input.scalingState.get(component.id);
 
   if (component.type === 'shortener' || component.type === 'backend') {
-    const instances = scaling?.maxInstancesReached ?? 1;
+    const instances = getScaleGroupMembers(input.components, component.id).length;
     const vertical = scaling?.maxVerticalMultiplier ?? 1;
     cost *= instances * vertical;
   }
@@ -91,17 +96,20 @@ function effectiveMonthlyCost(
 }
 
 function buildComponentReports(input: ReportInput): ComponentReport[] {
-  return input.components.map((component) => {
+  return input.components
+    .filter(
+      (component) => !component.scaleGroupId || component.scaleGroupId === component.id
+    )
+    .map((component) => {
     const tel = input.telemetry.get(component.id);
     const st = input.componentState.get(component.id);
     const def = COMPONENT_DEFS[component.type];
     const avgLoad = tel ? tel.loadIntegral / Math.max(input.duration, 0.001) : 0;
     const processed = st?.processed ?? 0;
     const scaling = input.scalingState.get(component.id);
+    const instances = getScaleGroupMembers(input.components, component.id).length;
     const effectiveCapacity =
-      component.capacity *
-      (scaling?.maxInstancesReached ?? 1) *
-      (scaling?.maxVerticalMultiplier ?? 1);
+      component.capacity * instances * (scaling?.maxVerticalMultiplier ?? 1);
     const utilizationPct =
       effectiveCapacity > 0
         ? (processed / (effectiveCapacity * input.duration)) * 100

@@ -16,6 +16,7 @@ import { buildSimulationReport } from './report';
 import type { ComponentInstanceConfig } from './component-config';
 import {
   aggregateArchitectureConfig,
+  cloneComponentConfig,
   getAutoScalingForComponent,
   getDatabaseConfigForComponent,
 } from './component-config';
@@ -25,6 +26,15 @@ import type {
   DatabaseConfig,
 } from './architecture-config';
 import { isScalableType } from './architecture-config';
+import {
+  createInstanceBelts,
+  createScaleInstance,
+  getScaleGroupMembers,
+  getScalePrimaryId,
+  isScalePrimary,
+  pickDespawnInstance,
+  removeInstanceBelts,
+} from './scale-instances';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -198,9 +208,13 @@ export function canConnect(
   return false;
 }
 
+export type TopologyChangeListener = () => void;
+
 export class SimulationEngine {
   private components: PlacedComponent[];
   private belts: ConveyorBelt[];
+  private readonly initialComponents: PlacedComponent[];
+  private readonly initialBelts: ConveyorBelt[];
   private componentMap: Map<string, PlacedComponent>;
   private portMap: Map<string, Port>;
   private beltByFromPort: Map<string, ConveyorBelt[]>;
@@ -232,15 +246,21 @@ export class SimulationEngine {
   private scalingState = new Map<string, ComponentScalingState>();
   private scaleUpTimers = new Map<string, number>();
   private scaleDownTimers = new Map<string, number>();
+  private startupUntil = new Map<string, number>();
+  private onTopologyChange: TopologyChangeListener | null = null;
 
   constructor(
     components: PlacedComponent[],
     belts: ConveyorBelt[],
-    componentConfigs: Map<string, ComponentInstanceConfig> = new Map()
+    componentConfigs: Map<string, ComponentInstanceConfig> = new Map(),
+    onTopologyChange: TopologyChangeListener | null = null
   ) {
     this.componentConfigs = componentConfigs;
     this.components = components;
     this.belts = belts;
+    this.initialComponents = structuredClone(components);
+    this.initialBelts = structuredClone(belts);
+    this.onTopologyChange = onTopologyChange;
     this.componentMap = new Map(components.map((c) => [c.id, c]));
     this.portMap = new Map();
     this.beltByFromPort = new Map();
@@ -263,6 +283,239 @@ export class SimulationEngine {
     this.componentConfigs = configs;
   }
 
+  setTopologyChangeListener(listener: TopologyChangeListener | null): void {
+    this.onTopologyChange = listener;
+  }
+
+  private scalingPrimaryId(component: PlacedComponent): string | null {
+    if (!isScalableType(component.type)) return null;
+    return isScalePrimary(component) ? component.id : getScalePrimaryId(component);
+  }
+
+  private isStartingUp(componentId: string): boolean {
+    const until = this.startupUntil.get(componentId);
+    return until !== undefined && this.time < until;
+  }
+
+  private startupProgress(componentId: string): number {
+    const until = this.startupUntil.get(componentId);
+    if (until === undefined) return 1;
+    if (this.time >= until) return 1;
+    const primaryId = this.scalingPrimaryId(this.componentMap.get(componentId)!);
+    if (!primaryId) return 1;
+    const component = this.componentMap.get(primaryId)!;
+    const cfg = this.scalingConfig(component);
+    const duration = cfg?.horizontal.startupTimeSeconds ?? 4;
+    if (duration <= 0) return 1;
+    const remaining = until - this.time;
+    return clamp(1 - remaining / duration, 0, 1);
+  }
+
+  private restoreInitialTopology(): void {
+    this.components.length = 0;
+    this.components.push(...structuredClone(this.initialComponents));
+    this.belts.length = 0;
+    this.belts.push(...structuredClone(this.initialBelts));
+    this.rebuildComponentMaps();
+    this.startupUntil.clear();
+  }
+
+  private rebuildComponentMaps(): void {
+    this.componentMap = new Map(this.components.map((component) => [component.id, component]));
+    this.beltByFromPort.clear();
+    this.beltByToPort.clear();
+    this.beltById.clear();
+
+    for (const belt of this.belts) {
+      const list = this.beltByFromPort.get(belt.fromPortId) ?? [];
+      list.push(belt);
+      this.beltByFromPort.set(belt.fromPortId, list);
+      this.beltByToPort.set(belt.toPortId, belt);
+      this.beltById.set(belt.id, belt);
+    }
+
+    this.rebuildPorts();
+  }
+
+  private initComponentRuntime(component: PlacedComponent, startupSeconds = 0): void {
+    const startingUp = startupSeconds > 0;
+    this.componentState.set(component.id, {
+      load: 0,
+      queue: 0,
+      processing: 0,
+      failed: false,
+      processed: 0,
+      dropped: 0,
+      startingUp,
+      startupProgress: startingUp ? 0 : 1,
+    });
+    this.completionDebt.set(component.id, 0);
+    this.telemetry.set(component.id, {
+      loadIntegral: 0,
+      maxLoad: 0,
+      maxQueueFill: 0,
+      downtimeSeconds: 0,
+      overloadSeconds: 0,
+      queuePressureSeconds: 0,
+      idleSeconds: 0,
+      failedAt: null,
+    });
+    this.overloadTimers.set(component.id, 0);
+
+    if (startupSeconds > 0) {
+      this.startupUntil.set(component.id, this.time + startupSeconds);
+    }
+  }
+
+  private registerScaleInstance(
+    primary: PlacedComponent,
+    instance: PlacedComponent,
+    newBelts: ConveyorBelt[],
+    startupSeconds: number
+  ): void {
+    this.components.push(instance);
+    this.componentMap.set(instance.id, instance);
+    this.belts.push(...newBelts);
+
+    for (const belt of newBelts) {
+      const list = this.beltByFromPort.get(belt.fromPortId) ?? [];
+      list.push(belt);
+      this.beltByFromPort.set(belt.fromPortId, list);
+      this.beltByToPort.set(belt.toPortId, belt);
+      this.beltById.set(belt.id, belt);
+      this.beltState.set(belt.id, { load: 0, traveling: 0, dropped: 0 });
+    }
+
+    this.rebuildPorts();
+    this.initComponentRuntime(instance, startupSeconds);
+
+    const primaryConfig = this.componentConfigs.get(primary.id);
+    if (primaryConfig) {
+      this.componentConfigs.set(instance.id, cloneComponentConfig(primaryConfig));
+    }
+  }
+
+  private unregisterScaleInstance(instance: PlacedComponent): void {
+    const removedBelts = new Set(
+      this.belts
+        .filter(
+          (belt) =>
+            belt.fromPortId.startsWith(`${instance.id}:`) ||
+            belt.toPortId.startsWith(`${instance.id}:`)
+        )
+        .map((belt) => belt.id)
+    );
+
+    this.components.splice(
+      this.components.findIndex((component) => component.id === instance.id),
+      1
+    );
+    this.componentMap.delete(instance.id);
+    this.componentState.delete(instance.id);
+    this.completionDebt.delete(instance.id);
+    this.telemetry.delete(instance.id);
+    this.overloadTimers.delete(instance.id);
+    this.startupUntil.delete(instance.id);
+    this.componentConfigs.delete(instance.id);
+
+    const remainingBelts = removeInstanceBelts(instance.id, this.belts);
+    this.belts.length = 0;
+    this.belts.push(...remainingBelts);
+
+    for (const beltId of removedBelts) {
+      this.beltState.delete(beltId);
+    }
+
+    this.rebuildComponentMaps();
+  }
+
+  private spawnScaleInstance(primary: PlacedComponent, skipStartup = false): void {
+    const group = getScaleGroupMembers(this.components, primary.id);
+    const instanceIndex = group.length;
+    const instance = createScaleInstance(primary, instanceIndex);
+    const newBelts = createInstanceBelts(primary, instance, this.components, this.belts);
+    const cfg = this.scalingConfig(primary);
+    const startupSeconds =
+      !skipStartup &&
+      cfg?.horizontal.enabled &&
+      cfg.horizontal.startupTimeSeconds > 0
+        ? cfg.horizontal.startupTimeSeconds
+        : 0;
+
+    this.registerScaleInstance(primary, instance, newBelts, startupSeconds);
+    this.message = `${primary.label} scaled out to ${group.length + 1} instances`;
+    this.onTopologyChange?.();
+  }
+
+  private despawnScaleInstance(primary: PlacedComponent): void {
+    const victim = pickDespawnInstance(this.components, primary.id);
+    if (!victim) return;
+    this.unregisterScaleInstance(victim);
+    const remaining = getScaleGroupMembers(this.components, primary.id).length;
+    this.message = `${primary.label} scaled in to ${remaining} instances`;
+    this.onTopologyChange?.();
+  }
+
+  private reconcileScaleInstances(): void {
+    for (const component of [...this.components]) {
+      if (!isScalePrimary(component)) continue;
+
+      const cfg = this.scalingConfig(component);
+      const scaling = this.scalingState.get(component.id);
+      if (!cfg?.horizontal.enabled || !scaling) continue;
+
+      let actual = getScaleGroupMembers(this.components, component.id).length;
+      while (actual < scaling.instances) {
+        const skipStartup =
+          actual < cfg.horizontal.minInstances ||
+          (this.spikeActive && cfg.predictive.enabled);
+        this.spawnScaleInstance(component, skipStartup);
+        actual += 1;
+      }
+      while (actual > scaling.instances) {
+        this.despawnScaleInstance(component);
+        actual -= 1;
+      }
+    }
+  }
+
+  private aggregateGroupMetrics(primary: PlacedComponent): {
+    utilization: number;
+    queuePressure: number;
+    totalProcessing: number;
+    totalCapacity: number;
+  } {
+    const members = getScaleGroupMembers(this.components, primary.id);
+    let totalProcessing = 0;
+    let totalCapacity = 0;
+    let totalQueue = 0;
+    let totalQueueLimit = 0;
+
+    for (const member of members) {
+      const state = this.componentState.get(member.id);
+      if (!state) continue;
+      totalProcessing += state.processing;
+      totalCapacity += this.getEffectiveCapacity(member);
+      totalQueue += state.queue;
+      totalQueueLimit += this.getEffectiveQueueLimit(member);
+    }
+
+    const utilization =
+      totalCapacity > 0 ? (totalProcessing / totalCapacity) * 100 : 0;
+    const queuePressure =
+      totalQueueLimit > 0 ? (totalQueue / totalQueueLimit) * 100 : 0;
+
+    return { utilization, queuePressure, totalProcessing, totalCapacity };
+  }
+
+  private updateStartupStates(): void {
+    for (const [componentId, state] of this.componentState) {
+      const startingUp = this.isStartingUp(componentId);
+      state.startingUp = startingUp;
+      state.startupProgress = this.startupProgress(componentId);
+    }
+  }
+
   private scalingConfig(component: PlacedComponent): AutoScalingConfig | null {
     return getAutoScalingForComponent(component, this.componentConfigs);
   }
@@ -276,6 +529,7 @@ export class SimulationEngine {
     this.scaleUpTimers.clear();
     this.scaleDownTimers.clear();
     for (const component of this.components) {
+      if (!isScalePrimary(component)) continue;
       const cfg = this.scalingConfig(component);
       const minInstances =
         cfg?.horizontal.enabled ? cfg.horizontal.minInstances : 1;
@@ -305,19 +559,19 @@ export class SimulationEngine {
   }
 
   private getEffectiveCapacity(component: PlacedComponent): number {
+    if (this.isStartingUp(component.id)) return 0;
+
     if (component.type === 'database') {
       return component.capacity * this.getDatabaseMultiplier(component);
     }
 
     if (isScalableType(component.type)) {
-      const scaling = this.scalingState.get(component.id);
-      const cfg = this.scalingConfig(component);
-      if (
-        scaling &&
-        cfg &&
-        (cfg.horizontal.enabled || cfg.vertical.enabled || cfg.predictive.enabled)
-      ) {
-        return component.capacity * scaling.instances * scaling.verticalMultiplier;
+      const primaryId = getScalePrimaryId(component);
+      const scaling = this.scalingState.get(primaryId);
+      const primary = this.componentMap.get(primaryId);
+      const cfg = primary ? this.scalingConfig(primary) : null;
+      if (scaling && cfg && cfg.vertical.enabled) {
+        return component.capacity * scaling.verticalMultiplier;
       }
     }
 
@@ -325,25 +579,19 @@ export class SimulationEngine {
   }
 
   private getEffectiveQueueLimit(component: PlacedComponent): number {
-    if (isScalableType(component.type)) {
-      const scaling = this.scalingState.get(component.id);
-      const cfg = this.scalingConfig(component);
-      if (scaling && cfg?.horizontal.enabled) {
-        return component.queueLimit * scaling.instances;
-      }
-    }
+    if (this.isStartingUp(component.id)) return 0;
+
     if (component.type === 'database') {
       return Math.round(component.queueLimit * this.getDatabaseMultiplier(component));
     }
     return component.queueLimit;
   }
 
-  /** Pre-scale before traffic arrives so spikes do not drop at the load balancer. */
   private applyPredictiveScaling(): void {
     if (!this.spikeActive) return;
 
     for (const component of this.components) {
-      if (!isScalableType(component.type)) continue;
+      if (!isScalePrimary(component)) continue;
 
       const cfg = this.scalingConfig(component);
       const scaling = this.scalingState.get(component.id)!;
@@ -353,7 +601,9 @@ export class SimulationEngine {
         component.type === 'backend'
           ? SCENARIO.readRatio
           : 1 - SCENARIO.readRatio;
-      const needed = Math.ceil((this.currentRps * trafficShare) / component.capacity);
+      const needed = Math.ceil(
+        (this.currentRps * trafficShare) / component.capacity
+      );
       const desired = Math.min(
         cfg.horizontal.maxInstances,
         Math.max(
@@ -364,28 +614,24 @@ export class SimulationEngine {
       scaling.instances = desired;
       scaling.maxInstancesReached = Math.max(scaling.maxInstancesReached, scaling.instances);
     }
+
+    this.reconcileScaleInstances();
   }
 
   private updateAutoScaling(dt: number): void {
     for (const component of this.components) {
-      if (!isScalableType(component.type)) continue;
+      if (!isScalePrimary(component)) continue;
 
       const cfg = this.scalingConfig(component);
       if (!cfg) continue;
       const scaling = this.scalingState.get(component.id)!;
-      const state = this.componentState.get(component.id)!;
+      const { utilization, queuePressure } = this.aggregateGroupMetrics(component);
       const targetUtil = cfg.horizontal.targetUtilization;
-      const queueLimit = this.getEffectiveQueueLimit(component);
-      const queuePressure =
-        queueLimit > 0 ? (state.queue / queueLimit) * 100 : 0;
-      const effectiveCap = this.getEffectiveCapacity(component);
-      const utilization =
-        effectiveCap > 0 ? (state.processing / effectiveCap) * 100 : state.load;
 
       if (!cfg.reactive.enabled) {
         scaling.maxInstancesReached = Math.max(
           scaling.maxInstancesReached,
-          scaling.instances
+          getScaleGroupMembers(this.components, component.id).length
         );
         scaling.maxVerticalMultiplier = Math.max(
           scaling.maxVerticalMultiplier,
@@ -422,7 +668,6 @@ export class SimulationEngine {
         ) {
           scaling.instances += 1;
           this.scaleUpTimers.set(component.id, 0);
-          this.message = `${component.label} auto-scaled to ${scaling.instances} instances`;
         } else if (
           cfg.vertical.enabled &&
           scaling.verticalMultiplier < cfg.vertical.maxMultiplier &&
@@ -448,13 +693,15 @@ export class SimulationEngine {
 
       scaling.maxInstancesReached = Math.max(
         scaling.maxInstancesReached,
-        scaling.instances
+        getScaleGroupMembers(this.components, component.id).length
       );
       scaling.maxVerticalMultiplier = Math.max(
         scaling.maxVerticalMultiplier,
         scaling.verticalMultiplier
       );
     }
+
+    this.reconcileScaleInstances();
   }
 
   private rebuildPorts(): void {
@@ -473,27 +720,11 @@ export class SimulationEngine {
     this.beltState.clear();
     this.telemetry.clear();
     this.completionDebt.clear();
+    this.overloadTimers.clear();
+    this.startupUntil.clear();
     this.initScalingState();
     for (const component of this.components) {
-      this.componentState.set(component.id, {
-        load: 0,
-        queue: 0,
-        processing: 0,
-        failed: false,
-        processed: 0,
-        dropped: 0,
-      });
-      this.completionDebt.set(component.id, 0);
-      this.telemetry.set(component.id, {
-        loadIntegral: 0,
-        maxLoad: 0,
-        maxQueueFill: 0,
-        downtimeSeconds: 0,
-        overloadSeconds: 0,
-        queuePressureSeconds: 0,
-        idleSeconds: 0,
-        failedAt: null,
-      });
+      this.initComponentRuntime(component, 0);
     }
     for (const belt of this.belts) {
       this.beltState.set(belt.id, { load: 0, traveling: 0, dropped: 0 });
@@ -508,13 +739,14 @@ export class SimulationEngine {
     this.totalCompleted = 0;
     this.totalDropped = 0;
     this.requests = [];
-    this.overloadTimers.clear();
-    this.completionDebt.clear();
     this.peakRps = 0;
     this.spikeEvents = 0;
     this.wasSpikeActive = false;
     this.draining = false;
+    this.restoreInitialTopology();
     this.resetStates();
+    this.reconcileScaleInstances();
+    this.onTopologyChange?.();
     this.message = 'Simulation running — watch for red overload!';
     nextRequestId = 1;
   }
@@ -528,7 +760,9 @@ export class SimulationEngine {
     this.status = 'idle';
     this.time = 0;
     this.requests = [];
+    this.restoreInitialTopology();
     this.resetStates();
+    this.onTopologyChange?.();
     this.totalSpawned = 0;
     this.totalCompleted = 0;
     this.totalDropped = 0;
@@ -541,6 +775,7 @@ export class SimulationEngine {
     }
 
     this.time += dt;
+    this.updateStartupStates();
     const inDrain =
       this.draining || this.time >= SCENARIO.duration;
 
@@ -743,7 +978,7 @@ export class SimulationEngine {
     component: PlacedComponent,
     state: ComponentState
   ): boolean {
-    if (state.failed) return false;
+    if (state.failed || state.startingUp) return false;
 
     if (component.type === 'load-balancer') {
       if (request.kind === 'create') {
@@ -775,7 +1010,9 @@ export class SimulationEngine {
       const port = this.portMap.get(belt.toPortId);
       if (!port) return false;
       const comp = this.componentMap.get(port.componentId);
-      return comp?.type === targetType;
+      if (!comp || comp.type !== targetType) return false;
+      if (this.isStartingUp(comp.id)) return false;
+      return true;
     });
 
     if (validBelts.length === 0) return false;
@@ -1027,7 +1264,7 @@ export class SimulationEngine {
     const scaling = new Map<string, { instances: number; verticalMultiplier: number }>();
     for (const [id, st] of this.scalingState) {
       scaling.set(id, {
-        instances: st.instances,
+        instances: getScaleGroupMembers(this.components, id).length,
         verticalMultiplier: st.verticalMultiplier,
       });
     }

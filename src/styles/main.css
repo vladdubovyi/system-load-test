@@ -998,6 +998,24 @@ body {
   color: #fff;
 }
 
+.startup-badge {
+  background: #4c6ef5;
+  color: #fff;
+  border-color: #364fc7;
+}
+
+.component.starting-up .component-inner {
+  opacity: 0.72;
+  border-style: dashed;
+}
+
+.component.scale-instance .component-name::after {
+  content: ' (instance)';
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+
 .port {
   position: absolute;
   width: 14px;

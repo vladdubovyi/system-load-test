@@ -232,6 +232,9 @@ export function getActiveConfigBadges(
   if (config.autoScaling) {
     const a = config.autoScaling;
     if (a.horizontal.enabled) badges.push({ emoji: '↔️', label: 'H-scale' });
+    if (a.horizontal.enabled && a.horizontal.startupTimeSeconds > 0) {
+      badges.push({ emoji: '🚀', label: `${a.horizontal.startupTimeSeconds}s boot` });
+    }
     if (a.vertical.enabled) badges.push({ emoji: '↕️', label: 'V-scale' });
     if (a.reactive.enabled) badges.push({ emoji: '⚡', label: 'Reactive' });
     if (a.predictive.enabled) badges.push({ emoji: '📈', label: 'Predictive' });

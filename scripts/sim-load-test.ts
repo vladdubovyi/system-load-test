@@ -3,8 +3,8 @@ import { buildPreset } from '../src/game/presets';
 import { SCENARIO } from '../src/game/types';
 import { buildReferenceComponentConfigs } from '../src/game/component-config';
 
-const { components, belts } = buildPreset();
-const componentConfigs = buildReferenceComponentConfigs(components);
+const { components: presetComponents, belts: presetBelts } = buildPreset();
+const componentConfigs = buildReferenceComponentConfigs(presetComponents);
 const dt = 1 / 60;
 
 let maxObservedLoad = 0;
@@ -12,6 +12,8 @@ let hundreds = 0;
 const runs = 20;
 
 for (let run = 0; run < runs; run++) {
+  const components = structuredClone(presetComponents);
+  const belts = structuredClone(presetBelts);
   const engine = new SimulationEngine(components, belts, componentConfigs);
   engine.start();
 
