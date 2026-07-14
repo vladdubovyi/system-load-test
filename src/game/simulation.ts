@@ -1284,6 +1284,57 @@ export class SimulationEngine {
       message: this.message,
     };
   }
+
+  injectFailure(componentId: string, type: 'shutdown' | 'latency' | 'capacity' | 'partition', duration: number): void {
+    const component = this.componentMap.get(componentId);
+    if (!component) {
+      console.warn(`Cannot inject failure: component ${componentId} not found`);
+      return;
+    }
+
+    const state = this.componentState.get(componentId);
+    if (!state) {
+      console.warn(`Cannot inject failure: component state for ${componentId} not found`);
+      return;
+    }
+
+    // Apply the failure effect
+    switch (type) {
+      case 'shutdown':
+        // Simulate shutdown by setting capacity to 0
+        component.capacity = 0;
+        this.message = `⚠️ ${component.label} has shut down!`;
+        break;
+      case 'latency':
+        // This would require more engine changes, so just mark as degraded
+        this.message = `🐌 ${component.label} experiencing high latency!`;
+        break;
+      case 'capacity':
+        // Reduce capacity by 50%
+        const originalCapacity = component.capacity;
+        component.capacity = Math.floor(originalCapacity * 0.5);
+        this.message = `⚠️ ${component.label} capacity reduced to 50%!`;
+        break;
+      case 'partition':
+        // This would require removing connections, simplified for now
+        this.message = `🔌 ${component.label} network partition detected!`;
+        break;
+    }
+
+    // Schedule recovery after duration
+    setTimeout(() => {
+      if (type === 'shutdown' || type === 'capacity') {
+        // Restore capacity (this is a simplified approach)
+        const def = COMPONENT_DEFS[component.type];
+        if (def) {
+          component.capacity = def.capacity;
+          this.message = `✅ ${component.label} recovered from failure.`;
+        }
+      }
+    }, duration * 1000);
+
+    console.log(`Injected ${type} failure to ${component.label} for ${duration}s`);
+  }
 }
 
 export function loadColor(load: number): string {

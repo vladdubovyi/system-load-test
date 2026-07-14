@@ -1847,3 +1847,54 @@ body {
   background: var(--accent-soft);
   color: var(--ink);
 }
+
+/* Failure Injection Panel */
+.failure-panel {
+  position: fixed;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: 320px;
+  background: var(--surface);
+  border: 2px solid var(--danger);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 600;
+}
+
+.failure-warning {
+  padding: 12px;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #856404;
+  margin-top: 16px;
+}
+
+.failure-warning strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.config-btn-danger {
+  background: var(--danger);
+  color: white;
+}
+
+.config-btn-danger:hover {
+  background: #c82333;
+}
+
+.no-components {
+  text-align: center;
+  color: var(--ink-muted);
+  padding: 32px 16px;
+  font-size: 14px;
+}
+
+.modal-container {
+  position: fixed;
+  inset: 0;
+  z-index: 599;
+}

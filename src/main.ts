@@ -53,6 +53,7 @@ import { initializeApp } from './game/app-init';
 import { componentRegistry } from './game/component-registry';
 import { mountChallengeSelector } from './ui/challenge-selector';
 import { mountTrafficConfigPanel } from './ui/traffic-config-panel';
+import { mountFailureInjectionPanel, type InjectedFailure } from './ui/failure-injection-panel';
 import type { Challenge, TrafficProfile } from './game/scenario-types';
 
 type BoardSelection =
@@ -98,6 +99,7 @@ interface GameState {
   maxHistory: number;
   trafficConfigOpen: boolean;
   customTrafficConfig: TrafficProfile | null;
+  failureInjectionOpen: boolean;
 }
 
 interface HistoryEntry {
@@ -141,6 +143,7 @@ const state: GameState = {
   maxHistory: 50,
   trafficConfigOpen: false,
   customTrafficConfig: null,
+  failureInjectionOpen: false,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -612,6 +615,7 @@ function bindEvents(): void {
     else startSimulation();
   });
   document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
+  document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
   document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
   
@@ -1296,6 +1300,42 @@ function showTrafficConfigPanel(): void {
 function closeTrafficConfig(): void {
   state.trafficConfigOpen = false;
   document.getElementById('traffic-config-container')?.remove();
+}
+
+// Failure injection functions
+function openFailureInjection(): void {
+  if (!isSimRunning()) {
+    alert('Start the simulation first before injecting failures!');
+    return;
+  }
+  
+  state.failureInjectionOpen = true;
+  showFailureInjectionPanel();
+}
+
+function showFailureInjectionPanel(): void {
+  const container = document.createElement('div');
+  container.id = 'failure-injection-container';
+  container.className = 'modal-container';
+  
+  document.body.appendChild(container);
+  
+  mountFailureInjectionPanel(
+    container,
+    state.components,
+    (failure) => {
+      if (state.engine) {
+        state.engine.injectFailure(failure.componentId, failure.type, failure.duration);
+        console.log('Injected failure:', failure);
+      }
+    },
+    () => closeFailureInjection()
+  );
+}
+
+function closeFailureInjection(): void {
+  state.failureInjectionOpen = false;
+  document.getElementById('failure-injection-container')?.remove();
 }
 
 // Initialize app with backend data
