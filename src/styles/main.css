@@ -60,6 +60,14 @@ body {
   background-image: radial-gradient(circle, var(--canvas-grid) 1px, transparent 1px);
   background-size: 20px 20px;
   touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.board-viewport.is-panning,
+.board-viewport.is-panning * {
+  user-select: none !important;
+  cursor: grabbing !important;
 }
 
 .board-world {
@@ -94,8 +102,55 @@ body {
   top: 12px;
   left: 12px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.5rem;
+  z-index: 60;
+}
+
+.main-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  padding: 0.4rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+}
+
+.main-menu-dropdown[hidden] {
+  display: none;
+}
+
+.menu-item {
+  display: block;
+  width: 100%;
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  font-size: 0.84rem;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.menu-item:hover {
+  background: #f1f3f4;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.35rem 0;
+}
+
+.menu-hint {
+  margin: 0.2rem 0.55rem;
+  font-size: 0.68rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
 }
 
 .chrome-menu-btn {
@@ -449,6 +504,7 @@ body {
   top: 28px;
   width: 340px;
   pointer-events: none;
+  user-select: none;
 }
 
 .problem-frame-inner {
@@ -569,6 +625,13 @@ body {
   cursor: move;
   white-space: pre-wrap;
   word-break: break-word;
+  user-select: none;
+}
+
+.board-text:empty::before {
+  content: 'Type here…';
+  color: var(--ink-faint);
+  pointer-events: none;
 }
 
 .board-text:hover {
@@ -577,9 +640,11 @@ body {
 
 .board-text.editing {
   border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.95);
   cursor: text;
   outline: none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ── Belts & particles ── */
@@ -624,6 +689,15 @@ body {
   position: absolute;
   inset: 0;
   z-index: 3;
+}
+
+.board,
+.components-layer,
+.annotations-layer,
+.source-node,
+.component {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* ── Source & components ── */

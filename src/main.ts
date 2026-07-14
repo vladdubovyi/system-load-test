@@ -37,7 +37,7 @@ import {
   clampZoom,
   DEFAULT_VIEWPORT,
   screenToWorld,
-  viewportTransform,
+  applyViewportStyles,
   type ViewportState,
 } from './ui/viewport';
 import {
@@ -56,6 +56,8 @@ interface GameState {
   dragging: { kind: 'component' | 'text'; id: string; offsetX: number; offsetY: number } | null;
   panning: { startX: number; startY: number; panX: number; panY: number } | null;
   drawing: DrawStroke | null;
+  erasing: boolean;
+  pointerDragged: boolean;
   spaceHeld: boolean;
   viewport: ViewportState;
   configOpen: boolean;
@@ -82,12 +84,14 @@ const state: GameState = {
   components: [],
   belts: [],
   annotations: createDefaultAnnotations(),
-  activeTool: 'select',
+  activeTool: 'hand',
   selectedComponent: null,
   connectFromPort: null,
   dragging: null,
   panning: null,
   drawing: null,
+  erasing: false,
+  pointerDragged: false,
   spaceHeld: false,
   viewport: { ...DEFAULT_VIEWPORT },
   configOpen: false,
@@ -124,7 +128,7 @@ function render(): void {
       <div class="config-backdrop ${state.configOpen ? 'open' : ''}" id="config-backdrop"></div>
 
       <div class="board-viewport" id="board-viewport">
-        <div class="board-world" id="board-world" style="transform: ${viewportTransform(state.viewport)}">
+        <div class="board-world" id="board-world">
           <div class="board" id="board">
             <div class="source-node" id="source-node">
               <div class="source-icon">📨</div>
@@ -156,7 +160,7 @@ function mountConfigPanelUi(): void {
 function applyViewport(): void {
   const world = document.getElementById('board-world');
   if (world) {
-    world.style.transform = viewportTransform(state.viewport);
+    applyViewportStyles(world, state.viewport);
   }
   const zoomLabel = document.getElementById('zoom-label');
   if (zoomLabel) {
@@ -164,14 +168,94 @@ function applyViewport(): void {
   }
 }
 
+function clearTextSelection(): void {
+  window.getSelection()?.removeAllRanges();
+}
+
+function getEffectiveTool(): BoardTool {
+  if (
+    state.spaceHeld &&
+    state.activeTool !== 'pen' &&
+    state.activeTool !== 'text' &&
+    state.activeTool !== 'eraser'
+  ) {
+    return 'hand';
+  }
+  return state.activeTool;
+}
+
+function startPan(e: PointerEvent, viewport: HTMLElement): void {
+  state.panning = {
+    startX: e.clientX,
+    startY: e.clientY,
+    panX: state.viewport.panX,
+    panY: state.viewport.panY,
+  };
+  clearTextSelection();
+  viewport.setPointerCapture(e.pointerId);
+  updateToolUi();
+}
+
+function tryStartComponentDrag(
+  e: PointerEvent,
+  viewport: HTMLElement,
+  world: { x: number; y: number }
+): boolean {
+  const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
+  if (!comp || isSimRunning()) return false;
+
+  const id = comp.dataset.id!;
+  const c = state.components.find((x) => x.id === id);
+  if (!c) return false;
+
+  state.dragging = {
+    kind: 'component',
+    id,
+    offsetX: world.x - c.x,
+    offsetY: world.y - c.y,
+  };
+  comp.classList.add('dragging');
+  clearTextSelection();
+  viewport.setPointerCapture(e.pointerId);
+  return true;
+}
+
+function tryStartTextDrag(
+  e: PointerEvent,
+  viewport: HTMLElement,
+  world: { x: number; y: number }
+): boolean {
+  const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
+  if (!textEl || isSimRunning() || textEl.classList.contains('editing')) return false;
+
+  const id = textEl.dataset.textId!;
+  const text = state.annotations.texts.find((t) => t.id === id);
+  if (!text) return false;
+
+  state.dragging = {
+    kind: 'text',
+    id,
+    offsetX: world.x - text.x,
+    offsetY: world.y - text.y,
+  };
+  clearTextSelection();
+  viewport.setPointerCapture(e.pointerId);
+  return true;
+}
+
+function beginTextEdit(textId: string): void {
+  annotationRenderer.beginTextEdit(textId, (content) => {
+    const text = state.annotations.texts.find((t) => t.id === textId);
+    if (text) text.content = content;
+  });
+}
+
 function updateToolUi(): void {
   const viewport = document.getElementById('board-viewport');
   if (!viewport) return;
-  const effectiveTool =
-    state.spaceHeld && state.activeTool !== 'pen' && state.activeTool !== 'text'
-      ? 'hand'
-      : state.activeTool;
+  const effectiveTool = getEffectiveTool();
   viewport.style.cursor = state.panning ? 'grabbing' : toolCursor(effectiveTool);
+  viewport.classList.toggle('is-panning', Boolean(state.panning));
 }
 
 function getViewportRect(): DOMRect {
@@ -309,12 +393,40 @@ function bindEvents(): void {
     });
   });
 
-  document.getElementById('btn-config')?.addEventListener('click', () => {
+  const menu = document.getElementById('main-menu');
+  document.getElementById('btn-menu')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!menu) return;
+    menu.hidden = !menu.hidden;
+  });
+
+  document.getElementById('menu-preset')?.addEventListener('click', () => {
+    menu!.hidden = true;
+    loadPreset();
+  });
+  document.getElementById('menu-reset')?.addEventListener('click', () => {
+    menu!.hidden = true;
+    resetBoard();
+  });
+  document.getElementById('menu-config')?.addEventListener('click', () => {
+    menu!.hidden = true;
+    openConfig();
+  });
+
+  window.addEventListener('click', (e) => {
+    if (!(e.target as HTMLElement).closest('#btn-menu, #main-menu')) {
+      if (menu) menu.hidden = true;
+    }
+  });
+
+  const openConfig = (): void => {
     state.configOpen = true;
     document.getElementById('config-drawer')?.classList.add('open');
     document.getElementById('config-backdrop')?.classList.add('open');
     document.getElementById('btn-config')?.setAttribute('aria-expanded', 'true');
-  });
+  };
+
+  document.getElementById('btn-config')?.addEventListener('click', openConfig);
 
   const closeConfig = (): void => {
     state.configOpen = false;
@@ -335,13 +447,17 @@ function bindEvents(): void {
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
 
   document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
-    state.viewport.zoom = clampZoom(state.viewport.zoom * 1.15);
-    applyViewport();
+    const rect = getViewportRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    zoomAt(cx, cy, 1.15);
   });
 
   document.getElementById('btn-zoom-out')?.addEventListener('click', () => {
-    state.viewport.zoom = clampZoom(state.viewport.zoom / 1.15);
-    applyViewport();
+    const rect = getViewportRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    zoomAt(cx, cy, 1 / 1.15);
   });
 
   document.getElementById('btn-zoom-reset')?.addEventListener('click', () => {
@@ -351,6 +467,7 @@ function bindEvents(): void {
 
   window.addEventListener('keydown', (e) => {
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    if ((e.target as HTMLElement).isContentEditable) return;
     if (e.code === 'Space' && !state.spaceHeld) {
       e.preventDefault();
       state.spaceHeld = true;
@@ -363,8 +480,9 @@ function bindEvents(): void {
     if (e.key === 'c' || e.key === 'C') setTool('connect');
     if (e.key === 'e' || e.key === 'E') setTool('eraser');
     if (e.key === 'Escape') {
-      setTool('select');
+      setTool('hand');
       closeConfig();
+      if (menu) menu.hidden = true;
     }
   });
 
@@ -376,204 +494,13 @@ function bindEvents(): void {
     }
   });
 
-  viewport.addEventListener(
-    'wheel',
-    (e) => {
-      e.preventDefault();
-      const rect = getViewportRect();
-      const before = screenToWorld(e.clientX, e.clientY, rect, state.viewport);
-      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
-      state.viewport.zoom = clampZoom(state.viewport.zoom * factor);
-      state.viewport.panX = e.clientX - rect.left - before.x * state.viewport.zoom;
-      state.viewport.panY = e.clientY - rect.top - before.y * state.viewport.zoom;
-      applyViewport();
-    },
-    { passive: false }
-  );
-
-  viewport.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
-    const world = eventToWorld(e);
-    const effectiveTool =
-      state.spaceHeld && state.activeTool !== 'pen' && state.activeTool !== 'text'
-        ? 'hand'
-        : state.activeTool;
-
-    if (effectiveTool === 'hand') {
-      state.panning = {
-        startX: e.clientX,
-        startY: e.clientY,
-        panX: state.viewport.panX,
-        panY: state.viewport.panY,
-      };
-      viewport.setPointerCapture(e.pointerId);
-      updateToolUi();
-      return;
-    }
-
-    if (isSimRunning()) return;
-
-    if (effectiveTool === 'pen') {
-      state.drawing = createStrokePoint(world.x, world.y);
-      annotationRenderer.renderLiveStroke(state.drawing);
-      viewport.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    if (effectiveTool === 'eraser') {
-      eraseAt(world.x, world.y);
-      viewport.setPointerCapture(e.pointerId);
-      return;
-    }
-
-    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
-    if (textEl && effectiveTool === 'select') {
-      const id = textEl.dataset.textId!;
-      const text = state.annotations.texts.find((t) => t.id === id);
-      if (text) {
-        state.dragging = {
-          kind: 'text',
-          id,
-          offsetX: world.x - text.x,
-          offsetY: world.y - text.y,
-        };
-        viewport.setPointerCapture(e.pointerId);
-      }
-      return;
-    }
-
-    const comp = (e.target as HTMLElement).closest('.component') as HTMLElement | null;
-    if (comp && effectiveTool === 'select') {
-      const id = comp.dataset.id!;
-      const c = state.components.find((x) => x.id === id);
-      if (!c) return;
-      state.dragging = {
-        kind: 'component',
-        id,
-        offsetX: world.x - c.x,
-        offsetY: world.y - c.y,
-      };
-      comp.classList.add('dragging');
-      viewport.setPointerCapture(e.pointerId);
-    }
-  });
-
-  viewport.addEventListener('click', (e) => {
-    const portBtn = (e.target as HTMLElement).closest('.port') as HTMLElement | null;
-    if (portBtn) {
-      e.stopPropagation();
-      handlePortClick(portBtn.dataset.portId!);
-      return;
-    }
-
-    if (isSimRunning()) return;
-
-    const world = eventToWorld(e);
-
-    if (state.activeTool === 'component' && state.selectedComponent && !state.dragging) {
-      state.components.push(
-        createComponent(
-          state.selectedComponent,
-          Math.max(20, world.x - 70),
-          Math.max(20, world.y - 36)
-        )
-      );
-      mountBoard();
-      return;
-    }
-
-    if (state.activeTool === 'text') {
-      state.annotations.texts.push(createTextAnnotation(world.x, world.y));
-      annotationRenderer.render(state.annotations);
-    }
-  });
-
-  viewport.addEventListener('dblclick', (e) => {
-    const textEl = (e.target as HTMLElement).closest('.board-text') as HTMLElement | null;
-    if (!textEl || isSimRunning()) return;
+  viewport.addEventListener('selectstart', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('.board-text.editing')) return;
     e.preventDefault();
-    const id = textEl.dataset.textId!;
-    const text = state.annotations.texts.find((t) => t.id === id);
-    if (!text) return;
-
-    textEl.contentEditable = 'true';
-    textEl.classList.add('editing');
-    textEl.focus();
-    document.execCommand('selectAll', false);
-
-    const finish = (): void => {
-      text.content = textEl.textContent ?? '';
-      textEl.contentEditable = 'false';
-      textEl.classList.remove('editing');
-      textEl.removeEventListener('blur', finish);
-    };
-    textEl.addEventListener('blur', finish);
   });
 
-  viewport.addEventListener('pointermove', (e) => {
-    if (state.panning) {
-      state.viewport.panX = state.panning.panX + (e.clientX - state.panning.startX);
-      state.viewport.panY = state.panning.panY + (e.clientY - state.panning.startY);
-      applyViewport();
-      return;
-    }
-
-    if (state.drawing) {
-      const world = eventToWorld(e);
-      const last = state.drawing.points[state.drawing.points.length - 1];
-      if (!last || Math.hypot(world.x - last.x, world.y - last.y) > 2) {
-        state.drawing.points.push({ x: world.x, y: world.y });
-        annotationRenderer.renderLiveStroke(state.drawing);
-      }
-      return;
-    }
-
-    if (state.activeTool === 'eraser' && e.buttons === 1 && !isSimRunning()) {
-      const world = eventToWorld(e);
-      eraseAt(world.x, world.y);
-      return;
-    }
-
-    if (!state.dragging || isSimRunning()) return;
-    const world = eventToWorld(e);
-
-    if (state.dragging.kind === 'component') {
-      const c = state.components.find((x) => x.id === state.dragging!.id);
-      if (!c) return;
-      c.x = Math.max(10, world.x - state.dragging.offsetX);
-      c.y = Math.max(10, world.y - state.dragging.offsetY);
-      boardRenderer.updatePositions(state.components);
-      positionSourceNode();
-      return;
-    }
-
-    const text = state.annotations.texts.find((t) => t.id === state.dragging!.id);
-    if (text) {
-      text.x = world.x - state.dragging.offsetX;
-      text.y = world.y - state.dragging.offsetY;
-      annotationRenderer.render(state.annotations);
-    }
-  });
-
-  viewport.addEventListener('pointerup', (e) => {
-    if (state.drawing) {
-      if (state.drawing.points.length > 1) {
-        state.annotations.strokes.push(state.drawing);
-      }
-      state.drawing = null;
-      annotationRenderer.render(state.annotations);
-    }
-
-    state.panning = null;
-    state.dragging = null;
-    document.querySelectorAll('.component.dragging').forEach((el) => el.classList.remove('dragging'));
-    updateToolUi();
-    try {
-      viewport.releasePointerCapture(e.pointerId);
-    } catch {
-      /* ignore */
-    }
-  });
+  viewport.addEventListener('dragstart', (e) => e.preventDefault());
 
   viewport.addEventListener('contextmenu', (e) => {
     e.preventDefault();
@@ -599,14 +526,213 @@ function bindEvents(): void {
       annotationRenderer.render(state.annotations);
     }
   });
+
+  viewport.addEventListener(
+    'wheel',
+    (e) => {
+      e.preventDefault();
+      const factor = e.deltaY < 0 ? 1.08 : 1 / 1.08;
+      zoomAt(e.clientX, e.clientY, factor);
+    },
+    { passive: false }
+  );
+
+  viewport.addEventListener('pointerdown', (e) => {
+    const isMiddle = e.button === 1;
+    const isLeft = e.button === 0;
+    if (!isLeft && !isMiddle) return;
+
+    if (isMiddle) e.preventDefault();
+
+    state.pointerDragged = false;
+    const world = eventToWorld(e);
+    const effectiveTool = isMiddle ? 'hand' : getEffectiveTool();
+
+    if (effectiveTool === 'hand') {
+      if (isLeft && tryStartComponentDrag(e, viewport, world)) return;
+      if (isLeft && tryStartTextDrag(e, viewport, world)) return;
+
+      if ((e.target as HTMLElement).closest('.board-text.editing')) return;
+
+      startPan(e, viewport);
+      return;
+    }
+
+    if (isSimRunning()) return;
+
+    if (effectiveTool === 'pen') {
+      state.drawing = createStrokePoint(world.x, world.y);
+      annotationRenderer.renderLiveStroke(state.drawing);
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (effectiveTool === 'eraser') {
+      state.erasing = true;
+      eraseAtScreen(e.clientX, e.clientY);
+      viewport.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (effectiveTool === 'select') {
+      if (tryStartTextDrag(e, viewport, world)) return;
+      if (tryStartComponentDrag(e, viewport, world)) return;
+    }
+  });
+
+  viewport.addEventListener('click', (e) => {
+    if (state.pointerDragged) return;
+
+    const portBtn = (e.target as HTMLElement).closest('.port') as HTMLElement | null;
+    if (portBtn) {
+      e.stopPropagation();
+      handlePortClick(portBtn.dataset.portId!);
+      return;
+    }
+
+    if (isSimRunning()) return;
+    if ((e.target as HTMLElement).closest('.board-text')) return;
+
+    const world = eventToWorld(e);
+
+    if (state.activeTool === 'component' && state.selectedComponent) {
+      state.components.push(
+        createComponent(
+          state.selectedComponent,
+          Math.max(20, world.x - 70),
+          Math.max(20, world.y - 36)
+        )
+      );
+      mountBoard();
+      return;
+    }
+
+    if (state.activeTool === 'text') {
+      const annotation = createTextAnnotation(world.x, world.y);
+      state.annotations.texts.push(annotation);
+      annotationRenderer.render(state.annotations);
+      setTool('hand');
+      requestAnimationFrame(() => beginTextEdit(annotation.id));
+    }
+  });
+
+  viewport.addEventListener('pointermove', (e) => {
+    if (state.panning) {
+      const dx = e.clientX - state.panning.startX;
+      const dy = e.clientY - state.panning.startY;
+      if (Math.abs(dx) > 2 || Math.abs(dy) > 2) {
+        state.pointerDragged = true;
+        clearTextSelection();
+      }
+      state.viewport.panX = state.panning.panX + dx;
+      state.viewport.panY = state.panning.panY + dy;
+      applyViewport();
+      return;
+    }
+
+    if (state.drawing) {
+      state.pointerDragged = true;
+      const world = eventToWorld(e);
+      const last = state.drawing.points[state.drawing.points.length - 1];
+      if (!last || Math.hypot(world.x - last.x, world.y - last.y) > 2) {
+        state.drawing.points.push({ x: world.x, y: world.y });
+        annotationRenderer.renderLiveStroke(state.drawing);
+      }
+      return;
+    }
+
+    if (state.erasing && (e.buttons & 1) === 1) {
+      state.pointerDragged = true;
+      eraseAtScreen(e.clientX, e.clientY);
+      return;
+    }
+
+    if (!state.dragging || isSimRunning()) return;
+
+    state.pointerDragged = true;
+    const world = eventToWorld(e);
+
+    if (state.dragging.kind === 'component') {
+      const c = state.components.find((x) => x.id === state.dragging!.id);
+      if (!c) return;
+      c.x = Math.max(10, world.x - state.dragging.offsetX);
+      c.y = Math.max(10, world.y - state.dragging.offsetY);
+      boardRenderer.updatePositions(state.components);
+      positionSourceNode();
+      return;
+    }
+
+    const text = state.annotations.texts.find((t) => t.id === state.dragging!.id);
+    if (text) {
+      text.x = world.x - state.dragging.offsetX;
+      text.y = world.y - state.dragging.offsetY;
+      annotationRenderer.render(state.annotations);
+    }
+  });
+
+  viewport.addEventListener('pointerup', (e) => {
+    if (state.dragging?.kind === 'text' && !state.pointerDragged && !isSimRunning()) {
+      beginTextEdit(state.dragging.id);
+    }
+
+    if (state.drawing) {
+      if (state.drawing.points.length > 1) {
+        state.annotations.strokes.push(state.drawing);
+      }
+      state.drawing = null;
+      annotationRenderer.render(state.annotations);
+    }
+
+    state.panning = null;
+    state.dragging = null;
+    state.erasing = false;
+    document.querySelectorAll('.component.dragging').forEach((el) => el.classList.remove('dragging'));
+    updateToolUi();
+    try {
+      viewport.releasePointerCapture(e.pointerId);
+    } catch {
+      /* ignore */
+    }
+  });
+
+  viewport.addEventListener('auxclick', (e) => {
+    if (e.button === 1) e.preventDefault();
+  });
 }
 
-function eraseAt(x: number, y: number): void {
-  const before = state.annotations.strokes.length;
+function zoomAt(screenX: number, screenY: number, factor: number): void {
+  const rect = getViewportRect();
+  const before = screenToWorld(screenX, screenY, rect, state.viewport);
+  state.viewport.zoom = clampZoom(state.viewport.zoom * factor);
+  state.viewport.panX = screenX - rect.left - before.x * state.viewport.zoom;
+  state.viewport.panY = screenY - rect.top - before.y * state.viewport.zoom;
+  applyViewport();
+}
+
+function eraseAtScreen(screenX: number, screenY: number): void {
+  const rect = getViewportRect();
+  const world = screenToWorld(screenX, screenY, rect, state.viewport);
+  const radius = ERASER_RADIUS / state.viewport.zoom;
+
+  const beforeStrokes = state.annotations.strokes.length;
   state.annotations.strokes = state.annotations.strokes.filter((stroke) => {
-    return !stroke.points.some((p) => Math.hypot(p.x - x, p.y - y) < ERASER_RADIUS);
+    return !stroke.points.some((p) => Math.hypot(p.x - world.x, p.y - world.y) < radius);
   });
-  if (state.annotations.strokes.length !== before) {
+
+  const textHit = state.annotations.texts.find((text) => {
+    return (
+      world.x >= text.x &&
+      world.x <= text.x + text.width &&
+      world.y >= text.y &&
+      world.y <= text.y + text.minHeight
+    );
+  });
+
+  if (textHit) {
+    state.annotations.texts = state.annotations.texts.filter((t) => t.id !== textHit.id);
+  }
+
+  if (state.annotations.strokes.length !== beforeStrokes || textHit) {
     annotationRenderer.render(state.annotations);
   }
 }
@@ -663,7 +789,7 @@ function resetBoard(): void {
   mountConfigPanelUi();
   mountBoard();
   updateStatus();
-  setTool('select');
+  setTool('hand');
 }
 
 function loadPreset(): void {
@@ -676,7 +802,7 @@ function loadPreset(): void {
   state.architectureConfig = createReferenceArchitectureConfig();
   mountConfigPanelUi();
   state.engine = null;
-  setTool('select');
+  setTool('hand');
   mountBoard();
   updateStatus();
 }

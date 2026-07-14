@@ -94,6 +94,31 @@ export class AnnotationRenderer {
     if (el) el.textContent = content;
   }
 
+  beginTextEdit(id: string, onFinish: (content: string) => void): void {
+    const el = this.textsLayer?.querySelector(`[data-text-id="${id}"]`) as HTMLElement | null;
+    if (!el) return;
+
+    el.contentEditable = 'true';
+    el.classList.add('editing');
+    el.focus();
+
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    const finish = (): void => {
+      const content = el.textContent ?? '';
+      el.contentEditable = 'false';
+      el.classList.remove('editing');
+      el.removeEventListener('blur', finish);
+      onFinish(content);
+    };
+
+    el.addEventListener('blur', finish);
+  }
+
   destroy(): void {
     this.layer?.remove();
     this.layer = null;
