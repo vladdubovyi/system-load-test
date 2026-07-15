@@ -5,6 +5,7 @@
 # Recommended variables (then redeploy frontend so Vite embeds build-time values):
 #   VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
 #   VITE_GOOGLE_CLIENT_ID=<google-oauth-client-id>
+#   VITE_BASE=/   # optional; "/" is the default for non-GitHub-Pages builds
 
 [build]
 buildCommand = "npm run build"
