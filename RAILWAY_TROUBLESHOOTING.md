@@ -4,7 +4,21 @@ All solutions below reference [Railway Config as Code](https://docs.railway.com/
 
 ---
 
-## Build fails immediately after connecting the repo
+### Frontend build fails with `EBUSY` on `node_modules/.vite`
+
+**Cause:** Railpack already runs `npm ci` before your `buildCommand`. Running `npm ci` again in `buildCommand` conflicts with the Vite cache directory.
+
+**Fix:** `buildCommand` should be only `npm run build` (already set in `/railway.toml`).
+
+---
+
+### Backend Docker build fails with `SystemDesignSimulator.Api: not found`
+
+**Cause:** `backend/Dockerfile` assumed the build context was the `backend/` folder, but Railway uses the **repository root** as context when `dockerfilePath = "backend/Dockerfile"`.
+
+**Fix:** Dockerfile `COPY` paths are prefixed with `backend/` (already updated in repo).
+
+---
 
 **Likely cause:** Railway is using the wrong config file, or no config file is set.
 
