@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="../buildMultiTargeting/SystemDesignSimulator.Api.props" />
-</Project>

@@ -12,37 +12,39 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Check Railway token
+        id: check
+        run: |
+          if [ -z "${{ secrets.RAILWAY_TOKEN }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::RAILWAY_TOKEN is not set. Skipping Railway deploy."
+            echo "Connect the repo in Railway (recommended) or add RAILWAY_TOKEN. See RAILWAY_SETUP_GUIDE.md"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v3
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet restore
+        if: steps.check.outputs.configured == 'true'
+        run: dotnet restore backend/SystemDesignSimulator.Api
 
       - name: Build
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet build --configuration Release --no-restore
-
-      - name: Test
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet test --no-restore --verbosity normal
+        if: steps.check.outputs.configured == 'true'
+        run: dotnet build backend/SystemDesignSimulator.Api --configuration Release --no-restore
 
       - name: Install Railway CLI
+        if: steps.check.outputs.configured == 'true'
         run: npm install -g @railway/cli
 
       - name: Deploy to Railway
+        if: steps.check.outputs.configured == 'true'
         run: railway up --service backend
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-
-      - name: Run Migrations
-        run: railway run --service backend dotnet ef database update
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}

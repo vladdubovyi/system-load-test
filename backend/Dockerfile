@@ -18,12 +18,7 @@ WORKDIR /app
 # Copy published app
 COPY --from=build /app/publish .
 
-# Expose port (Railway/Render will override this)
-EXPOSE 5063
-
-# Set environment to production
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENV ASPNETCORE_URLS=http://+:5063
 
-# Run the app
+# Railway sets PORT at runtime; startCommand in railway.toml binds to it.
 ENTRYPOINT ["dotnet", "SystemDesignSimulator.Api.dll"]

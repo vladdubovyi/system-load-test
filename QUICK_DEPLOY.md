@@ -2,106 +2,109 @@
 
 Get your System Design Simulator live in 15 minutes!
 
-## Option 1: Railway + Vercel (Recommended) ⚡
+## Option 1: Railway only (Recommended) ⚡
 
-### Step 1: Deploy Backend to Railway (5 min)
+Uses [Railway Config as Code](https://docs.railway.com/config-as-code). See [RAILWAY_SETUP_GUIDE.md](./RAILWAY_SETUP_GUIDE.md) for details.
 
-1. **Sign up at [railway.app](https://railway.app)**
-   - Use GitHub login
+### Step 1: Project + database (2 min)
 
-2. **Create New Project**
+1. Sign up at [railway.app](https://railway.app) with GitHub
+2. New Project → Deploy from GitHub repo → `system-load-test`
+3. New → Database → PostgreSQL
+
+### Step 2: Backend service (5 min)
+
+1. New → GitHub Repo → same repository (second service)
+2. Service **Settings** → Config-as-code file:
+
    ```
-   - Click "New Project"
-   - Select "Deploy from GitHub repo"
-   - Choose: vladdubovyi/system-load-test
-   - Railway auto-detects .NET project
-   ```
-
-3. **Add PostgreSQL**
-   ```
-   - In project, click "New"
-   - Select "Database" → "PostgreSQL"
-   - Railway auto-provisions database
+   /backend/railway.toml
    ```
 
-4. **Configure Environment**
-   ```
-   - Click backend service → "Variables"
-   - Add these variables:
-   
+3. Variables:
+
+   ```env
    ASPNETCORE_ENVIRONMENT=Production
    DATABASE_URL=${{Postgres.DATABASE_URL}}
-   CORS_ORIGINS=https://your-app.vercel.app (update later)
+   CORS_ORIGINS=https://<frontend-url>   # update after step 3
    ```
 
-5. **Get Backend URL**
+4. Deploy → copy the backend public URL
+5. Test: `https://<backend-url>/api/health`
+
+### Step 3: Frontend service (5 min)
+
+1. New → GitHub Repo → same repository (third service)
+2. Service **Settings** → Config-as-code file:
+
    ```
-   - Click "Settings" → "Generate Domain"
-   - Copy URL (e.g., https://abc.railway.app)
-   - Save it for Step 2
+   /railway.toml
    ```
 
-### Step 2: Deploy Frontend to Vercel (5 min)
+3. Variables:
 
-1. **Sign up at [vercel.com](https://vercel.com)**
-   - Use GitHub login
-
-2. **Import Project**
-   ```
-   - Click "Add New" → "Project"
-   - Import: vladdubovyi/system-load-test
-   - Framework: Vite (auto-detected)
+   ```env
+   VITE_API_URL=https://<backend-url>
    ```
 
-3. **Configure Build**
-   ```
-   - Root Directory: ./
-   - Build Command: npm run build
-   - Output Directory: dist
-   ```
+4. Deploy → copy the frontend public URL
 
-4. **Set Environment Variable**
-   ```
-   - Add this variable:
-   
-   VITE_API_URL=https://your-backend.railway.app
-   (paste your Railway URL from Step 1)
-   ```
+### Step 4: Finish CORS + test (2 min)
 
-5. **Deploy**
-   ```
-   - Click "Deploy"
-   - Wait 2-3 minutes
-   - Copy your Vercel URL
-   ```
+1. Backend → Variables → set `CORS_ORIGINS` to the frontend URL
+2. Visit the frontend URL → Choose Challenge → verify API loads
 
-### Step 3: Update CORS (2 min)
-
-1. **Go back to Railway**
-   ```
-   - Backend service → "Variables"
-   - Update CORS_ORIGINS with your Vercel URL:
-   
-   CORS_ORIGINS=https://your-app.vercel.app
-   ```
-
-2. **Redeploy**
-   ```
-   - Railway auto-redeploys on variable change
-   - Wait 1-2 minutes
-   ```
-
-### Step 4: Test (2 min)
-
-1. **Visit your Vercel URL**
-2. **Click "Choose Challenge"**
-3. **Select a challenge and start building!**
-
-✅ **Done! Your app is live!**
+✅ **Done! Frontend, backend, and DB all on Railway.**
 
 ---
 
-## Option 2: All-in-One Render Deploy (10 min)
+## Option 2: Railway backend + Vercel frontend
+
+### Step 1: Deploy Backend to Railway (5 min)
+
+1. Sign up at [railway.app](https://railway.app) with GitHub
+2. New Project → Deploy from GitHub repo
+3. New → Database → PostgreSQL
+4. New → GitHub Repo → same repository (backend service)
+5. Service Settings → Config-as-code file: `/backend/railway.toml`
+6. Variables:
+
+   ```env
+   ASPNETCORE_ENVIRONMENT=Production
+   DATABASE_URL=${{Postgres.DATABASE_URL}}
+   CORS_ORIGINS=https://your-app.vercel.app
+   ```
+
+7. Deploy and copy the backend URL
+
+### Step 2: Deploy Frontend to Vercel (5 min)
+
+1. Sign up at [vercel.com](https://vercel.com) with GitHub
+2. Add New → Project → import this repository (Vite auto-detected)
+3. Set environment variable:
+
+   ```env
+   VITE_API_URL=https://your-backend.railway.app
+   ```
+
+4. Deploy and copy the Vercel URL
+
+### Step 3: Update CORS (2 min)
+
+1. Railway backend → Variables → update `CORS_ORIGINS` to your Vercel URL
+2. Redeploy backend
+
+### Step 4: Test (2 min)
+
+1. Visit your Vercel URL
+2. Click "Choose Challenge"
+3. Select a challenge and start building
+
+✅ **Done!**
+
+---
+
+## Option 3: All-in-One Render Deploy (10 min)
 
 ### One-Click Deploy
 
