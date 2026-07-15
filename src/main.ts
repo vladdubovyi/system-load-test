@@ -50,10 +50,9 @@ import {
   type BoardTool,
 } from './ui/floating-toolbar';
 import { initializeApp } from './game/app-init';
-import { componentRegistry } from './game/component-registry';
 import { mountChallengeSelector } from './ui/challenge-selector';
 import { mountTrafficConfigPanel } from './ui/traffic-config-panel';
-import { mountFailureInjectionPanel, type InjectedFailure } from './ui/failure-injection-panel';
+import { mountFailureInjectionPanel } from './ui/failure-injection-panel';
 import type { Challenge, TrafficProfile } from './game/scenario-types';
 
 type BoardSelection =

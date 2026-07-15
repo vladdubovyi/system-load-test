@@ -1,6 +1,6 @@
 import type { Challenge } from '../game/scenario-types';
 
-export function renderChallengeSelector(challenges: Challenge[], onSelect: (challenge: Challenge) => void): string {
+export function renderChallengeSelector(challenges: Challenge[]): string {
   if (challenges.length === 0) {
     return `
       <div class="challenge-selector-empty">
@@ -58,7 +58,7 @@ export function mountChallengeSelector(
   challenges: Challenge[],
   onSelect: (challenge: Challenge) => void
 ): void {
-  container.innerHTML = renderChallengeSelector(challenges, onSelect);
+  container.innerHTML = renderChallengeSelector(challenges);
 
   // Attach event listeners
   const buttons = container.querySelectorAll('.select-challenge-btn');
