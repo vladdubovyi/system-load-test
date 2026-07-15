@@ -59,11 +59,7 @@ builder.Services.AddDbContext<ApplicationDbContext>(options =>
 static string NormalizeOrigin(string origin) =>
     origin.Trim().Trim('"', '\'').TrimEnd('/');
 
-static bool IsRailwayAppOrigin(string origin) =>
-    Uri.TryCreate(origin, UriKind.Absolute, out var uri) &&
-    uri.Host.EndsWith(".up.railway.app", StringComparison.OrdinalIgnoreCase);
-
-// Configure CORS — read from env or config (Railway Variables tab)
+// Configure CORS — explicit origins only (set CORS_ORIGINS in Railway Variables)
 var corsOrigins =
     Environment.GetEnvironmentVariable("CORS_ORIGINS") ??
     builder.Configuration["CORS_ORIGINS"];
@@ -83,35 +79,26 @@ if (!string.IsNullOrWhiteSpace(corsOrigins))
     }
 }
 
-var allowRailwayOrigins = builder.Environment.IsProduction();
-
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.SetIsOriginAllowed(origin =>
-        {
-            if (string.IsNullOrWhiteSpace(origin)) return false;
-            var normalized = NormalizeOrigin(origin);
-            if (allowedOrigins.Contains(normalized)) return true;
-            return allowRailwayOrigins && IsRailwayAppOrigin(normalized);
-        })
-        .AllowAnyHeader()
-        .AllowAnyMethod();
+        policy.WithOrigins(allowedOrigins.ToArray())
+            .AllowAnyHeader()
+            .AllowAnyMethod();
     });
 });
 
 var app = builder.Build();
 
 app.Logger.LogInformation(
-    "CORS configured with {Count} explicit origin(s){RailwaySuffix}",
-    allowedOrigins.Count,
-    allowRailwayOrigins ? " plus *.up.railway.app" : string.Empty);
+    "CORS allowed origins: {Origins}",
+    string.Join(", ", allowedOrigins));
 
-if (string.IsNullOrWhiteSpace(corsOrigins))
+if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(corsOrigins))
 {
     app.Logger.LogWarning(
-        "CORS_ORIGINS is not set. In production, *.up.railway.app origins are allowed automatically.");
+        "CORS_ORIGINS is not set. Set it to your frontend URL, e.g. CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}");
 }
 
 // Apply migrations and seed data

@@ -63,11 +63,13 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
 
 **Checks:**
 
-1. On the **backend** service, confirm `CORS_ORIGINS` is set (optional in production — `*.up.railway.app` is allowed automatically):
+1. On the **backend** service, set `CORS_ORIGINS` to your exact frontend URL (then **Deploy**):
 
    ```env
    CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
    ```
+
+   Only explicitly listed origins are allowed — there is no wildcard.
 
 2. **Deploy** staged variable changes in Railway (variables are not applied until deployed).
 
