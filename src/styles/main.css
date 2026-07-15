@@ -32,15 +32,27 @@
 html,
 body {
   margin: 0;
-  height: 100%;
-  overflow: hidden;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--canvas-bg);
   color: var(--ink);
   font-family: var(--font-ui);
 }
 
+body.sandbox-mode,
+body.sandbox-mode #app {
+  height: 100%;
+  overflow: hidden;
+}
+
 #app {
+  min-height: 100vh;
+}
+
+body.sandbox-mode #app {
   height: 100vh;
+  min-height: 0;
 }
 
 .canvas-app {

@@ -101,7 +101,7 @@ function renderChallengeDetail(challenge: Challenge | null): string {
       </div>
 
       <div class="challenge-detail-actions">
-        <button class="btn btn-primary btn-lg" data-try-challenge="${challenge.slug}">Try it yourself</button>
+        <button class="btn btn-primary btn-lg" data-launch-challenge="${challenge.slug}">Launch</button>
       </div>
     </div>
   `;
@@ -111,17 +111,26 @@ function renderChallengeList(challenges: Challenge[], selectedId: string | null)
   return challenges
     .map(
       (challenge) => `
-        <button
-          class="challenge-list-item ${challenge.id === selectedId ? 'is-selected' : ''}"
-          data-challenge-id="${challenge.id}"
-          type="button"
-        >
-          <span class="challenge-list-title">${challenge.name}</span>
-          <span class="challenge-list-meta">
-            <span class="challenge-difficulty-pill ${difficultyClass(challenge.difficulty)}">${challenge.difficulty}</span>
-            <span>${challenge.scenario.duration}s</span>
-          </span>
-        </button>
+        <div class="challenge-list-item ${challenge.id === selectedId ? 'is-selected' : ''}">
+          <button
+            class="challenge-list-select"
+            data-challenge-id="${challenge.id}"
+            type="button"
+          >
+            <span class="challenge-list-title">${challenge.name}</span>
+            <span class="challenge-list-meta">
+              <span class="challenge-difficulty-pill ${difficultyClass(challenge.difficulty)}">${challenge.difficulty}</span>
+              <span>${challenge.scenario.duration}s</span>
+            </span>
+          </button>
+          <button
+            class="btn btn-primary challenge-launch-btn"
+            type="button"
+            data-launch-challenge="${challenge.slug}"
+          >
+            Launch
+          </button>
+        </div>
       `
     )
     .join('');
@@ -172,9 +181,10 @@ function bindChallengesPageEvents(container: HTMLElement, onSelect: (challengeId
     });
   });
 
-  container.querySelectorAll('[data-try-challenge]').forEach((el) => {
-    el.addEventListener('click', () => {
-      const slug = (el as HTMLElement).dataset.tryChallenge;
+  container.querySelectorAll('[data-launch-challenge]').forEach((el) => {
+    el.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const slug = (el as HTMLElement).dataset.launchChallenge;
       if (slug) navigate(pathForChallengeSandbox(slug));
     });
   });
