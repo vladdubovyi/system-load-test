@@ -1,0 +1,10 @@
+**/.git
+**/.gitignore
+**/.vscode
+**/.vs
+**/bin
+**/obj
+**/.env
+**/appsettings.Development.json
+**/Migrations
+*.md

@@ -12,7 +12,8 @@ const MAIN_TOOLS: { id: BoardTool; icon: string; label: string; shortcut?: strin
 export function renderFloatingChrome(
   activeTool: BoardTool,
   placementType: ComponentType | null,
-  zoomPct: number
+  zoomPct: number,
+  simulationSpeed: 1 | 5 | 20 | 100 = 1
 ): string {
   const componentTypes = Object.keys(COMPONENT_DEFS) as ComponentType[];
 
@@ -21,6 +22,8 @@ export function renderFloatingChrome(
       <div class="chrome-top-left">
         <button class="chrome-menu-btn" id="btn-menu" type="button" title="Menu" aria-label="Menu" aria-haspopup="true">☰</button>
         <div class="main-menu-dropdown" id="main-menu" hidden>
+          <button class="menu-item" id="menu-challenge" type="button">🎯 Choose Challenge</button>
+          <div class="menu-divider"></div>
           <button class="menu-item" id="menu-preset" type="button">⚡ Load preset</button>
           <button class="menu-item" id="menu-reset" type="button">Reset board</button>
           <div class="menu-divider"></div>
@@ -69,8 +72,16 @@ export function renderFloatingChrome(
       </div>
 
       <div class="chrome-top-right">
+        <button class="chrome-action-btn" id="btn-traffic" type="button">📊 Traffic</button>
+        <button class="chrome-action-btn" id="btn-failure" type="button">💥 Failures</button>
         <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Preset</button>
         <button class="chrome-action-btn" id="btn-reset" type="button">Reset</button>
+        <div class="speed-controls">
+          <button class="speed-btn ${simulationSpeed === 1 ? 'active' : ''}" data-speed="1" type="button">1x</button>
+          <button class="speed-btn ${simulationSpeed === 5 ? 'active' : ''}" data-speed="5" type="button">5x</button>
+          <button class="speed-btn ${simulationSpeed === 20 ? 'active' : ''}" data-speed="20" type="button">20x</button>
+          <button class="speed-btn ${simulationSpeed === 100 ? 'active' : ''}" data-speed="100" type="button">100x</button>
+        </div>
         <button class="chrome-action-btn chrome-action-primary" id="btn-play" type="button">▶ Play</button>
       </div>
 

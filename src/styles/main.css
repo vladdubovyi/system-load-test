@@ -1657,3 +1657,244 @@ body {
   background: rgba(0, 0, 0, 0.5);
   z-index: 999;
 }
+
+/* Speed Controls */
+.speed-controls {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--surface);
+}
+
+.speed-btn {
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.speed-btn:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.speed-btn.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Traffic Config Panel */
+.traffic-config-panel {
+  position: fixed;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: 320px;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 600;
+}
+
+.config-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.config-panel-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.config-panel-close {
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  padding: 0;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.config-panel-close:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.config-panel-body {
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.config-field {
+  margin-bottom: 16px;
+}
+
+.config-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 6px;
+  color: var(--ink);
+}
+
+.config-field input[type="number"],
+.config-field select {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 14px;
+  background: var(--canvas-bg);
+  color: var(--ink);
+}
+
+.config-field input[type="number"]:focus,
+.config-field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.config-field-hint {
+  display: block;
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: 4px;
+}
+
+.request-types {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.request-type-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.request-type-label {
+  font-size: 13px;
+  min-width: 60px;
+  text-transform: capitalize;
+}
+
+.request-type-slider {
+  flex: 1;
+}
+
+.request-type-value {
+  font-size: 13px;
+  font-weight: 500;
+  min-width: 40px;
+  text-align: right;
+}
+
+.config-panel-actions {
+  display: flex;
+  gap: 8px;
+  padding: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.config-btn {
+  flex: 1;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.config-btn-primary {
+  background: var(--accent);
+  color: white;
+}
+
+.config-btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.config-btn-secondary {
+  background: transparent;
+  color: var(--ink-muted);
+  border: 1px solid var(--border);
+}
+
+.config-btn-secondary:hover {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* Failure Injection Panel */
+.failure-panel {
+  position: fixed;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: 320px;
+  background: var(--surface);
+  border: 2px solid var(--danger);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 600;
+}
+
+.failure-warning {
+  padding: 12px;
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #856404;
+  margin-top: 16px;
+}
+
+.failure-warning strong {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.config-btn-danger {
+  background: var(--danger);
+  color: white;
+}
+
+.config-btn-danger:hover {
+  background: #c82333;
+}
+
+.no-components {
+  text-align: center;
+  color: var(--ink-muted);
+  padding: 32px 16px;
+  font-size: 14px;
+}
+
+.modal-container {
+  position: fixed;
+  inset: 0;
+  z-index: 599;
+}

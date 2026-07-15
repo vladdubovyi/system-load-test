@@ -49,6 +49,11 @@ import {
   toolCursor,
   type BoardTool,
 } from './ui/floating-toolbar';
+import { initializeApp } from './game/app-init';
+import { mountChallengeSelector } from './ui/challenge-selector';
+import { mountTrafficConfigPanel } from './ui/traffic-config-panel';
+import { mountFailureInjectionPanel } from './ui/failure-injection-panel';
+import type { Challenge, TrafficProfile } from './game/scenario-types';
 
 type BoardSelection =
   | { kind: 'component'; id: string }
@@ -84,6 +89,22 @@ interface GameState {
     completed: number;
     dropped: number;
   };
+  currentChallenge: Challenge | null;
+  availableChallenges: Challenge[];
+  challengeSelectorOpen: boolean;
+  simulationSpeed: 1 | 5 | 20 | 100;
+  history: HistoryEntry[];
+  historyIndex: number;
+  maxHistory: number;
+  trafficConfigOpen: boolean;
+  customTrafficConfig: TrafficProfile | null;
+  failureInjectionOpen: boolean;
+}
+
+interface HistoryEntry {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  componentConfigs: Map<string, ComponentInstanceConfig>;
 }
 
 const SIM_STEP = 1 / 60;
@@ -112,12 +133,28 @@ const state: GameState = {
   simAccumulator: 0,
   lastRunStatus: 'idle',
   displayedHud: { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 },
+  currentChallenge: null,
+  availableChallenges: [],
+  challengeSelectorOpen: false,
+  simulationSpeed: 1,
+  history: [],
+  historyIndex: -1,
+  maxHistory: 50,
+  trafficConfigOpen: false,
+  customTrafficConfig: null,
+  failureInjectionOpen: false,
 };
 
 const boardRenderer = new BoardRenderer();
 const annotationRenderer = new AnnotationRenderer();
 const connectionPreview = new ConnectionPreview();
 const app = document.getElementById('app')!;
+
+let clipboard: {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  configs: Map<string, ComponentInstanceConfig>;
+} | null = null;
 
 interface BoardSnapshot {
   components: PlacedComponent[];
@@ -165,7 +202,7 @@ function render(): void {
   const zoomPct = Math.round(state.viewport.zoom * 100);
   app.innerHTML = `
     <div class="canvas-app">
-      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct)}
+      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct, state.simulationSpeed)}
       ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
 
       <div class="board-viewport" id="board-viewport">
@@ -503,6 +540,7 @@ function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): v
     boardRenderer.updateComponentConfigs(state.componentConfigs);
     selectItem({ kind: 'component', id: componentId });
     invalidateBoardSnapshot();
+    pushHistory();
   }
 }
 
@@ -521,12 +559,14 @@ function deleteSelection(): void {
     state.selection = null;
     mountBoard();
     invalidateBoardSnapshot();
+    pushHistory();
     return;
   }
 
   state.annotations.texts = state.annotations.texts.filter((t) => t.id !== state.selection!.id);
   state.selection = null;
   annotationRenderer.render(state.annotations);
+  pushHistory();
 }
 
 function bindEvents(): void {
@@ -551,6 +591,10 @@ function bindEvents(): void {
     e.stopPropagation();
     if (menu) menu.hidden = !menu.hidden;
   });
+  document.getElementById('menu-challenge')?.addEventListener('click', () => {
+    if (menu) menu.hidden = true;
+    openChallengeSelector();
+  });
   document.getElementById('menu-preset')?.addEventListener('click', () => {
     if (menu) menu.hidden = true;
     loadPreset();
@@ -569,8 +613,19 @@ function bindEvents(): void {
     if (isSimRunning()) stopSimulation();
     else startSimulation();
   });
+  document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
+  document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
   document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
+  
+  // Speed control buttons
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const speed = parseInt(btn.getAttribute('data-speed') || '1');
+      state.simulationSpeed = speed as 1 | 5 | 20 | 100;
+      render();
+    });
+  });
 
   document.getElementById('btn-zoom-in')?.addEventListener('click', () => {
     zoomAt(state.lastPointer.x, state.lastPointer.y, 1.15);
@@ -638,6 +693,24 @@ function bindEvents(): void {
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
       deleteSelection();
+    }
+    // Undo/Redo shortcuts
+    if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
+      e.preventDefault();
+      undo();
+    }
+    if ((e.metaKey || e.ctrlKey) && (e.key === 'Z' || (e.key === 'z' && e.shiftKey))) {
+      e.preventDefault();
+      redo();
+    }
+    // Copy/Paste shortcuts
+    if ((e.metaKey || e.ctrlKey) && e.key === 'c') {
+      e.preventDefault();
+      copySelection();
+    }
+    if ((e.metaKey || e.ctrlKey) && e.key === 'v') {
+      e.preventDefault();
+      pasteSelection();
     }
   });
 
@@ -796,6 +869,7 @@ function bindEvents(): void {
       mountBoard();
       invalidateBoardSnapshot();
       selectItem({ kind: 'component', id: comp.id });
+      pushHistory();
       setTool('hand');
       return;
     }
@@ -875,6 +949,7 @@ function finishConnection(screenX: number, screenY: number): void {
     state.belts.push(createBelt(fromPort.id, toPort.id));
     mountBoard();
     invalidateBoardSnapshot();
+    pushHistory();
   }
 }
 
@@ -984,7 +1059,7 @@ function startSimulation(): void {
 
     const frameDt = Math.min((now - state.lastTick) / 1000, 0.05);
     state.lastTick = now;
-    state.simAccumulator += frameDt;
+    state.simAccumulator += frameDt * state.simulationSpeed;
 
     while (state.simAccumulator >= SIM_STEP) {
       state.engine.tick(SIM_STEP);
@@ -1012,5 +1087,274 @@ function stopSimulation(): void {
   updateStatus();
 }
 
-render();
-loadPreset();
+// Copy/Paste functions
+function copySelection(): void {
+  if (!state.selection || state.selection.kind !== 'component') return;
+  
+  const selectedId = state.selection.id;
+  const selectedComponent = state.components.find(c => c.id === selectedId);
+  if (!selectedComponent) return;
+  
+  clipboard = {
+    components: [selectedComponent],
+    belts: state.belts.filter(b => {
+      const fromParts = b.fromPortId.split(':');
+      const toParts = b.toPortId.split(':');
+      return fromParts[0] === selectedId || toParts[0] === selectedId;
+    }).filter(b => {
+      // Only include belts that connect to other selected components
+      const fromParts = b.fromPortId.split(':');
+      const toParts = b.toPortId.split(':');
+      return fromParts[0] === selectedId && toParts[0] === selectedId;
+    }),
+    configs: state.componentConfigs.has(selectedId)
+      ? new Map([[selectedId, state.componentConfigs.get(selectedId)!]])
+      : new Map(),
+  };
+  
+  console.log('Copied component to clipboard');
+}
+
+function pasteSelection(): void {
+  if (!clipboard || clipboard.components.length === 0) return;
+  
+  const idMap = new Map<string, string>();
+  const newComponents: PlacedComponent[] = [];
+  
+  // Clone components with new IDs and offset position
+  for (const comp of clipboard.components) {
+    const newId = `${comp.type}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    idMap.set(comp.id, newId);
+    
+    newComponents.push({
+      ...comp,
+      id: newId,
+      x: comp.x + 40,
+      y: comp.y + 40,
+    });
+  }
+  
+  // Clone belts with remapped IDs
+  const newBelts: ConveyorBelt[] = [];
+  for (const belt of clipboard.belts) {
+    const fromParts = belt.fromPortId.split(':');
+    const toParts = belt.toPortId.split(':');
+    const newFromId = idMap.get(fromParts[0]);
+    const newToId = idMap.get(toParts[0]);
+    
+    if (newFromId && newToId) {
+      newBelts.push({
+        ...belt,
+        id: `belt-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        fromPortId: `${newFromId}:${fromParts[1]}`,
+        toPortId: `${newToId}:${toParts[1]}`,
+      });
+    }
+  }
+  
+  // Clone configs with remapped IDs
+  for (const [oldId, config] of clipboard.configs) {
+    const newId = idMap.get(oldId);
+    if (newId) {
+      state.componentConfigs.set(newId, structuredClone(config));
+    }
+  }
+  
+  // Add to state
+  state.components.push(...newComponents);
+  state.belts.push(...newBelts);
+  
+  // Select the pasted component
+  if (newComponents.length > 0) {
+    selectItem({ kind: 'component', id: newComponents[0].id });
+  }
+  
+  mountBoard();
+  invalidateBoardSnapshot();
+  pushHistory();
+  
+  console.log('Pasted component from clipboard');
+}
+
+// History management functions
+function pushHistory(): void {
+  // Trim future history if we're not at the end
+  state.history = state.history.slice(0, state.historyIndex + 1);
+  
+  // Add current state
+  state.history.push({
+    components: structuredClone(state.components),
+    belts: structuredClone(state.belts),
+    componentConfigs: cloneComponentConfigMap(state.componentConfigs),
+  });
+  
+  // Limit history size
+  if (state.history.length > state.maxHistory) {
+    state.history.shift();
+  } else {
+    state.historyIndex++;
+  }
+}
+
+function undo(): void {
+  if (state.historyIndex > 0) {
+    state.historyIndex--;
+    const entry = state.history[state.historyIndex];
+    state.components = structuredClone(entry.components);
+    state.belts = structuredClone(entry.belts);
+    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
+    onSimulationTopologyChange();
+    render();
+  }
+}
+
+function redo(): void {
+  if (state.historyIndex < state.history.length - 1) {
+    state.historyIndex++;
+    const entry = state.history[state.historyIndex];
+    state.components = structuredClone(entry.components);
+    state.belts = structuredClone(entry.belts);
+    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
+    onSimulationTopologyChange();
+    render();
+  }
+}
+
+// Challenge selection functions
+function openChallengeSelector(): void {
+  state.challengeSelectorOpen = true;
+  showChallengeSelectorModal();
+}
+
+function showChallengeSelectorModal(): void {
+  const overlay = document.createElement('div');
+  overlay.className = 'challenge-selector-overlay';
+  overlay.id = 'challenge-overlay';
+  
+  const container = document.createElement('div');
+  container.id = 'challenge-selector-container';
+  
+  document.body.appendChild(overlay);
+  document.body.appendChild(container);
+  
+  mountChallengeSelector(container, state.availableChallenges, (challenge) => {
+    selectChallenge(challenge);
+  });
+  
+  overlay.addEventListener('click', closeChallengeSelector);
+}
+
+function closeChallengeSelector(): void {
+  state.challengeSelectorOpen = false;
+  document.getElementById('challenge-overlay')?.remove();
+  document.getElementById('challenge-selector-container')?.remove();
+}
+
+function selectChallenge(challenge: Challenge): void {
+  state.currentChallenge = challenge;
+  closeChallengeSelector();
+  
+  // Reset board for new challenge
+  state.components = [];
+  state.belts = [];
+  state.annotations = createDefaultAnnotations();
+  state.componentConfigs = new Map();
+  
+  console.log(`Selected challenge: ${challenge.name}`);
+  render();
+}
+
+// Traffic configuration functions
+function openTrafficConfig(): void {
+  state.trafficConfigOpen = true;
+  showTrafficConfigPanel();
+}
+
+function showTrafficConfigPanel(): void {
+  const container = document.createElement('div');
+  container.id = 'traffic-config-container';
+  container.className = 'modal-container';
+  
+  document.body.appendChild(container);
+  
+  // Get current or default traffic config
+  const traffic = state.customTrafficConfig || state.currentChallenge?.scenario.traffic || {
+    baseRps: 200,
+    pattern: 'constant' as const,
+    spikeMultiplier: 3.2,
+    spikeChance: 0.08,
+  };
+  
+  mountTrafficConfigPanel(
+    container,
+    traffic,
+    (newTraffic) => {
+      state.customTrafficConfig = newTraffic;
+      console.log('Traffic config updated:', newTraffic);
+    },
+    () => closeTrafficConfig()
+  );
+}
+
+function closeTrafficConfig(): void {
+  state.trafficConfigOpen = false;
+  document.getElementById('traffic-config-container')?.remove();
+}
+
+// Failure injection functions
+function openFailureInjection(): void {
+  if (!isSimRunning()) {
+    alert('Start the simulation first before injecting failures!');
+    return;
+  }
+  
+  state.failureInjectionOpen = true;
+  showFailureInjectionPanel();
+}
+
+function showFailureInjectionPanel(): void {
+  const container = document.createElement('div');
+  container.id = 'failure-injection-container';
+  container.className = 'modal-container';
+  
+  document.body.appendChild(container);
+  
+  mountFailureInjectionPanel(
+    container,
+    state.components,
+    (failure) => {
+      if (state.engine) {
+        state.engine.injectFailure(failure.componentId, failure.type, failure.duration);
+        console.log('Injected failure:', failure);
+      }
+    },
+    () => closeFailureInjection()
+  );
+}
+
+function closeFailureInjection(): void {
+  state.failureInjectionOpen = false;
+  document.getElementById('failure-injection-container')?.remove();
+}
+
+// Initialize app with backend data
+async function initApp(): Promise<void> {
+  try {
+    console.log('Initializing app...');
+    const appData = await initializeApp();
+    state.availableChallenges = appData.challenges;
+    state.currentChallenge = appData.selectedChallenge;
+    
+    console.log(`Loaded ${appData.challenges.length} challenges from backend`);
+    console.log(`Selected challenge: ${state.currentChallenge?.name}`);
+  } catch (error) {
+    console.error('Failed to initialize app:', error);
+    // App will fall back to legacy components
+  }
+  
+  render();
+  loadPreset();
+}
+
+// Start the app
+initApp();
