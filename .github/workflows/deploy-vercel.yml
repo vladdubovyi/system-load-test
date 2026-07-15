@@ -16,23 +16,38 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Check Vercel secrets
+        id: check
+        run: |
+          if [ -z "${{ secrets.VERCEL_TOKEN }}" ] || [ -z "${{ secrets.VERCEL_ORG_ID }}" ] || [ -z "${{ secrets.VERCEL_PROJECT_ID }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Vercel secrets are not set. Skipping Vercel deploy."
+            echo "Deploy frontend on Railway instead, or add VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID. See RAILWAY_SETUP_GUIDE.md"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        if: steps.check.outputs.configured == 'true'
+        uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies
+        if: steps.check.outputs.configured == 'true'
         run: npm ci
 
       - name: Build
+        if: steps.check.outputs.configured == 'true'
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
       - name: Deploy to Vercel
+        if: steps.check.outputs.configured == 'true'
         uses: amondnet/vercel-action@v25
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}

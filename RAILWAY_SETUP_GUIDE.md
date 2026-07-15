@@ -1,12 +1,22 @@
 # Railway Setup Guide - Both Frontend & Backend
 
-Railway can host both your frontend and backend! Here's how to set it up properly.
+Railway can host **everything** — frontend, backend, and PostgreSQL — in one project. You do **not** need Vercel.
+
+> **If your first deploy failed:** Railway likely tried to build the whole monorepo as one app. Fix it by creating **two services** from the same repo with different **Root Directory** settings (see below). Do **not** use a single service at the repository root.
 
 ---
 
-## 🎯 Recommended: Separate Services (Best Practice)
+## 🎯 Recommended: One Railway Project, Three Services
 
-Deploy frontend and backend as **separate services** in one Railway project.
+| Service | Root Directory | Purpose |
+|---------|----------------|---------|
+| `postgres` | (managed) | Database |
+| `backend` | `backend/SystemDesignSimulator.Api` | ASP.NET Core API |
+| `frontend` | `.` (repo root) | Vite static app |
+
+Build configs are included via `nixpacks.toml` in each root directory.
+
+---
 
 ### Step 1: Create Railway Project
 

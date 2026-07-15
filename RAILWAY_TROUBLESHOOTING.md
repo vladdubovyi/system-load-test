@@ -19,7 +19,7 @@ Error: Could not find a project file in the current directory
 
 ---
 
-### Problem 2: "Multiple project types detected"
+### Problem 2: "Multiple project types detected" or Node.js detected for backend
 
 **Symptoms:**
 ```
@@ -27,16 +27,14 @@ Warning: Found both package.json and .csproj
 Nixpacks detected: nodejs
 ```
 
-**Root Cause:** Railway is confused by monorepo structure
+**Root Cause:** Railway is building from the repository root instead of the backend subdirectory.
 
-**Solution - Option A (Recommended): Deploy as Separate Services**
-1. Delete the current service
-2. Create TWO services from the same repo:
-   - **Backend Service**: Root directory = `backend/SystemDesignSimulator.Api`
-   - **Frontend Service**: Root directory = `.` (root)
+**Solution:**
+1. Open the **backend** service → **Settings → Root Directory**
+2. Set to: `backend/SystemDesignSimulator.Api`
+3. Redeploy
 
-**Solution - Option B: Use Nixpacks Config**
-Add `nixpacks.toml` in the appropriate directory (already created in repo)
+The repo no longer includes a root `railway.json` (it caused this confusion).
 
 ---
 
