@@ -24,15 +24,28 @@ Config in code overrides dashboard build/deploy settings: https://docs.railway.c
 
 **Likely cause:** Service is not using `/backend/railway.toml`, so Railway auto-detects the root `package.json`.
 
-**Fix:** Set config file path to `/backend/railway.toml`. That file sets:
+**Fix:** Set config file path to `/backend/railway.toml`. That file sets an explicit .NET `buildCommand`:
 
 ```toml
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "backend/Dockerfile"
+buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSimulator.Api.csproj -c Release -o backend/out"
 ```
 
-Railway builds from a Dockerfile when `builder = "DOCKERFILE"` and `dockerfilePath` is set.
+---
+
+## Backend Docker build fails with `SystemDesignSimulator.Api: not found`
+
+**Cause:** Docker build context is the repository root, but `COPY` paths assumed the `backend/` folder.
+
+**Fix:** Backend now uses Railpack with `buildCommand` (no Docker). If you switch back to Docker, prefix paths with `backend/`.
+
+---
+
+## Frontend build fails with `EBUSY` on `node_modules/.vite`
+
+**Cause:** Railpack already runs `npm ci` before `buildCommand`. Running `npm ci` again causes a cache conflict.
+
+**Fix:** `/railway.toml` uses `buildCommand = "npm run build"` only.
 
 ---
 

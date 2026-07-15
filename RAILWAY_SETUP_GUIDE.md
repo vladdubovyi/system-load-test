@@ -112,30 +112,28 @@ Redeploy the backend after changing this variable.
 
 ```toml
 [build]
-builder = "DOCKERFILE"
-dockerfilePath = "backend/Dockerfile"
+buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSimulator.Api.csproj -c Release -o backend/out"
 watchPatterns = ["backend/**"]
 
 [deploy]
-startCommand = "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
+startCommand = "dotnet backend/out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
 healthcheckPath = "/api/health"
 ```
 
-- `dockerfilePath` — documented in https://docs.railway.com/reference/config-as-code#dockerfile-path
-- `watchPatterns` — documented in https://docs.railway.com/reference/config-as-code#watch-patterns
-- `startCommand` — documented in https://docs.railway.com/reference/config-as-code#start-command
-- `healthcheckPath` — documented in https://docs.railway.com/reference/config-as-code#healthcheck-path
+Uses Railpack (default builder) with an explicit .NET build command from the repository root — no Docker context issues.
 
 ### `/railway.toml` (frontend)
 
 ```toml
 [build]
-buildCommand = "npm ci && npm run build"
+buildCommand = "npm run build"
 watchPatterns = ["src/**", "public/**", "index.html", "package.json", "vite.config.ts"]
 
 [deploy]
 startCommand = "npm run preview -- --host 0.0.0.0 --port $PORT"
 ```
+
+Railpack runs `npm ci` automatically; `buildCommand` only needs to build.
 
 ---
 
