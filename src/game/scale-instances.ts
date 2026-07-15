@@ -34,29 +34,17 @@ export function getScaleGroupMembers(
   );
 }
 
-export function layoutScaleInstancePosition(
-  primary: PlacedComponent,
-  instanceIndex: number
-): { x: number; y: number } {
-  const row = instanceIndex;
-  return {
-    x: primary.x + row * (primary.width + 28),
-    y: primary.y,
-  };
-}
-
 export function createScaleInstance(
   primary: PlacedComponent,
   instanceIndex: number
 ): PlacedComponent {
   const def = COMPONENT_DEFS[primary.type];
-  const position = layoutScaleInstancePosition(primary, instanceIndex);
 
   return {
     id: `${primary.type}-inst-${primary.id}-${instanceIndex}-${Date.now().toString(36)}`,
     type: primary.type,
-    x: position.x,
-    y: position.y,
+    x: primary.x,
+    y: primary.y,
     width: def.width,
     height: def.height,
     label: def.label,
@@ -102,13 +90,20 @@ export function removeInstanceBelts(
 
 export function pickDespawnInstance(
   components: PlacedComponent[],
-  primaryId: string
+  primaryId: string,
+  queuedCount: (componentId: string) => number = () => 0
 ): PlacedComponent | null {
   const extras = getScaleGroupMembers(components, primaryId).filter(
     (component) => component.id !== primaryId
   );
   if (extras.length === 0) return null;
-  return extras[extras.length - 1]!;
+
+  const idle = extras.filter((component) => queuedCount(component.id) === 0);
+  const candidates = idle.length > 0 ? idle : extras;
+
+  return [...candidates].sort(
+    (a, b) => queuedCount(a.id) - queuedCount(b.id) || a.id.localeCompare(b.id)
+  )[0]!;
 }
 
 export function countReadyInstances(

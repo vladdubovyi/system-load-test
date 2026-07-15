@@ -35,6 +35,7 @@ import {
   pickDespawnInstance,
   removeInstanceBelts,
 } from './scale-instances';
+import { applyBoardLayout } from './board-layout';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -444,19 +445,21 @@ export class SimulationEngine {
 
     this.registerScaleInstance(primary, instance, newBelts, startupSeconds);
     this.message = `${primary.label} scaled out to ${group.length + 1} instances`;
-    this.onTopologyChange?.();
   }
 
   private despawnScaleInstance(primary: PlacedComponent): void {
-    const victim = pickDespawnInstance(this.components, primary.id);
+    const victim = pickDespawnInstance(this.components, primary.id, (id) =>
+      this.queuedCount(id)
+    );
     if (!victim) return;
     this.unregisterScaleInstance(victim);
     const remaining = getScaleGroupMembers(this.components, primary.id).length;
     this.message = `${primary.label} scaled in to ${remaining} instances`;
-    this.onTopologyChange?.();
   }
 
   private reconcileScaleInstances(): void {
+    let topologyChanged = false;
+
     for (const component of [...this.components]) {
       if (!isScalePrimary(component)) continue;
 
@@ -471,11 +474,19 @@ export class SimulationEngine {
           (this.spikeActive && cfg.predictive.enabled);
         this.spawnScaleInstance(component, skipStartup);
         actual += 1;
+        topologyChanged = true;
       }
       while (actual > scaling.instances) {
         this.despawnScaleInstance(component);
         actual -= 1;
+        topologyChanged = true;
       }
+    }
+
+    if (topologyChanged) {
+      applyBoardLayout(this.components);
+      this.rebuildPorts();
+      this.onTopologyChange?.();
     }
   }
 
@@ -1011,6 +1022,8 @@ export class SimulationEngine {
       if (!port) return false;
       const comp = this.componentMap.get(port.componentId);
       if (!comp || comp.type !== targetType) return false;
+      const compSt = this.componentState.get(comp.id);
+      if (!compSt || compSt.failed) return false;
       if (this.isStartingUp(comp.id)) return false;
       return true;
     });
@@ -1131,7 +1144,7 @@ export class SimulationEngine {
 
       const preferRedis =
         redisBelts.length > 0 &&
-        (dbBelts.length === 0 || Math.random() < 0.97);
+        (dbBelts.length === 0 || Math.random() < SCENARIO.cacheHitRatio);
       const candidates = preferRedis ? redisBelts : dbBelts.length > 0 ? dbBelts : belts;
       const belt = this.pickAvailableBelt(candidates);
       if (!belt) {

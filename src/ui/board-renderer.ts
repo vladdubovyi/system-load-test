@@ -3,6 +3,7 @@ import { COMPONENT_DEFS, REQUEST_COLORS } from '../game/types';
 import { getComponentPorts, getSourcePort, loadColor } from '../game/simulation';
 import type { ComponentInstanceConfig } from '../game/component-config';
 import { renderConfigBadgesHtml } from '../game/component-config';
+import { collectScaleGroupFrames, type ScaleGroupFrame } from '../game/board-layout';
 import { WORLD_HEIGHT, WORLD_WIDTH } from './viewport';
 
 const MAX_VISIBLE_REQUESTS = 96;
@@ -27,6 +28,8 @@ export class BoardRenderer {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
   private componentsLayer: HTMLElement | null = null;
+  private scaleGroupsLayer: HTMLElement | null = null;
+  private scaleGroupFrames = new Map<string, HTMLDivElement>();
   private componentGraphics = new Map<string, ComponentGraphics>();
   private beltGraphics: BeltGraphics[] = [];
   private displayedBeltLoads = new Map<string, number>();
@@ -51,6 +54,7 @@ export class BoardRenderer {
     this.rebuildPortMap();
 
     board.querySelector('.belts-layer')?.remove();
+    board.querySelector('.scale-groups-layer')?.remove();
     board.querySelector('.components-layer')?.remove();
     board.querySelector('.particles-layer')?.remove();
 
@@ -63,6 +67,9 @@ export class BoardRenderer {
     this.canvas.className = 'particles-layer';
     this.ctx = this.canvas.getContext('2d');
 
+    this.scaleGroupsLayer = document.createElement('div');
+    this.scaleGroupsLayer.className = 'scale-groups-layer';
+
     this.componentsLayer = document.createElement('div');
     this.componentsLayer.className = 'components-layer';
 
@@ -70,13 +77,15 @@ export class BoardRenderer {
     if (sourceNode) {
       board.insertBefore(this.svg, sourceNode);
       board.insertBefore(this.canvas, sourceNode);
+      board.insertBefore(this.scaleGroupsLayer, sourceNode);
     } else {
-      board.append(this.svg, this.canvas);
+      board.append(this.svg, this.canvas, this.scaleGroupsLayer);
     }
     board.appendChild(this.componentsLayer);
 
     this.resizeCanvas();
     this.buildBelts();
+    this.buildScaleGroupFrames();
     this.buildComponents(selectedComponentId);
   }
 
@@ -154,6 +163,65 @@ export class BoardRenderer {
     }
   }
 
+  private buildScaleGroupFrames(): void {
+    if (!this.scaleGroupsLayer) return;
+    this.scaleGroupsLayer.innerHTML = '';
+    this.scaleGroupFrames.clear();
+
+    for (const frame of collectScaleGroupFrames(this.components)) {
+      const el = this.createScaleGroupFrameElement(frame);
+      this.scaleGroupsLayer.appendChild(el);
+      this.scaleGroupFrames.set(frame.primaryId, el);
+    }
+  }
+
+  private createScaleGroupFrameElement(frame: ScaleGroupFrame): HTMLDivElement {
+    const el = document.createElement('div');
+    el.className = 'scale-group-frame';
+    el.dataset.primaryId = frame.primaryId;
+    el.style.left = `${frame.bounds.x}px`;
+    el.style.top = `${frame.bounds.y}px`;
+    el.style.width = `${frame.bounds.width}px`;
+    el.style.height = `${frame.bounds.height}px`;
+    el.innerHTML = `
+      <span class="scale-group-label">
+        <span class="scale-group-emoji">${frame.emoji}</span>
+        <span class="scale-group-name">${frame.label}</span>
+        <span class="scale-group-count">×${frame.instanceCount}</span>
+      </span>
+    `;
+    return el;
+  }
+
+  private updateScaleGroupFrames(): void {
+    const frames = collectScaleGroupFrames(this.components);
+    const nextIds = new Set(frames.map((frame) => frame.primaryId));
+
+    for (const id of [...this.scaleGroupFrames.keys()]) {
+      if (!nextIds.has(id)) {
+        this.scaleGroupFrames.get(id)?.remove();
+        this.scaleGroupFrames.delete(id);
+      }
+    }
+
+    for (const frame of frames) {
+      let el = this.scaleGroupFrames.get(frame.primaryId);
+      if (!el) {
+        el = this.createScaleGroupFrameElement(frame);
+        this.scaleGroupsLayer?.appendChild(el);
+        this.scaleGroupFrames.set(frame.primaryId, el);
+      }
+
+      el.style.left = `${frame.bounds.x}px`;
+      el.style.top = `${frame.bounds.y}px`;
+      el.style.width = `${frame.bounds.width}px`;
+      el.style.height = `${frame.bounds.height}px`;
+
+      const countEl = el.querySelector('.scale-group-count');
+      if (countEl) countEl.textContent = `×${frame.instanceCount}`;
+    }
+  }
+
   private buildComponents(selectedComponentId: string | null): void {
     if (!this.componentsLayer) return;
     this.componentsLayer.innerHTML = '';
@@ -221,6 +289,7 @@ export class BoardRenderer {
   updatePositions(components: PlacedComponent[]): void {
     this.components = components;
     this.rebuildPortMap();
+    this.updateScaleGroupFrames();
 
     for (const component of components) {
       const gfx = this.componentGraphics.get(component.id);
