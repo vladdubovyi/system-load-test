@@ -58,17 +58,20 @@ Schema reference: https://railway.com/railway.schema.json
 
    Source: https://docs.railway.com/config-as-code#using-a-custom-config-as-code-file
 
-4. Add **Variables**:
+4. Add **Variables** on the backend service (Variables tab → New Variable, or RAW Editor):
 
    ```env
    ASPNETCORE_ENVIRONMENT=Production
    DATABASE_URL=${{Postgres.DATABASE_URL}}
-   CORS_ORIGINS=https://<your-frontend-domain>
+   CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
    ```
 
-5. Deploy and copy the generated public URL (e.g. `https://backend-production-xxxx.up.railway.app`)
+   - `DATABASE_URL` — reference the Postgres service (use your DB service name if not `Postgres`)
+   - `CORS_ORIGINS` — reference the frontend service's public domain (create the frontend service first, or add this variable after)
 
-6. Verify: `GET https://<backend-url>/api/health` should return `200`
+   Railway docs: https://docs.railway.com/guides/variables#reference-variables
+
+5. Deploy and confirm `GET /api/health` works on the backend's public URL
 
 ---
 
@@ -82,27 +85,45 @@ Schema reference: https://railway.com/railway.schema.json
    /railway.toml
    ```
 
-4. Add **Variables**:
+4. Add **Variables** on the frontend service:
 
    ```env
-   VITE_API_URL=https://<your-backend-url>
+   VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
    ```
 
-   `VITE_*` variables must be present at **build time** for Vite to embed them.
+   Replace `backend` with your backend **service name** if different.
 
-5. Deploy and copy the frontend public URL
+   `RAILWAY_PUBLIC_DOMAIN` is provided automatically by Railway for each service.
+
+5. Deploy the frontend
 
 ---
 
-## Step 4: Update backend CORS
+## Step 4: Review and deploy variable changes
 
-On the backend service, set:
+Railway stages variable changes — click **Deploy** after adding or editing variables.
+
+If you created the backend before the frontend, go back to the backend and set:
 
 ```env
-CORS_ORIGINS=https://<your-frontend-domain>
+CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
 ```
 
-Redeploy the backend after changing this variable.
+---
+
+## Environment variables summary
+
+You do **not** look these up externally. Configure them in each service's **Variables** tab:
+
+| Variable | Service | Value |
+|----------|---------|-------|
+| `DATABASE_URL` | Backend | `${{Postgres.DATABASE_URL}}` |
+| `CORS_ORIGINS` | Backend | `https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}` |
+| `VITE_API_URL` | Frontend | `https://${{backend.RAILWAY_PUBLIC_DOMAIN}}` |
+
+Service names (`Postgres`, `backend`, `frontend`) must match what you named each service in Railway. Use the autocomplete dropdown in the Variables UI to pick references.
+
+Source: https://docs.railway.com/guides/variables
 
 ---
 
