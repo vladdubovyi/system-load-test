@@ -69,7 +69,7 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
    CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
    ```
 
-   Only explicitly listed origins are allowed — there is no wildcard.
+   Only explicitly listed origins are allowed. Do **not** use a `*.up.railway.app` wildcard — any Railway user can deploy a service on that domain and impersonate your frontend to the API.
 
 2. **Deploy** staged variable changes in Railway (variables are not applied until deployed).
 
@@ -79,7 +79,7 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
    VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
    ```
 
-4. Check backend deploy logs for: `CORS configured with ... explicit origin(s)`.
+4. Check backend deploy logs for: `CORS allowed origins: ...`.
 
 ---
 

@@ -2,6 +2,11 @@
 # Point this service at: /backend/railway.toml (absolute path in service settings)
 # Docs: https://docs.railway.com/config-as-code
 #
+# Required variables (set in Railway → backend service → Variables, then Deploy):
+#   DATABASE_URL=${{Postgres.DATABASE_URL}}
+#   CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
+# Use the exact frontend URL only — never a *.up.railway.app wildcard.
+#
 # Must use DOCKERFILE builder: Railpack detects root package.json and installs
 # Node only — dotnet is not available for buildCommand on this monorepo layout.
 
