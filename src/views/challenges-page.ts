@@ -1,6 +1,6 @@
 import type { Challenge } from '../game/scenario-types';
 import { renderAppNav, mountAppNav } from './app-shell';
-import { navigate, pathForChallengeSandbox } from '../router';
+import { pathForChallengeSandbox } from '../router';
 
 function difficultyClass(difficulty: string): string {
   return `difficulty-${difficulty}`;
@@ -101,7 +101,12 @@ function renderChallengeDetail(challenge: Challenge | null): string {
       </div>
 
       <div class="challenge-detail-actions">
-        <button class="btn btn-primary btn-lg" data-launch-challenge="${challenge.slug}">Launch</button>
+        <a
+          class="btn btn-primary btn-lg"
+          href="${pathForChallengeSandbox(challenge.slug)}"
+          target="_blank"
+          rel="noopener noreferrer"
+        >Launch</a>
       </div>
     </div>
   `;
@@ -123,13 +128,12 @@ function renderChallengeList(challenges: Challenge[], selectedId: string | null)
               <span>${challenge.scenario.duration}s</span>
             </span>
           </button>
-          <button
+          <a
             class="btn btn-primary challenge-launch-btn"
-            type="button"
-            data-launch-challenge="${challenge.slug}"
-          >
-            Launch
-          </button>
+            href="${pathForChallengeSandbox(challenge.slug)}"
+            target="_blank"
+            rel="noopener noreferrer"
+          >Launch</a>
         </div>
       `
     )
@@ -178,14 +182,6 @@ function bindChallengesPageEvents(container: HTMLElement, onSelect: (challengeId
     el.addEventListener('click', () => {
       const id = (el as HTMLElement).dataset.challengeId;
       if (id) onSelect(id);
-    });
-  });
-
-  container.querySelectorAll('[data-launch-challenge]').forEach((el) => {
-    el.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const slug = (el as HTMLElement).dataset.launchChallenge;
-      if (slug) navigate(pathForChallengeSandbox(slug));
     });
   });
 }

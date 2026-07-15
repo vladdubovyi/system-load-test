@@ -18,7 +18,7 @@ export function renderLandingPage(): string {
             </p>
             <div class="landing-cta-row">
               <a class="btn btn-primary btn-lg" href="/challenges" data-link>Browse challenges</a>
-              <a class="btn btn-secondary btn-lg" href="/sandbox/url-shortener" data-link>Try it yourself</a>
+              <a class="btn btn-secondary btn-lg" href="/sandbox/url-shortener" target="_blank" rel="noopener noreferrer">Try it yourself</a>
             </div>
           </div>
           <div class="landing-hero-visual" aria-hidden="true">
