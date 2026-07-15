@@ -1,13 +1,17 @@
 # Backend API service config for Railway.
 # Point this service at: /backend/railway.toml (absolute path in service settings)
 # Docs: https://docs.railway.com/config-as-code
+#
+# Must use DOCKERFILE builder: Railpack detects root package.json and installs
+# Node only — dotnet is not available for buildCommand on this monorepo layout.
 
 [build]
-buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSimulator.Api.csproj -c Release -o backend/out"
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
 watchPatterns = ["backend/**"]
 
 [deploy]
-startCommand = "dotnet backend/out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
+startCommand = "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"

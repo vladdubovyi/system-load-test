@@ -33,6 +33,14 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
 
 ---
 
+## Backend build fails with `dotnet: not found`
+
+**Cause:** Railpack detects the root `package.json` and installs Node only. A `buildCommand` with `dotnet publish` cannot work without the .NET SDK in that image.
+
+**Fix:** Backend uses `builder = "DOCKERFILE"` in `/backend/railway.toml` so Railway builds with `backend/Dockerfile` (includes .NET SDK). Do not use a plain `buildCommand` for .NET in this monorepo layout.
+
+---
+
 ## Backend Docker build fails with `SystemDesignSimulator.Api: not found`
 
 **Cause:** Docker build context is the repository root, but `COPY` paths assumed the `backend/` folder.

@@ -1,11 +1,12 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "buildCommand": "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSimulator.Api.csproj -c Release -o backend/out",
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "backend/Dockerfile",
     "watchPatterns": ["backend/**"]
   },
   "deploy": {
-    "startCommand": "dotnet backend/out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT",
+    "startCommand": "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",
