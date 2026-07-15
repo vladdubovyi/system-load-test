@@ -1,282 +1,137 @@
-# Railway Build Failure Troubleshooting
+# Railway Troubleshooting
 
-## 🔍 Common Build Failures & Solutions
-
-### Problem 1: "Cannot find .csproj file" or "No buildable projects found"
-
-**Symptoms:**
-```
-Error: Could not find a project file in the current directory
-```
-
-**Root Cause:** Railway is looking for .NET project in wrong directory
-
-**Solution:**
-1. In Railway dashboard, go to your backend service
-2. **Settings → Service Settings → Root Directory**
-3. Set to: `backend/SystemDesignSimulator.Api`
-4. Redeploy
+All solutions below reference [Railway Config as Code](https://docs.railway.com/config-as-code) and [Monorepo Guide](https://docs.railway.com/guides/monorepo).
 
 ---
 
-### Problem 2: "Multiple project types detected" or Node.js detected for backend
+## Build fails immediately after connecting the repo
 
-**Symptoms:**
-```
-Warning: Found both package.json and .csproj
-Nixpacks detected: nodejs
-```
+**Likely cause:** Railway is using the wrong config file, or no config file is set.
 
-**Root Cause:** Railway is building from the repository root instead of the backend subdirectory.
+**Fix:**
 
-**Solution:**
-1. Open the **backend** service → **Settings → Root Directory**
-2. Set to: `backend/SystemDesignSimulator.Api`
+1. Open the service → **Settings**
+2. Set **Config-as-code file** to the correct absolute path:
+   - Backend: `/backend/railway.toml`
+   - Frontend: `/railway.toml`
 3. Redeploy
 
-The repo no longer includes a root `railway.json` (it caused this confusion).
+Config in code overrides dashboard build/deploy settings: https://docs.railway.com/config-as-code#understanding-config-source
 
 ---
 
-### Problem 3: Build succeeds but service crashes immediately
+## Backend builds as Node.js instead of .NET
 
-**Symptoms:**
+**Likely cause:** Service is not using `/backend/railway.toml`, so Railway auto-detects the root `package.json`.
+
+**Fix:** Set config file path to `/backend/railway.toml`. That file sets:
+
+```toml
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
 ```
-[FATAL] Application startup exception
-```
 
-**Root Cause:** Missing environment variables
+Railway builds from a Dockerfile when `builder = "DOCKERFILE"` and `dockerfilePath` is set.
 
-**Solution:**
-Check your backend service has these variables:
+---
+
+## Frontend cannot reach the API (CORS)
+
+**Fix:** On the backend service, set:
+
 ```env
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-ASPNETCORE_ENVIRONMENT=Production
-CORS_ORIGINS=https://your-frontend.railway.app
+CORS_ORIGINS=https://<your-frontend-domain>
 ```
+
+Use the exact public URL Railway assigns to the frontend service.
 
 ---
 
-### Problem 4: "Database connection failed"
+## `VITE_API_URL` not applied
 
-**Symptoms:**
-```
-Npgsql.NpgsqlException: Connection refused
-```
+Vite embeds `VITE_*` variables at **build** time.
 
-**Root Cause:** Database not accessible or wrong connection string
+**Fix:**
 
-**Solution:**
-1. Make sure PostgreSQL database is in the SAME Railway project
-2. Check backend variables:
+1. Add `VITE_API_URL` to the frontend service variables in Railway
+2. Trigger a new deployment (rebuild)
+
+---
+
+## Database connection errors
+
+**Fix:**
+
+1. Ensure PostgreSQL is in the **same Railway project**
+2. On the backend service:
+
    ```env
    DATABASE_URL=${{Postgres.DATABASE_URL}}
    ```
-   (Note: Use the variable reference, not the actual URL)
-3. Make sure services are in same project (private networking)
+
+   Use Railway's variable reference syntax so the backend receives the private database URL.
 
 ---
 
-### Problem 5: Frontend build fails with "Vite not found"
+## Health check fails
 
-**Symptoms:**
+The backend health endpoint is:
+
 ```
-Error: Cannot find module 'vite'
+GET /api/health
 ```
 
-**Root Cause:** Dependencies not installed
+`/backend/railway.toml` sets `healthcheckPath = "/api/health"`.
 
-**Solution:**
-1. Check build command is correct:
-   ```bash
-   npm install && npm run build
-   ```
-   NOT just `npm run build`
-
-2. Or use `npm ci` for faster installs:
-   ```bash
-   npm ci && npm run build
-   ```
+If you change the route, update `healthcheckPath` in the config file.
 
 ---
 
-### Problem 6: Build times out
+## Both services redeploy on every commit
 
-**Symptoms:**
-```
-Build exceeded time limit of 15 minutes
-```
+**Fix:** `watchPatterns` in each config file limit redeploys:
 
-**Root Cause:** Installing too many dependencies or slow network
+- Backend: `["backend/**"]`
+- Frontend: `["src/**", "public/**", "index.html", "package.json", "vite.config.ts"]`
 
-**Solution:**
-1. Enable build cache in Railway settings
-2. Use `npm ci` instead of `npm install` (faster)
-3. For backend: Make sure Nixpacks uses correct .NET SDK version
+Documented at: https://docs.railway.com/reference/config-as-code#watch-patterns
 
 ---
 
-### Problem 7: "Port already in use"
+## Checking what config a deployment used
 
-**Symptoms:**
-```
-Error: listen EADDRINUSE: address already in use :::5000
-```
+On the deployment details page, settings that came from a config file show a **file icon**. Hover to see which file and field supplied the value.
 
-**Root Cause:** Not using Railway's dynamic PORT variable
+Source: https://docs.railway.com/config-as-code#understanding-config-source
 
-**Solution:**
-Check your start command uses `$PORT`:
+---
 
-**Backend:**
+## Using the Railway CLI with multiple services
+
+When a project has multiple services from one repo, link the CLI to the correct service:
+
 ```bash
-dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT
+railway link
 ```
 
-**Frontend:**
-```bash
-npm run preview -- --host 0.0.0.0 --port $PORT
-```
+Source: https://docs.railway.com/guides/monorepo#using-the-cli
 
 ---
 
-### Problem 8: CORS errors after deployment
+## GitHub Actions deploy fails with "Invalid RAILWAY_TOKEN"
 
-**Symptoms:**
-```
-Access to fetch at 'https://backend.railway.app' from origin 'https://frontend.railway.app' 
-has been blocked by CORS policy
-```
+The workflow in `.github/workflows/deploy-railway.yml` is optional. It skips deployment when `RAILWAY_TOKEN` is not set.
 
-**Root Cause:** Backend doesn't allow frontend origin
+Either:
 
-**Solution:**
-1. Go to backend service → Variables
-2. Update `CORS_ORIGINS`:
-   ```env
-   CORS_ORIGINS=https://frontend-production-xxxx.railway.app
-   ```
-   (Replace with your actual frontend URL)
-3. Backend will auto-redeploy
+1. **Recommended:** rely on Railway's native GitHub integration (no token needed), or
+2. Add `RAILWAY_TOKEN` from https://railway.app/account/tokens
 
 ---
 
-## 📋 Step-by-Step Debugging
+## Still stuck?
 
-### Step 1: Identify which service is failing
-- Backend (API)?
-- Frontend (Web)?
-- Database?
-
-### Step 2: Check the build logs
-1. Go to Railway dashboard
-2. Click the failing service
-3. Click "Deployments" tab
-4. Click the failed deployment
-5. Read the error messages
-
-### Step 3: Common error keywords to look for
-
-| Error Keyword | Likely Issue |
-|---------------|--------------|
-| `dotnet: command not found` | Wrong builder, needs Nixpacks config |
-| `Cannot find module` | Missing dependencies, check package.json |
-| `ENOENT: no such file` | Wrong root directory |
-| `Connection refused` | Database not accessible |
-| `Port already in use` | Not using $PORT variable |
-| `.csproj not found` | Wrong root directory for backend |
-| `npm not found` | Wrong builder for frontend |
-
----
-
-## 🔧 Railway Service Settings Checklist
-
-### Backend Service ✅
-
-**General:**
-- [x] Service name: `backend` or `api`
-- [x] Root directory: `backend/SystemDesignSimulator.Api`
-- [x] Watch paths: `backend/**`
-
-**Build:**
-- [x] Builder: Nixpacks
-- [x] Build command: `dotnet restore && dotnet publish -c Release -o out`
-
-**Deploy:**
-- [x] Start command: `dotnet out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT`
-
-**Variables:**
-- [x] `ASPNETCORE_ENVIRONMENT=Production`
-- [x] `DATABASE_URL=${{Postgres.DATABASE_URL}}`
-- [x] `CORS_ORIGINS=<frontend-url>`
-
-### Frontend Service ✅
-
-**General:**
-- [x] Service name: `frontend` or `web`
-- [x] Root directory: `.` (repository root)
-- [x] Watch paths: `src/**`, `public/**`, `package.json`
-
-**Build:**
-- [x] Builder: Nixpacks
-- [x] Build command: `npm ci && npm run build`
-
-**Deploy:**
-- [x] Start command: `npm run preview -- --host 0.0.0.0 --port $PORT`
-
-**Variables:**
-- [x] `VITE_API_URL=<backend-url>`
-
----
-
-## 🚨 Emergency Fixes
-
-### If nothing works, try this:
-
-1. **Delete ALL services** in Railway project
-2. **Keep only the PostgreSQL database**
-3. **Start fresh with separate services:**
-
-#### Backend First:
-```bash
-# In Railway:
-New → GitHub Repo → system-load-test
-Root Directory: backend/SystemDesignSimulator.Api
-Variables:
-  DATABASE_URL=${{Postgres.DATABASE_URL}}
-  ASPNETCORE_ENVIRONMENT=Production
-```
-
-#### Frontend Second:
-```bash
-# In Railway:
-New → GitHub Repo → system-load-test
-Root Directory: . (leave empty)
-Variables:
-  VITE_API_URL=https://<backend-url-from-step-1>
-```
-
----
-
-## 📞 Get Help
-
-1. **Check build logs first** - 90% of issues are visible in logs
-2. **Railway Discord**: [discord.gg/railway](https://discord.gg/railway)
-3. **GitHub Issues**: Open an issue with your build logs
-4. **Railway Status**: Check [status.railway.app](https://status.railway.app)
-
----
-
-## ✅ Success Indicators
-
-Your deployment is successful when:
-- ✅ Build completes without errors
-- ✅ Service shows "Active" status (green)
-- ✅ Health checks pass
-- ✅ Backend responds to `/health` endpoint
-- ✅ Frontend loads without errors
-- ✅ No CORS errors in browser console
-
----
-
-**Pro Tip:** Always deploy backend FIRST, then frontend. Frontend needs the backend URL!
+1. Open the failed deployment in Railway → read the build log
+2. Confirm the config file path is exactly `/backend/railway.toml` or `/railway.toml`
+3. Check https://status.railway.app

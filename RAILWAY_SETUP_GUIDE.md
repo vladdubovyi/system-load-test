@@ -1,413 +1,178 @@
-# Railway Setup Guide - Both Frontend & Backend
+# Railway Deployment Guide
 
-Railway can host **everything** — frontend, backend, and PostgreSQL — in one project. You do **not** need Vercel.
+This guide uses only settings documented in [Railway Config as Code](https://docs.railway.com/config-as-code) and [Deploying a Monorepo](https://docs.railway.com/guides/monorepo).
 
-> **If your first deploy failed:** Railway likely tried to build the whole monorepo as one app. Fix it by creating **two services** from the same repo with different **Root Directory** settings (see below). Do **not** use a single service at the repository root.
-
----
-
-## 🎯 Recommended: One Railway Project, Three Services
-
-| Service | Root Directory | Purpose |
-|---------|----------------|---------|
-| `postgres` | (managed) | Database |
-| `backend` | `backend/SystemDesignSimulator.Api` | ASP.NET Core API |
-| `frontend` | `.` (repo root) | Vite static app |
-
-Build configs are included via `nixpacks.toml` in each root directory.
+Railway can host **frontend**, **backend**, and **PostgreSQL** in one project.
 
 ---
 
-### Step 1: Create Railway Project
+## Repository layout
 
-1. Go to [railway.app](https://railway.app)
-2. Click "New Project"
-3. Select "Deploy from GitHub repo"
-4. Choose `vladdubovyi/system-load-test`
+This is an **isolated monorepo** (per Railway's terminology):
 
-### Step 2: Add PostgreSQL Database
+```
+/
+├── package.json          # frontend (Vite)
+├── src/
+├── railway.toml          # frontend service config
+├── railway.json
+└── backend/
+    ├── Dockerfile
+    ├── railway.toml      # backend service config
+    └── SystemDesignSimulator.Api/
+```
 
-1. In your project, click "New"
-2. Select "Database" → "PostgreSQL"
-3. Railway provisions it automatically
-4. Copy the connection string for later
+---
 
-### Step 3: Deploy Backend Service
+## Config files in this repo
 
-1. In your project, click "New"
-2. Select "GitHub Repo" (same repo)
-3. Click "Add Service"
-4. **Configure the backend service:**
+| File | Service | Purpose |
+|------|---------|---------|
+| `/railway.toml` | Frontend | `buildCommand`, `startCommand`, `watchPatterns` |
+| `/backend/railway.toml` | Backend API | `dockerfilePath`, `healthcheckPath`, `watchPatterns` |
 
-   **Settings → General:**
-   - Service Name: `backend` or `api`
-   - Root Directory: `backend/SystemDesignSimulator.Api`
-   - Watch Paths: `backend/**`
+Equivalent JSON versions exist at the same paths (`railway.json`).
 
-   **Settings → Build:**
-   - Builder: Nixpacks (auto-detected)
-   - Build Command: 
-     ```bash
-     dotnet restore && dotnet publish -c Release -o out
-     ```
+Schema reference: https://railway.com/railway.schema.json
 
-   **Settings → Deploy:**
-   - Start Command:
-     ```bash
-     dotnet out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT
-     ```
+---
 
-   **Variables (Important!):**
+## Step 1: Create a Railway project
+
+1. Go to [railway.app](https://railway.app) and create a new project
+2. Add **PostgreSQL** (New → Database → PostgreSQL)
+
+---
+
+## Step 2: Add the backend service
+
+1. New → GitHub Repo → select this repository
+2. Open the new service → **Settings**
+3. Under **Config-as-code**, set the config file path to:
+
+   ```
+   /backend/railway.toml
+   ```
+
+   Railway docs: the config file path is **absolute from the repository root** and does not follow any subdirectory scope.
+
+   Source: https://docs.railway.com/config-as-code#using-a-custom-config-as-code-file
+
+4. Add **Variables**:
+
    ```env
    ASPNETCORE_ENVIRONMENT=Production
    DATABASE_URL=${{Postgres.DATABASE_URL}}
-   CORS_ORIGINS=https://your-frontend.railway.app
-   PORT=5000
+   CORS_ORIGINS=https://<your-frontend-domain>
    ```
 
-5. Click "Deploy"
-6. Wait for deployment to complete (~2-3 minutes)
-7. **Copy your backend URL** (e.g., `https://backend-production-xxx.railway.app`)
+5. Deploy and copy the generated public URL (e.g. `https://backend-production-xxxx.up.railway.app`)
 
-### Step 4: Deploy Frontend Service
+6. Verify: `GET https://<backend-url>/api/health` should return `200`
 
-1. In the same project, click "New" → "GitHub Repo"
-2. **Configure the frontend service:**
+---
 
-   **Settings → General:**
-   - Service Name: `frontend` or `web`
-   - Root Directory: `.` (repository root)
-   - Watch Paths: `src/**`, `public/**`, `index.html`, `package.json`, `vite.config.ts`
+## Step 3: Add the frontend service
 
-   **Settings → Build:**
-   - Builder: Nixpacks (auto-detected)
-   - Build Command:
-     ```bash
-     npm install && npm run build
-     ```
+1. In the same project: New → GitHub Repo → select the **same** repository again
+2. Open the service → **Settings**
+3. Set config file path to:
 
-   **Settings → Deploy:**
-   - Start Command:
-     ```bash
-     npm run preview -- --host 0.0.0.0 --port $PORT
-     ```
+   ```
+   /railway.toml
+   ```
 
-   **Variables (Important!):**
+4. Add **Variables**:
+
    ```env
-   VITE_API_URL=https://backend-production-xxx.railway.app
-   PORT=3000
-   ```
-   *(Replace with your actual backend URL from Step 3)*
-
-3. Click "Deploy"
-4. Wait for deployment (~1-2 minutes)
-5. **Copy your frontend URL**
-
-### Step 5: Update CORS Settings
-
-1. Go back to backend service
-2. Update `CORS_ORIGINS` variable with your frontend URL:
-   ```env
-   CORS_ORIGINS=https://frontend-production-xxx.railway.app
-   ```
-3. Backend will auto-redeploy
-
-### Step 6: Test Everything
-
-1. Visit your frontend URL
-2. Open browser console (F12)
-3. Click "Choose Challenge"
-4. If you see challenges, it works! 🎉
-
----
-
-## 🐛 Troubleshooting Build Failures
-
-### Issue 1: "Cannot find .csproj file"
-
-**Problem:** Railway is looking in wrong directory
-
-**Solution:**
-```bash
-# In Railway Settings → Root Directory, set:
-backend/SystemDesignSimulator.Api
-```
-
-### Issue 2: "npm not found" (Backend service)
-
-**Problem:** Railway detected it as Node.js project instead of .NET
-
-**Solution:**
-1. Go to Settings → Build
-2. Add custom Nixpacks configuration:
-   ```toml
-   [phases.setup]
-   providers = ["dotnet"]
+   VITE_API_URL=https://<your-backend-url>
    ```
 
-### Issue 3: ".NET SDK not found"
+   `VITE_*` variables must be present at **build time** for Vite to embed them.
 
-**Problem:** Wrong .NET version
-
-**Solution:**
-Add to your backend `SystemDesignSimulator.Api.csproj`:
-```xml
-<PropertyGroup>
-  <TargetFramework>net8.0</TargetFramework>
-</PropertyGroup>
-```
-
-### Issue 4: "Database connection failed"
-
-**Problem:** Connection string format
-
-**Solution:**
-Check that `DATABASE_URL` variable is set:
-```env
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-```
-
-Railway auto-fills this variable reference.
-
-### Issue 5: Frontend builds but shows blank page
-
-**Problem:** Environment variable not set
-
-**Solution:**
-```env
-VITE_API_URL=https://your-backend.railway.app
-```
-
-Make sure it starts with `VITE_` (required by Vite)
-
-### Issue 6: CORS errors in browser
-
-**Problem:** Backend doesn't allow frontend origin
-
-**Solution:**
-Update backend CORS_ORIGINS to include frontend URL:
-```env
-CORS_ORIGINS=https://your-frontend.railway.app,http://localhost:5173
-```
-
-### Issue 7: "Port already in use"
-
-**Problem:** Not using Railway's PORT variable
-
-**Solution:**
-Make sure start command uses `$PORT`:
-```bash
-dotnet run --urls http://0.0.0.0:$PORT
-```
-
-### Issue 8: Build takes too long / times out
-
-**Problem:** Installing too many dependencies
-
-**Solution:**
-For frontend, use cached builds:
-1. Go to Settings → Build
-2. Enable "Use Cache"
+5. Deploy and copy the frontend public URL
 
 ---
 
-## 📋 Quick Reference
+## Step 4: Update backend CORS
 
-### Backend Service Configuration
+On the backend service, set:
 
-**Root Directory:**
-```
-backend/SystemDesignSimulator.Api
-```
-
-**Build Command:**
-```bash
-dotnet restore && dotnet publish -c Release -o out
-```
-
-**Start Command:**
-```bash
-dotnet out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT
-```
-
-**Environment Variables:**
 ```env
-ASPNETCORE_ENVIRONMENT=Production
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-CORS_ORIGINS=https://frontend-production-xxx.railway.app
+CORS_ORIGINS=https://<your-frontend-domain>
 ```
 
-### Frontend Service Configuration
-
-**Root Directory:**
-```
-.
-```
-*(Leave as repository root)*
-
-**Build Command:**
-```bash
-npm install && npm run build
-```
-
-**Start Command:**
-```bash
-npm run preview -- --host 0.0.0.0 --port $PORT
-```
-
-**Environment Variables:**
-```env
-VITE_API_URL=https://backend-production-xxx.railway.app
-```
+Redeploy the backend after changing this variable.
 
 ---
 
-## 🔍 Check Build Logs
+## What the config files do
 
-To see what's failing:
+### `/backend/railway.toml`
 
-1. Go to your service in Railway
-2. Click "Deployments" tab
-3. Click the failed deployment
-4. View logs to see exact error
-
-**Common error patterns:**
-
-- `Error: Cannot find module` → Missing dependencies
-- `dotnet: command not found` → Wrong builder detected
-- `ENOENT: no such file` → Wrong root directory
-- `Port 5000 is already in use` → Not using $PORT variable
-- `Connection refused` → Database not accessible
-
----
-
-## 💡 Alternative: Nixpacks Configuration File
-
-If Railway auto-detection fails, create `nixpacks.toml` in each root:
-
-### Backend: `backend/nixpacks.toml`
 ```toml
-[phases.setup]
-nixPkgs = ['dotnet-sdk-8']
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
+watchPatterns = ["backend/**"]
 
-[phases.install]
-cmds = ['dotnet restore']
-
-[phases.build]
-cmds = ['dotnet publish -c Release -o out']
-
-[start]
-cmd = 'dotnet out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT'
+[deploy]
+startCommand = "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
+healthcheckPath = "/api/health"
 ```
 
-### Frontend: `nixpacks.toml` (root)
+- `dockerfilePath` — documented in https://docs.railway.com/reference/config-as-code#dockerfile-path
+- `watchPatterns` — documented in https://docs.railway.com/reference/config-as-code#watch-patterns
+- `startCommand` — documented in https://docs.railway.com/reference/config-as-code#start-command
+- `healthcheckPath` — documented in https://docs.railway.com/reference/config-as-code#healthcheck-path
+
+### `/railway.toml` (frontend)
+
 ```toml
-[phases.setup]
-nixPkgs = ['nodejs-20_x']
+[build]
+buildCommand = "npm ci && npm run build"
+watchPatterns = ["src/**", "public/**", "index.html", "package.json", "vite.config.ts"]
 
-[phases.install]
-cmds = ['npm install']
-
-[phases.build]
-cmds = ['npm run build']
-
-[start]
-cmd = 'npm run preview -- --host 0.0.0.0 --port $PORT'
+[deploy]
+startCommand = "npm run preview -- --host 0.0.0.0 --port $PORT"
 ```
 
 ---
 
-## 🎯 Pro Tips
+## Monorepo notes (from Railway docs)
 
-### Tip 1: Use Railway CLI for Debugging
-```bash
-# Install Railway CLI
-npm install -g @railway/cli
+From https://docs.railway.com/guides/monorepo:
 
-# Login
-railway login
+- For isolated monorepos, Railway supports setting a **root directory** per service in the service **Settings** tab. If your dashboard shows this option, you can set:
+  - Backend: `backend/SystemDesignSimulator.Api`
+  - Frontend: repository root
+- The config file path is always absolute (e.g. `/backend/railway.toml`), even when a root directory is set.
+- `watchPatterns` in config-as-code limit which file changes trigger redeploys.
 
-# Link to your project
-railway link
-
-# View logs
-railway logs
-
-# Run commands in Railway environment
-railway run npm run build
-```
-
-### Tip 2: Set Up Preview Environments
-```yaml
-# railway.toml in root
-[environments.production]
-[environments.staging]
-```
-
-Deploy staging from `develop` branch, production from `main`.
-
-### Tip 3: Use Shared Variables
-Create variables that both services can reference:
-```env
-API_URL=${{backend.RAILWAY_PUBLIC_DOMAIN}}
-```
-
-### Tip 4: Health Checks
-Railway automatically health checks your services on the root path.
-Make sure `/` or `/health` returns 200 OK.
-
-### Tip 5: Resource Limits
-On free tier:
-- $5 credit = ~500 hours compute
-- Monitor usage in Railway dashboard
-- Use "Sleep on idle" to save credits
+If you do **not** see a root directory setting in your dashboard, the config-as-code files above still work because build/start commands and `dockerfilePath` are relative to the repository root.
 
 ---
 
-## 📊 Cost Estimate (Railway Only)
+## GitHub Actions (optional)
 
-| Resource | Usage | Cost |
-|----------|-------|------|
-| Frontend | ~100 hours/month | ~$1 |
-| Backend | ~200 hours/month | ~$2 |
-| PostgreSQL | ~150 hours/month | ~$1.50 |
-| **Total** | | **~$4.50/month** |
+The repo includes `.github/workflows/deploy-railway.yml`, but it requires a `RAILWAY_TOKEN` secret.
 
-Free tier: **$5 credit/month** → Runs free! 🎉
+**Recommended:** let Railway deploy directly from GitHub (no Actions token needed). The GitHub Actions workflow skips deployment when `RAILWAY_TOKEN` is not configured.
 
 ---
 
-## 🆘 Still Having Issues?
+## Cost
 
-1. **Check Railway Status Page**: [status.railway.app](https://status.railway.app)
-2. **Railway Discord**: [discord.gg/railway](https://discord.gg/railway)
-3. **View Build Logs**: Railway Dashboard → Service → Deployments → Click failed deployment
-4. **Check GitHub Actions**: Make sure CI passes before deploying
+Railway free tier includes **$5/month** in usage credits. This MVP typically fits within that allowance.
 
 ---
 
-## ✅ Success Checklist
+## Troubleshooting
 
-After deployment, verify:
+See [RAILWAY_TROUBLESHOOTING.md](./RAILWAY_TROUBLESHOOTING.md).
 
-- [ ] Backend URL accessible: `https://your-backend.railway.app/health`
-- [ ] Frontend URL accessible: `https://your-frontend.railway.app`
-- [ ] API health check returns 200: `/api/health`
-- [ ] Frontend can fetch challenges (check Network tab)
-- [ ] No CORS errors in browser console
-- [ ] Database connection working (check backend logs)
-- [ ] Challenge selector shows 4 challenges
-- [ ] Can place components and create connections
+Official references:
 
----
-
-## 🚀 You're All Set!
-
-Both frontend and backend running on Railway with:
-- ✅ Automatic HTTPS
-- ✅ Auto-scaling
-- ✅ Zero-downtime deploys
-- ✅ Automatic backups (database)
-- ✅ Health monitoring
-
-**Next:** Add your Railway URL to the README! 🎉
+- Config as code: https://docs.railway.com/config-as-code
+- Config reference: https://docs.railway.com/reference/config-as-code
+- Monorepo guide: https://docs.railway.com/guides/monorepo
