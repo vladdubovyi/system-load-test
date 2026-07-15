@@ -3,7 +3,7 @@
 # Docs: https://docs.railway.com/config-as-code
 
 [build]
-buildCommand = "npm ci && npm run build"
+buildCommand = "npm run build"
 watchPatterns = ["src/**", "public/**", "index.html", "package.json", "vite.config.ts"]
 
 [deploy]
