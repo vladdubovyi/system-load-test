@@ -1,3 +1,5 @@
+import { getAuthToken } from '../auth/auth-store';
+import type { AuthResponse, UserResponse } from '../auth/types';
 import type { Challenge, ComponentDefinition } from '../game/scenario-types';
 
 export class ApiClient {
@@ -7,13 +9,68 @@ export class ApiClient {
     this.baseUrl = baseUrl || import.meta.env.VITE_API_URL || 'http://localhost:5000';
   }
 
+  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers || {});
+    if (!headers.has('Content-Type') && init.body) {
+      headers.set('Content-Type', 'application/json');
+    }
+
+    const token = getAuthToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers,
+    });
+
+    if (!response.ok) {
+      let message = response.statusText;
+      try {
+        const payload = await response.json();
+        message = payload.error || payload.title || message;
+      } catch {
+        // ignore parse errors
+      }
+      throw new Error(message || 'Request failed');
+    }
+
+    if (response.status === 204) {
+      return undefined as T;
+    }
+
+    return response.json();
+  }
+
+  async register(email: string, password: string, displayName?: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, displayName }),
+    });
+  }
+
+  async login(email: string, password: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+    });
+  }
+
+  async googleLogin(idToken: string): Promise<AuthResponse> {
+    return this.request<AuthResponse>('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ idToken }),
+    });
+  }
+
+  async getCurrentUser(): Promise<UserResponse> {
+    return this.request<UserResponse>('/api/auth/me');
+  }
+
   async getChallenges(): Promise<Challenge[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/challenges`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch challenges: ${response.statusText}`);
-      }
-      const data = await response.json();
+      const data = await this.request<any[]>('/api/challenges');
       
       // Transform backend response to frontend format
       return data.map((item: any) => ({
@@ -24,6 +81,8 @@ export class ApiClient {
         difficulty: item.difficulty,
         createdAt: item.createdAt,
         allowedComponents: item.allowedComponents || [],
+        overviewContent: item.overviewContent,
+        videoUrl: item.videoUrl,
         scenario: {
           id: item.scenario.id,
           title: item.name,
@@ -51,11 +110,7 @@ export class ApiClient {
 
   async getChallenge(id: string): Promise<Challenge> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/challenges/${id}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch challenge: ${response.statusText}`);
-      }
-      const item = await response.json();
+      const item = await this.request<any>(`/api/challenges/${id}`);
       
       return {
         id: item.id,
@@ -65,6 +120,8 @@ export class ApiClient {
         difficulty: item.difficulty,
         createdAt: item.createdAt,
         allowedComponents: item.allowedComponents || [],
+        overviewContent: item.overviewContent,
+        videoUrl: item.videoUrl,
         scenario: {
           id: item.scenario.id,
           title: item.name,
@@ -92,11 +149,7 @@ export class ApiClient {
 
   async getChallengeBySlug(slug: string): Promise<Challenge> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/challenges/slug/${slug}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch challenge: ${response.statusText}`);
-      }
-      const item = await response.json();
+      const item = await this.request<any>(`/api/challenges/slug/${slug}`);
       
       return {
         id: item.id,
@@ -106,6 +159,8 @@ export class ApiClient {
         difficulty: item.difficulty,
         createdAt: item.createdAt,
         allowedComponents: item.allowedComponents || [],
+        overviewContent: item.overviewContent,
+        videoUrl: item.videoUrl,
         scenario: {
           id: item.scenario.id,
           title: item.name,
@@ -133,11 +188,7 @@ export class ApiClient {
 
   async getComponentDefinitions(): Promise<ComponentDefinition[]> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/components`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch components: ${response.statusText}`);
-      }
-      return await response.json();
+      return await this.request<ComponentDefinition[]>('/api/components');
     } catch (error) {
       console.error('Error fetching components:', error);
       throw error;
@@ -146,11 +197,7 @@ export class ApiClient {
 
   async getComponentByType(type: string): Promise<ComponentDefinition> {
     try {
-      const response = await fetch(`${this.baseUrl}/api/components/${type}`);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch component: ${response.statusText}`);
-      }
-      return await response.json();
+      return await this.request<ComponentDefinition>(`/api/components/${type}`);
     } catch (error) {
       console.error('Error fetching component:', error);
       throw error;

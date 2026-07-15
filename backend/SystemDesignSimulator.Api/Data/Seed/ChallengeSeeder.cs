@@ -17,6 +17,122 @@ public static class ChallengeSeeder
         
         context.SaveChanges();
     }
+
+    public static void EnsureChallengeContent(ApplicationDbContext context)
+    {
+        var contentBySlug = GetChallengeContent();
+        var challenges = context.Challenges.ToList();
+        var updated = false;
+
+        foreach (var challenge in challenges)
+        {
+            if (!contentBySlug.TryGetValue(challenge.Slug, out var content))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(challenge.OverviewContent))
+            {
+                challenge.OverviewContent = content.Overview;
+                updated = true;
+            }
+
+            if (string.IsNullOrWhiteSpace(challenge.VideoUrl))
+            {
+                challenge.VideoUrl = content.VideoUrl;
+                updated = true;
+            }
+        }
+
+        if (updated)
+        {
+            context.SaveChanges();
+        }
+    }
+
+    private static Dictionary<string, (string Overview, string VideoUrl)> GetChallengeContent() => new()
+    {
+        ["url-shortener"] = (
+            Overview: """
+                URL shorteners are a classic system design interview question because they combine read-heavy traffic, viral spikes, and a deceptively simple API.
+
+                **What interviewers look for**
+                - How you handle billions of redirects per day with low latency
+                - Encoding strategies for short codes (hashing vs. counters)
+                - Caching hot links and surviving celebrity traffic spikes
+                - Database schema for mappings and analytics
+
+                **Key concepts to practice**
+                - Read/write ratio and cache placement
+                - Horizontal scaling behind a load balancer
+                - Rate limiting for create endpoints
+                - CDN vs. application-layer caching for redirects
+
+                Use the sandbox to wire components, run traffic, and see where your architecture breaks under load.
+                """,
+            VideoUrl: "https://www.youtube.com/watch?v=J9u85GqdRM8"
+        ),
+        ["dropbox"] = (
+            Overview: """
+                File storage systems test your understanding of durability, large payloads, and metadata separation.
+
+                **What interviewers look for**
+                - Upload/download paths for large files
+                - Metadata vs. blob storage split
+                - Sync and conflict resolution at a high level
+                - Durability guarantees and replication
+
+                **Key concepts to practice**
+                - Object storage for blobs, relational/NoSQL for metadata
+                - Chunking, resumable uploads, and background workers
+                - Bandwidth and storage cost tradeoffs
+                - Queue-based processing for virus scan / thumbnails
+
+                Try building a pipeline that keeps metadata lookups fast while uploads fan out to durable storage.
+                """,
+            VideoUrl: "https://www.youtube.com/watch?v=U0xTu6E2CT8"
+        ),
+        ["instagram-feed"] = (
+            Overview: """
+                Feed systems are read-heavy, latency-sensitive, and fan out across many services — a staple senior-level interview topic.
+
+                **What interviewers look for**
+                - Feed generation: pull vs. push vs. hybrid models
+                - Caching strategies for celebrity accounts
+                - Media delivery and CDN usage
+                - Ranking, pagination, and hot-key mitigation
+
+                **Key concepts to practice**
+                - Fan-out on write vs. fan-out on read
+                - Sharded timelines and precomputed feeds
+                - Object storage + CDN for photos/video
+                - Async pipelines (Kafka/workers) for notifications
+
+                Simulate spike traffic and see whether your feed path stays under 200ms.
+                """,
+            VideoUrl: "https://www.youtube.com/watch?v=KmAyPUv1YTI"
+        ),
+        ["rate-limiter"] = (
+            Overview: """
+                Rate limiters protect APIs from abuse and are often discussed as a standalone service or middleware component.
+
+                **What interviewers look for**
+                - Token bucket vs. sliding window vs. fixed window
+                - Distributed counters with Redis
+                - Per-user, per-IP, and per-API-key limits
+                - Fail-open vs. fail-closed behavior
+
+                **Key concepts to practice**
+                - Centralized vs. edge rate limiting
+                - Redis atomic operations and TTL keys
+                - Consistent hashing for sharded limiters
+                - Returning 429 responses with Retry-After headers
+
+                A great warm-up challenge before tackling larger designs.
+                """,
+            VideoUrl: "https://www.youtube.com/watch?v=FU4WlWF_SIQ"
+        ),
+    };
     
     private static void SeedComponentDefinitions(ApplicationDbContext context)
     {
@@ -393,7 +509,9 @@ public static class ChallengeSeeder
             Name = "URL Shortener",
             Slug = "url-shortener",
             Description = "Design a high-traffic URL shortening service like bit.ly",
-            Difficulty = "medium"
+            Difficulty = "medium",
+            OverviewContent = GetChallengeContent()["url-shortener"].Overview,
+            VideoUrl = GetChallengeContent()["url-shortener"].VideoUrl,
         };
         
         var scenario = new Scenario
@@ -451,7 +569,9 @@ public static class ChallengeSeeder
             Name = "File Storage Service (Dropbox)",
             Slug = "dropbox",
             Description = "Design a cloud file storage and synchronization service",
-            Difficulty = "hard"
+            Difficulty = "hard",
+            OverviewContent = GetChallengeContent()["dropbox"].Overview,
+            VideoUrl = GetChallengeContent()["dropbox"].VideoUrl,
         };
         
         var scenario = new Scenario
@@ -512,7 +632,9 @@ public static class ChallengeSeeder
             Name = "Instagram Feed",
             Slug = "instagram-feed",
             Description = "Design a social media feed generation system",
-            Difficulty = "hard"
+            Difficulty = "hard",
+            OverviewContent = GetChallengeContent()["instagram-feed"].Overview,
+            VideoUrl = GetChallengeContent()["instagram-feed"].VideoUrl,
         };
         
         var scenario = new Scenario
@@ -573,7 +695,9 @@ public static class ChallengeSeeder
             Name = "Rate Limiter",
             Slug = "rate-limiter",
             Description = "Design a distributed rate limiting service",
-            Difficulty = "easy"
+            Difficulty = "easy",
+            OverviewContent = GetChallengeContent()["rate-limiter"].Overview,
+            VideoUrl = GetChallengeContent()["rate-limiter"].VideoUrl,
         };
         
         var scenario = new Scenario

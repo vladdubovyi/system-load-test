@@ -1,6 +1,10 @@
 # Frontend service config for Railway.
 # Point this service at: /railway.toml (absolute path in service settings)
 # Docs: https://docs.railway.com/config-as-code
+#
+# Recommended variables (then redeploy frontend so Vite embeds build-time values):
+#   VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
+#   VITE_GOOGLE_CLIENT_ID=<google-oauth-client-id>
 
 [build]
 buildCommand = "npm run build"

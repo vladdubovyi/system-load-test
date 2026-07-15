@@ -16,6 +16,10 @@ public class Challenge
     
     public string? Description { get; set; }
     
+    public string? OverviewContent { get; set; }
+    
+    public string? VideoUrl { get; set; }
+    
     [MaxLength(20)]
     public string Difficulty { get; set; } = "medium";
     

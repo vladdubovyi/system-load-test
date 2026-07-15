@@ -33,6 +33,8 @@ public class ChallengesController : ControllerBase
             c.Name,
             c.Slug,
             c.Description,
+            c.OverviewContent,
+            c.VideoUrl,
             c.Difficulty,
             c.CreatedAt,
             Scenario = c.Scenario != null ? new
@@ -71,6 +73,8 @@ public class ChallengesController : ControllerBase
             challenge.Name,
             challenge.Slug,
             challenge.Description,
+            challenge.OverviewContent,
+            challenge.VideoUrl,
             challenge.Difficulty,
             challenge.CreatedAt,
             Scenario = challenge.Scenario != null ? new
@@ -109,6 +113,8 @@ public class ChallengesController : ControllerBase
             challenge.Name,
             challenge.Slug,
             challenge.Description,
+            challenge.OverviewContent,
+            challenge.VideoUrl,
             challenge.Difficulty,
             challenge.CreatedAt,
             Scenario = challenge.Scenario != null ? new
