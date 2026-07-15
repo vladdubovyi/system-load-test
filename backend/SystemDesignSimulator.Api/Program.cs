@@ -56,21 +56,27 @@ else
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 
-// Configure CORS
-// Support CORS_ORIGINS environment variable for production
-var corsOrigins = Environment.GetEnvironmentVariable("CORS_ORIGINS");
-var allowedOrigins = new List<string>
+static string NormalizeOrigin(string origin) =>
+    origin.Trim().Trim('"', '\'').TrimEnd('/');
+
+// Configure CORS — explicit origins only (set CORS_ORIGINS in Railway Variables)
+var corsOrigins =
+    Environment.GetEnvironmentVariable("CORS_ORIGINS") ??
+    builder.Configuration["CORS_ORIGINS"];
+
+var allowedOrigins = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
 {
     "http://localhost:5173",
     "http://localhost:4173",
-    "https://vladdubovyi.github.io"
+    "https://vladdubovyi.github.io",
 };
 
-if (!string.IsNullOrEmpty(corsOrigins))
+if (!string.IsNullOrWhiteSpace(corsOrigins))
 {
-    // Add production origins from environment variable
-    allowedOrigins.AddRange(corsOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries)
-        .Select(o => o.Trim()));
+    foreach (var origin in corsOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries))
+    {
+        allowedOrigins.Add(NormalizeOrigin(origin));
+    }
 }
 
 builder.Services.AddCors(options =>
@@ -79,12 +85,21 @@ builder.Services.AddCors(options =>
     {
         policy.WithOrigins(allowedOrigins.ToArray())
             .AllowAnyHeader()
-            .AllowAnyMethod()
-            .AllowCredentials();
+            .AllowAnyMethod();
     });
 });
 
 var app = builder.Build();
+
+app.Logger.LogInformation(
+    "CORS allowed origins: {Origins}",
+    string.Join(", ", allowedOrigins));
+
+if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(corsOrigins))
+{
+    app.Logger.LogWarning(
+        "CORS_ORIGINS is not set. Set it to your frontend URL, e.g. CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}");
+}
 
 // Apply migrations and seed data
 using (var scope = app.Services.CreateScope())
@@ -109,16 +124,16 @@ using (var scope = app.Services.CreateScope())
 }
 
 // Configure the HTTP request pipeline
+app.UseCors("AllowFrontend");
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
 }
 
-app.UseCors("AllowFrontend");
-
 app.UseAuthorization();
 
-app.MapControllers();
+app.MapControllers().RequireCors("AllowFrontend");
 
 app.Run();
