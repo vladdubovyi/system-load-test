@@ -15,4 +15,6 @@ WORKDIR /app
 COPY --from=build /app/publish .
 
 ENV ASPNETCORE_ENVIRONMENT=Production
-ENTRYPOINT ["dotnet", "SystemDesignSimulator.Api.dll"]
+
+# Shell form so $PORT is expanded at runtime (Railway injects PORT)
+ENTRYPOINT ["sh", "-c", "exec dotnet SystemDesignSimulator.Api.dll --urls \"http://0.0.0.0:${PORT:-8080}\""]

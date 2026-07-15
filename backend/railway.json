@@ -6,7 +6,7 @@
     "watchPatterns": ["backend/**"]
   },
   "deploy": {
-    "startCommand": "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT",
+    "startCommand": null,
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 300,
     "restartPolicyType": "ON_FAILURE",

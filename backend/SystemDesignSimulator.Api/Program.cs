@@ -4,6 +4,13 @@ using SystemDesignSimulator.Api.Data.Seed;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Railway injects PORT; bind Kestrel explicitly (exec-form ENTRYPOINT won't expand $PORT)
+var port = Environment.GetEnvironmentVariable("PORT");
+if (!string.IsNullOrEmpty(port))
+{
+    builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+}
+
 // Add services to the container
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();

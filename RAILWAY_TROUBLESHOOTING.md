@@ -37,7 +37,7 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
 
 **Cause:** Railpack detects the root `package.json` and installs Node only. A `buildCommand` with `dotnet publish` cannot work without the .NET SDK in that image.
 
-**Fix:** Backend uses `builder = "DOCKERFILE"` in `/backend/railway.toml` so Railway builds with `backend/Dockerfile` (includes .NET SDK). Do not use a plain `buildCommand` for .NET in this monorepo layout.
+**Fix:** Backend Dockerfile uses a shell `ENTRYPOINT` so `$PORT` expands at runtime. `Program.cs` also reads `PORT` as a fallback. Do not set a `startCommand` with `$PORT` in railway.toml — it overrides the container entrypoint without shell expansion.
 
 ---
 
@@ -104,6 +104,8 @@ GET /api/health
 ```
 
 `/backend/railway.toml` sets `healthcheckPath = "/api/health"`.
+
+**If health checks return "service unavailable" but the app starts:** the app likely bound to the wrong port. Exec-form `ENTRYPOINT`/`startCommand` passes the literal `$PORT` string without shell expansion. The Dockerfile uses a shell `ENTRYPOINT`, and `Program.cs` reads the `PORT` env var. Do not set `startCommand` with `$PORT` in railway.toml.
 
 If you change the route, update `healthcheckPath` in the config file.
 

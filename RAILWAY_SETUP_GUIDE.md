@@ -117,11 +117,10 @@ dockerfilePath = "backend/Dockerfile"
 watchPatterns = ["backend/**"]
 
 [deploy]
-startCommand = "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
 healthcheckPath = "/api/health"
 ```
 
-Uses Docker (not Railpack) because Railpack detects the root `package.json` and does not install .NET. The Dockerfile `COPY` paths are relative to the **repository root** build context.
+Docker `ENTRYPOINT` uses a shell so Railway's `PORT` is expanded. Do not add a `startCommand` with `$PORT` — it overrides the entrypoint without shell expansion.
 
 ### `/railway.toml` (frontend)
 
