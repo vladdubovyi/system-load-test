@@ -14,6 +14,7 @@
 
 .site-page {
   min-height: 100vh;
+  overflow: visible;
   background:
     radial-gradient(circle at top right, rgba(37, 99, 235, 0.08), transparent 28%),
     var(--site-bg);
@@ -324,7 +325,7 @@
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(0, 2fr);
   gap: 20px;
-  min-height: calc(100vh - 120px);
+  align-items: start;
 }
 
 .challenges-sidebar,
@@ -338,7 +339,9 @@
 .challenges-sidebar {
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  position: sticky;
+  top: 72px;
+  max-height: calc(100vh - 96px);
 }
 
 .challenges-sidebar-header {
@@ -359,24 +362,47 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  flex: 1;
+  min-height: 0;
 }
 
 .challenge-list-item {
-  width: 100%;
-  text-align: left;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
   border: 1px solid var(--site-border);
   background: #fafafa;
   border-radius: 14px;
-  padding: 14px;
+  padding: 10px;
+}
+
+.challenge-list-item.is-selected {
+  border-color: rgba(37, 99, 235, 0.35);
+  background: rgba(37, 99, 235, 0.06);
+}
+
+.challenge-list-select {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  border: none;
+  background: transparent;
+  padding: 4px;
   cursor: pointer;
   font: inherit;
   color: inherit;
 }
 
-.challenge-list-item.is-selected,
-.challenge-list-item:hover {
-  border-color: rgba(37, 99, 235, 0.35);
-  background: rgba(37, 99, 235, 0.06);
+.challenge-list-select:hover {
+  background: transparent;
+}
+
+.challenge-launch-btn {
+  align-self: center;
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .challenge-list-title {
@@ -396,7 +422,6 @@
 
 .challenges-detail-panel {
   padding: 24px;
-  overflow: auto;
 }
 
 .challenge-detail-header {
@@ -583,6 +608,16 @@
     grid-template-columns: 1fr;
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .challenges-sidebar {
+    position: static;
+    max-height: none;
+  }
+
+  .challenges-list {
+    overflow: visible;
+    max-height: none;
   }
 
   .site-header-inner {

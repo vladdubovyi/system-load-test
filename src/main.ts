@@ -35,6 +35,7 @@ async function renderRoute(route: RouteMatch): Promise<void> {
     sandboxMounted = false;
   }
 
+  document.body.classList.toggle('sandbox-mode', route.name === 'sandbox');
   document.title = 'System Design Game';
 
   switch (route.name) {
