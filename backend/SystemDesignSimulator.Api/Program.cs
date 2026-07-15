@@ -10,24 +10,70 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
 // Configure database
-var connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
-    ?? "Host=localhost;Port=5432;Database=systemdesignsim;Username=postgres;Password=postgres";
+// Support both appsettings.json and DATABASE_URL environment variable (Railway/Render)
+var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
+
+if (!string.IsNullOrEmpty(connectionString))
+{
+    // Railway/Render format: postgresql://user:password@host:port/database
+    // Convert to Npgsql format
+    try
+    {
+        var databaseUri = new Uri(connectionString);
+        var userInfo = databaseUri.UserInfo.Split(':');
+        
+        connectionString = $"Host={databaseUri.Host};" +
+                          $"Port={databaseUri.Port};" +
+                          $"Database={databaseUri.LocalPath.TrimStart('/')};" +
+                          $"Username={userInfo[0]};" +
+                          $"Password={userInfo[1]};" +
+                          $"SSL Mode=Require;" +
+                          $"Trust Server Certificate=true";
+    }
+    catch (Exception ex)
+    {
+        builder.Logging.AddConsole().AddDebug();
+        var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
+        logger.LogWarning(ex, "Failed to parse DATABASE_URL, falling back to appsettings.json");
+        connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+            ?? "Host=localhost;Port=5432;Database=systemdesignsim;Username=postgres;Password=postgres";
+    }
+}
+else
+{
+    // Fallback to appsettings.json
+    connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
+        ?? "Host=localhost;Port=5432;Database=systemdesignsim;Username=postgres;Password=postgres";
+}
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
 
 // Configure CORS
+// Support CORS_ORIGINS environment variable for production
+var corsOrigins = Environment.GetEnvironmentVariable("CORS_ORIGINS");
+var allowedOrigins = new List<string>
+{
+    "http://localhost:5173",
+    "http://localhost:4173",
+    "https://vladdubovyi.github.io"
+};
+
+if (!string.IsNullOrEmpty(corsOrigins))
+{
+    // Add production origins from environment variable
+    allowedOrigins.AddRange(corsOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries)
+        .Select(o => o.Trim()));
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins(
-                "http://localhost:5173",
-                "http://localhost:4173", 
-                "https://vladdubovyi.github.io"
-            )
+        policy.WithOrigins(allowedOrigins.ToArray())
             .AllowAnyHeader()
-            .AllowAnyMethod();
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 

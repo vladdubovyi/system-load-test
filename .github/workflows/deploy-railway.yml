@@ -1,0 +1,48 @@
+name: Deploy to Railway
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-railway.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: |
+          cd backend/SystemDesignSimulator.Api
+          dotnet restore
+
+      - name: Build
+        run: |
+          cd backend/SystemDesignSimulator.Api
+          dotnet build --configuration Release --no-restore
+
+      - name: Test
+        run: |
+          cd backend/SystemDesignSimulator.Api
+          dotnet test --no-restore --verbosity normal
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway
+        run: railway up --service backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Run Migrations
+        run: railway run --service backend dotnet ef database update
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
