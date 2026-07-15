@@ -1,6 +1,13 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using SystemDesignSimulator.Api.Data;
 using SystemDesignSimulator.Api.Data.Seed;
+using SystemDesignSimulator.Api.Models;
+using SystemDesignSimulator.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -55,6 +62,44 @@ else
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseNpgsql(connectionString));
+
+builder.Services
+    .AddIdentity<ApplicationUser, IdentityRole>(options =>
+    {
+        options.Password.RequiredLength = 8;
+        options.Password.RequireNonAlphanumeric = false;
+        options.User.RequireUniqueEmail = true;
+    })
+    .AddEntityFrameworkStores<ApplicationDbContext>()
+    .AddDefaultTokenProviders();
+
+var jwtSecret = builder.Configuration["JWT_SECRET"]
+    ?? builder.Configuration["Jwt:Secret"]
+    ?? "dev-only-change-me-in-production-use-32-chars-min";
+var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SystemDesignSimulator";
+var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SystemDesignSimulator";
+
+builder.Services.AddAuthentication(options =>
+{
+    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+})
+.AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true,
+        ValidateAudience = true,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        ValidIssuer = jwtIssuer,
+        ValidAudience = jwtAudience,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+        ClockSkew = TimeSpan.FromMinutes(1),
+    };
+});
+
+builder.Services.AddSingleton<JwtTokenService>();
 
 static string NormalizeOrigin(string origin) =>
     origin.Trim().Trim('"', '\'').TrimEnd('/');
@@ -114,6 +159,7 @@ using (var scope = app.Services.CreateScope())
         
         // Seed data
         ChallengeSeeder.SeedData(context);
+        ChallengeSeeder.EnsureChallengeContent(context);
         
         app.Logger.LogInformation("Database initialized successfully");
     }
@@ -132,6 +178,7 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
+app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers().RequireCors("AllowFrontend");

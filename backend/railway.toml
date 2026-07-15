@@ -5,6 +5,8 @@
 # Required variables (set in Railway → backend service → Variables, then Deploy):
 #   DATABASE_URL=${{Postgres.DATABASE_URL}}
 #   CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
+#   JWT_SECRET=<random-32+-char-secret>
+#   GOOGLE_CLIENT_ID=<google-oauth-client-id>
 # Use the exact frontend URL only — never a *.up.railway.app wildcard.
 #
 # Must use DOCKERFILE builder: Railpack detects root package.json and installs

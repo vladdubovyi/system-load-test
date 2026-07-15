@@ -67,6 +67,8 @@ export interface Challenge {
   slug: string;
   description: string;
   difficulty: 'easy' | 'medium' | 'hard';
+  overviewContent?: string;
+  videoUrl?: string;
   createdAt: string;
   scenario: ScenarioDefinition;
   allowedComponents: string[];

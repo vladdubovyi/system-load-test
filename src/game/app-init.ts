@@ -12,7 +12,7 @@ export interface AppInitResult {
  * Initialize the application by loading challenges and components from backend
  * Falls back to legacy data if backend is unavailable
  */
-export async function initializeApp(): Promise<AppInitResult> {
+export async function initializeApp(challengeSlug?: string): Promise<AppInitResult> {
   let challenges: Challenge[] = [];
   let components: ComponentDefinition[] = [];
   let selectedChallenge: Challenge | null = null;
@@ -31,8 +31,12 @@ export async function initializeApp(): Promise<AppInitResult> {
     // Initialize component registry with backend data
     await componentRegistry.initialize(components);
 
-    // Default to URL Shortener challenge if available
-    selectedChallenge = challenges.find(c => c.slug === 'url-shortener') || challenges[0] || null;
+    // Default to requested slug, then URL Shortener, then first available
+    selectedChallenge =
+      (challengeSlug ? challenges.find(c => c.slug === challengeSlug) : null) ||
+      challenges.find(c => c.slug === 'url-shortener') ||
+      challenges[0] ||
+      null;
 
   } catch (error) {
     console.warn('Failed to load from backend, using legacy data:', error);
