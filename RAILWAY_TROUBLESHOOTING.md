@@ -59,13 +59,25 @@ buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSim
 
 ## Frontend cannot reach the API (CORS)
 
-**Fix:** On the backend service, set:
+**Symptoms:** Browser console shows `No 'Access-Control-Allow-Origin' header`.
 
-```env
-CORS_ORIGINS=https://<your-frontend-domain>
-```
+**Checks:**
 
-Use the exact public URL Railway assigns to the frontend service.
+1. On the **backend** service, confirm `CORS_ORIGINS` is set (optional in production — `*.up.railway.app` is allowed automatically):
+
+   ```env
+   CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
+   ```
+
+2. **Deploy** staged variable changes in Railway (variables are not applied until deployed).
+
+3. On the **frontend** service, confirm `VITE_API_URL` points at the backend and **redeploy the frontend** after setting it (Vite embeds this at build time):
+
+   ```env
+   VITE_API_URL=https://${{backend.RAILWAY_PUBLIC_DOMAIN}}
+   ```
+
+4. Check backend deploy logs for: `CORS configured with ... explicit origin(s)`.
 
 ---
 
