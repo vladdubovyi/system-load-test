@@ -1,7 +1,5 @@
 import '../styles/main.css';
 import {
-  SCENARIO,
-  COMPONENT_DEFS,
   type ComponentType,
   type PlacedComponent,
   type ConveyorBelt,
@@ -16,12 +14,16 @@ import {
   canConnect,
   SOURCE_ID,
 } from '../game/simulation';
-import { URL_SHORTENER_PRESET, buildPreset } from '../game/presets';
+import { buildPreset, URL_SHORTENER_PRESET } from '../game/presets';
+import { buildChallengePreset } from '../game/challenge-presets';
+import { getComponentDef } from '../game/component-catalog';
+import { getActiveScenario, setActiveScenarioFromChallenge } from '../game/scenario-runtime';
 import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
 import { ConnectionPreview } from '../ui/connection-preview';
 import { mountReportModal } from '../ui/report-modal';
 import { renderConfigPalette, getChipFromEvent } from '../ui/config-palette';
+import { renderComponentsPanel, mountComponentsPanel } from '../ui/components-panel';
 import {
   applyConfigChip,
   buildReferenceComponentConfigs,
@@ -207,17 +209,26 @@ function render(): void {
   const zoomPct = Math.round(state.viewport.zoom * 100);
   mountContainer.innerHTML = `
     <div class="canvas-app">
-      ${renderFloatingChrome(state.activeTool, state.placementType, zoomPct, state.simulationSpeed)}
-      ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
+      ${renderComponentsPanel(state.placementType, state.currentChallenge?.allowedComponents)}
+      <div class="canvas-workspace">
+        ${renderFloatingChrome(
+          state.activeTool,
+          state.placementType,
+          zoomPct,
+          state.simulationSpeed,
+          state.currentChallenge?.name
+        )}
+        ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
 
-      <div class="board-viewport" id="board-viewport">
-        <div class="board-pan" id="board-pan">
-          <div class="board-world" id="board-world">
-            <div class="board" id="board">
-              <div class="source-node" id="source-node">
-                <div class="source-icon">📨</div>
-                <div class="source-label">Incoming Requests</div>
-                <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Drag to connect"></button>
+        <div class="board-viewport" id="board-viewport">
+          <div class="board-pan" id="board-pan">
+            <div class="board-world" id="board-world">
+              <div class="board" id="board">
+                <div class="source-node" id="source-node">
+                  <div class="source-icon">📨</div>
+                  <div class="source-label">Incoming Requests</div>
+                  <button class="port port-out" data-port-id="${SOURCE_ID}:out" type="button" title="Drag to connect"></button>
+                </div>
               </div>
             </div>
           </div>
@@ -227,6 +238,7 @@ function render(): void {
   `;
 
   bindEvents();
+  mountComponentsPanel((type) => setTool('component', type));
   mountBoard();
   updateStatus();
   applyViewport();
@@ -247,7 +259,7 @@ function refreshConfigPalette(): void {
     const type = selectedComponentType();
     hint.className = `palette-selection${type ? '' : ' muted'}`;
     hint.innerHTML = type
-      ? `Configuring <strong>${COMPONENT_DEFS[type].label}</strong>`
+      ? `Configuring <strong>${getComponentDef(type).label}</strong>`
       : 'Select a component to configure it';
   }
 }
@@ -489,16 +501,18 @@ function updateStatus(dt = 0): void {
     }
 
     const hud = state.displayedHud;
+    const scenario = getActiveScenario();
     stats.innerHTML = `
-      <div class="hud-stat"><span class="hud-label">Time</span><span class="hud-value">${hud.time.toFixed(1)}s / ${SCENARIO.duration}s</span></div>
+      <div class="hud-stat"><span class="hud-label">Time</span><span class="hud-value">${hud.time.toFixed(1)}s / ${scenario.duration}s</span></div>
       <div class="hud-stat"><span class="hud-label">RPS</span><span class="hud-value ${snap.spikeActive ? 'spike' : ''}">${Math.round(hud.rps)}</span></div>
       <div class="hud-stat"><span class="hud-label">Done</span><span class="hud-value">${Math.round(hud.completed).toLocaleString()}</span></div>
       <div class="hud-stat"><span class="hud-label">Dropped</span><span class="hud-value ${snap.totalDropped > 0 ? 'bad' : ''}">${Math.round(hud.dropped).toLocaleString()}</span></div>
     `;
   } else {
+    const scenario = getActiveScenario();
     stats.innerHTML = `
-      <div class="hud-stat"><span class="hud-label">Scenario</span><span class="hud-value">URL Shortener</span></div>
-      <div class="hud-stat"><span class="hud-label">Duration</span><span class="hud-value">${SCENARIO.duration}s</span></div>
+      <div class="hud-stat"><span class="hud-label">Scenario</span><span class="hud-value">${scenario.title}</span></div>
+      <div class="hud-stat"><span class="hud-label">Duration</span><span class="hud-value">${scenario.duration}s</span></div>
     `;
   }
 
@@ -519,7 +533,7 @@ function setTool(tool: BoardTool, placementType: ComponentType | null = null): v
   document.querySelectorAll('[data-tool]').forEach((el) => {
     el.classList.toggle('active', (el as HTMLElement).dataset.tool === tool);
   });
-  document.querySelectorAll('[data-component]').forEach((el) => {
+  document.querySelectorAll('.components-panel-item[data-component]').forEach((el) => {
     const type = (el as HTMLElement).dataset.component as ComponentType;
     el.classList.toggle('active', tool === 'component' && type === placementType);
   });
@@ -585,12 +599,6 @@ function bindEvents(): void {
     });
   });
 
-  document.querySelectorAll('[data-component]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      setTool('component', (btn as HTMLElement).dataset.component as ComponentType);
-    });
-  });
-
   const menu = document.getElementById('main-menu');
   document.getElementById('btn-menu')?.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -602,7 +610,7 @@ function bindEvents(): void {
   });
   document.getElementById('menu-preset')?.addEventListener('click', () => {
     if (menu) menu.hidden = true;
-    loadPreset();
+    loadChallengeStarter();
   });
   document.getElementById('menu-reset')?.addEventListener('click', () => {
     if (menu) menu.hidden = true;
@@ -620,7 +628,7 @@ function bindEvents(): void {
   });
   document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
   document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
-  document.getElementById('btn-preset')?.addEventListener('click', loadPreset);
+  document.getElementById('btn-preset')?.addEventListener('click', loadChallengeStarter);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
   
   // Speed control buttons
@@ -1015,11 +1023,14 @@ function resetBoard(): void {
   setTool('hand');
 }
 
-function loadPreset(): void {
+function loadChallengeStarter(): void {
   if (isSimRunning()) stopSimulation();
   invalidateBoardSnapshot();
 
-  const { components, belts } = buildPreset(URL_SHORTENER_PRESET);
+  const slug = state.currentChallenge?.slug;
+  const challengePreset = slug ? buildChallengePreset(slug) : null;
+  const { components, belts } = challengePreset ?? buildPreset(URL_SHORTENER_PRESET);
+
   state.components = components;
   state.belts = belts;
   state.annotations = createDefaultAnnotations();
@@ -1028,6 +1039,7 @@ function loadPreset(): void {
   state.selection = null;
   setTool('hand');
   mountBoard();
+  annotationRenderer.updateProblemFrame();
   updateStatus();
 }
 
@@ -1361,6 +1373,7 @@ async function initSandbox(challengeSlug?: string, loadReferencePreset = true): 
     const appData = await initializeApp(challengeSlug);
     state.availableChallenges = appData.challenges;
     state.currentChallenge = appData.selectedChallenge;
+    setActiveScenarioFromChallenge(state.currentChallenge);
 
     console.log(`Loaded ${appData.challenges.length} challenges from backend`);
     console.log(`Selected challenge: ${state.currentChallenge?.name}`);
@@ -1370,8 +1383,9 @@ async function initSandbox(challengeSlug?: string, loadReferencePreset = true): 
 
   render();
   if (loadReferencePreset) {
-    loadPreset();
+    loadChallengeStarter();
   } else {
     resetBoard();
+    annotationRenderer.updateProblemFrame();
   }
 }

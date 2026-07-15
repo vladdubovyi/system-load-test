@@ -1,5 +1,6 @@
 import type { ConveyorBelt, PlacedComponent, Port, Request, SimulationSnapshot } from '../game/types';
-import { COMPONENT_DEFS, REQUEST_COLORS } from '../game/types';
+import { getComponentDef } from '../game/component-catalog';
+import { REQUEST_COLORS } from '../game/types';
 import { getComponentPorts, getSourcePort, loadColor } from '../game/simulation';
 import type { ComponentInstanceConfig } from '../game/component-config';
 import { renderConfigBadgesHtml } from '../game/component-config';
@@ -228,7 +229,7 @@ export class BoardRenderer {
     this.componentGraphics.clear();
 
     for (const component of this.components) {
-      const def = COMPONENT_DEFS[component.type];
+      const def = getComponentDef(component.type);
       const root = document.createElement('div');
       root.className = `component${component.id === selectedComponentId ? ' selected' : ''}${
         component.scaleGroupId && component.scaleGroupId !== component.id ? ' scale-instance' : ''

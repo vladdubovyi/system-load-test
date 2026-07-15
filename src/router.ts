@@ -66,3 +66,7 @@ export function initRouter(): void {
 export function pathForChallengeSandbox(slug: string): string {
   return `/sandbox/${slug}`;
 }
+
+export function openChallengeSandbox(slug: string): void {
+  window.open(pathForChallengeSandbox(slug), '_blank', 'noopener,noreferrer');
+}

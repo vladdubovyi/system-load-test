@@ -37,6 +37,14 @@ import {
 } from './scale-instances';
 import { applyBoardLayout } from './board-layout';
 import {
+  isCacheType,
+  isComputeType,
+  isIngressType,
+  isStorageType,
+} from './component-taxonomy';
+import { getComponentDef } from './component-catalog';
+import { getActiveScenario, type RuntimeScenario } from './scenario-runtime';
+import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
   REQUEST_COLORS,
@@ -52,8 +60,8 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function pickRequestColor(): { colorIndex: number; celebrity: boolean } {
-  const celebrity = Math.random() < SCENARIO.celebrityShare;
+function pickRequestColor(scenario: RuntimeScenario): { colorIndex: number; celebrity: boolean } {
+  const celebrity = Math.random() < scenario.celebrityShare;
   if (celebrity) {
     const idx =
       CELEBRITY_COLOR_INDICES[
@@ -166,7 +174,24 @@ export function getComponentPorts(component: PlacedComponent): Port[] {
         },
       ];
     default:
-      return [];
+      return [
+        {
+          id: `${component.id}:in`,
+          componentId: component.id,
+          side: 'in',
+          label: 'in',
+          x: component.x,
+          y: cy,
+        },
+        {
+          id: `${component.id}:out`,
+          componentId: component.id,
+          side: 'out',
+          label: 'out',
+          x: component.x + component.width,
+          y: cy,
+        },
+      ];
   }
 }
 
@@ -187,23 +212,37 @@ export function canConnect(
   if (!toType) return false;
 
   if (fromType === 'source') {
-    return toType === 'load-balancer';
+    return isIngressType(toType) || toType === 'load-balancer' || toType === 'api-gateway';
+  }
+
+  if (isIngressType(fromType ?? '')) {
+    return (
+      isComputeType(toType) ||
+      toType === 'shortener' ||
+      toType === 'backend' ||
+      toType === 'rate-limiter' ||
+      toType === 'cdn'
+    );
+  }
+
+  if (fromType === 'rate-limiter' || fromType === 'cdn') {
+    return isComputeType(toType) || toType === 'backend' || toType === 'shortener';
   }
 
   if (fromType === 'load-balancer') {
-    return toType === 'shortener' || toType === 'backend';
+    return isComputeType(toType) || toType === 'shortener' || toType === 'backend';
   }
 
   if (fromType === 'shortener') {
-    return toType === 'database' || toType === 'redis';
+    return isStorageType(toType) || toType === 'database' || toType === 'redis';
   }
 
-  if (fromType === 'backend') {
-    return toType === 'redis' || toType === 'database';
+  if (fromType === 'backend' || isComputeType(fromType ?? '')) {
+    return isStorageType(toType) || toType === 'redis' || toType === 'database';
   }
 
-  if (fromType === 'redis' || fromType === 'database') {
-    return toType === 'backend' || toType === 'shortener';
+  if (isStorageType(fromType ?? '') || fromType === 'redis' || fromType === 'database') {
+    return isComputeType(toType) || toType === 'backend' || toType === 'shortener';
   }
 
   return false;
@@ -232,7 +271,7 @@ export class SimulationEngine {
   private totalSpawned = 0;
   private totalCompleted = 0;
   private totalDropped = 0;
-  private currentRps = SCENARIO.baseRps;
+  private currentRps = getActiveScenario().baseRps;
   private spikeActive = false;
   private spikeTimer = 0;
   private message = 'Wire up your system, then press Play.';
@@ -249,13 +288,16 @@ export class SimulationEngine {
   private scaleDownTimers = new Map<string, number>();
   private startupUntil = new Map<string, number>();
   private onTopologyChange: TopologyChangeListener | null = null;
+  private readonly scenario: RuntimeScenario;
 
   constructor(
     components: PlacedComponent[],
     belts: ConveyorBelt[],
     componentConfigs: Map<string, ComponentInstanceConfig> = new Map(),
-    onTopologyChange: TopologyChangeListener | null = null
+    onTopologyChange: TopologyChangeListener | null = null,
+    scenario: RuntimeScenario = getActiveScenario()
   ) {
+    this.scenario = scenario;
     this.componentConfigs = componentConfigs;
     this.components = components;
     this.belts = belts;
@@ -564,7 +606,7 @@ export class SimulationEngine {
       multiplier *= Math.max(1, sharding.shardCount);
     }
     if (replication.enabled) {
-      multiplier *= 1 + Math.max(0, replication.readReplicas) * SCENARIO.readRatio;
+      multiplier *= 1 + Math.max(0, replication.readReplicas) * this.scenario.readRatio;
     }
     return multiplier;
   }
@@ -610,8 +652,8 @@ export class SimulationEngine {
 
       const trafficShare =
         component.type === 'backend'
-          ? SCENARIO.readRatio
-          : 1 - SCENARIO.readRatio;
+          ? this.scenario.readRatio
+          : 1 - this.scenario.readRatio;
       const needed = Math.ceil(
         (this.currentRps * trafficShare) / component.capacity
       );
@@ -788,7 +830,7 @@ export class SimulationEngine {
     this.time += dt;
     this.updateStartupStates();
     const inDrain =
-      this.draining || this.time >= SCENARIO.duration;
+      this.draining || this.time >= this.scenario.duration;
 
     if (!inDrain) {
       this.updateTrafficPattern(dt);
@@ -818,7 +860,7 @@ export class SimulationEngine {
 
     if (
       this.draining &&
-      this.time >= SCENARIO.duration + SCENARIO.drainDuration
+      this.time >= this.scenario.duration + this.scenario.drainDuration
     ) {
       const anyFailed = [...this.componentState.values()].some((s) => s.failed);
       this.status = anyFailed ? 'lost' : 'won';
@@ -835,16 +877,16 @@ export class SimulationEngine {
       this.spikeTimer -= dt;
       if (this.spikeTimer <= 0) {
         this.spikeActive = false;
-        this.currentRps = SCENARIO.baseRps;
+        this.currentRps = this.scenario.baseRps;
       }
-    } else if (Math.random() < SCENARIO.spikeChance * dt) {
+    } else if (Math.random() < this.scenario.spikeChance * dt) {
       this.spikeActive = true;
       this.spikeTimer = 2.5 + Math.random() * 3;
-      this.currentRps = SCENARIO.baseRps * SCENARIO.spikeMultiplier;
+      this.currentRps = this.scenario.baseRps * this.scenario.spikeMultiplier;
       this.applyPredictiveScaling();
     } else {
       const jitter = 1 + (Math.random() - 0.5) * 0.15;
-      this.currentRps = SCENARIO.baseRps * jitter;
+      this.currentRps = this.scenario.baseRps * jitter;
     }
 
     this.peakRps = Math.max(this.peakRps, this.currentRps);
@@ -917,8 +959,8 @@ export class SimulationEngine {
       return;
     }
 
-    const kind: RequestKind = Math.random() < SCENARIO.readRatio ? 'read' : 'create';
-    const { colorIndex, celebrity } = pickRequestColor();
+    const kind: RequestKind = Math.random() < this.scenario.readRatio ? 'read' : 'create';
+    const { colorIndex, celebrity } = pickRequestColor(this.scenario);
 
     this.requests.push({
       id: nextRequestId++,
@@ -991,11 +1033,25 @@ export class SimulationEngine {
   ): boolean {
     if (state.failed || state.startingUp) return false;
 
-    if (component.type === 'load-balancer') {
+    if (
+      component.type === 'load-balancer' ||
+      component.type === 'api-gateway' ||
+      isIngressType(component.type)
+    ) {
       if (request.kind === 'create') {
-        return this.routeFromBalancer(request, 'shortener');
+        if (this.ingressHasTarget(component, 'shortener')) {
+          return this.routeFromIngress(request, component, (type) => type === 'shortener');
+        }
+        return this.routeFromIngress(request, component, (type) => isComputeType(type));
       }
-      return this.routeFromBalancer(request, 'backend');
+      if (this.ingressHasTarget(component, 'backend')) {
+        return this.routeFromIngress(request, component, (type) => type === 'backend');
+      }
+      return this.routeFromIngress(request, component, (type) => isComputeType(type));
+    }
+
+    if (component.type === 'rate-limiter' || component.type === 'cdn') {
+      return this.routeFromIngress(request, component, (type) => isComputeType(type));
     }
 
     if (component.type === 'shortener' && request.kind !== 'create') {
@@ -1009,11 +1065,23 @@ export class SimulationEngine {
     return true;
   }
 
-  private routeFromBalancer(request: Request, targetType: ComponentType): boolean {
-    const lb = this.components.find((c) => c.type === 'load-balancer');
-    if (!lb) return false;
+  private ingressHasTarget(ingress: PlacedComponent, targetType: ComponentType): boolean {
+    const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
+    if (!outPort) return false;
+    const belts = this.beltByFromPort.get(outPort.id) ?? [];
+    return belts.some((belt) => {
+      const port = this.portMap.get(belt.toPortId);
+      const comp = port ? this.componentMap.get(port.componentId) : undefined;
+      return comp?.type === targetType;
+    });
+  }
 
-    const outPort = getComponentPorts(lb).find((p) => p.side === 'out');
+  private routeFromIngress(
+    request: Request,
+    ingress: PlacedComponent,
+    matches: (type: ComponentType) => boolean
+  ): boolean {
+    const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
     if (!outPort) return false;
 
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
@@ -1021,7 +1089,7 @@ export class SimulationEngine {
       const port = this.portMap.get(belt.toPortId);
       if (!port) return false;
       const comp = this.componentMap.get(port.componentId);
-      if (!comp || comp.type !== targetType) return false;
+      if (!comp || !matches(comp.type)) return false;
       const compSt = this.componentState.get(comp.id);
       if (!compSt || compSt.failed) return false;
       if (this.isStartingUp(comp.id)) return false;
@@ -1080,7 +1148,7 @@ export class SimulationEngine {
         state.processing = 0;
       }
 
-      if (component.type === 'load-balancer') {
+      if (component.type === 'load-balancer' || isIngressType(component.type)) {
         continue;
       }
 
@@ -1123,7 +1191,11 @@ export class SimulationEngine {
 
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
     if (belts.length === 0) {
-      if (component.type === 'database' || component.type === 'redis') {
+      if (
+        isStorageType(component.type) ||
+        component.type === 'database' ||
+        component.type === 'redis'
+      ) {
         if (this.finishQueuedRequest(component.id)) {
           this.totalCompleted += 1;
           return true;
@@ -1144,7 +1216,7 @@ export class SimulationEngine {
 
       const preferRedis =
         redisBelts.length > 0 &&
-        (dbBelts.length === 0 || Math.random() < SCENARIO.cacheHitRatio);
+        (dbBelts.length === 0 || Math.random() < this.scenario.cacheHitRatio);
       const candidates = preferRedis ? redisBelts : dbBelts.length > 0 ? dbBelts : belts;
       const belt = this.pickAvailableBelt(candidates);
       if (!belt) {
@@ -1159,11 +1231,41 @@ export class SimulationEngine {
     if (component.type === 'shortener') {
       const dbBelts = belts.filter((b) => {
         const port = this.portMap.get(b.toPortId);
-        return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
+        const targetType = this.componentMap.get(port?.componentId ?? '')?.type;
+        return isStorageType(targetType ?? '') || targetType === 'database';
       });
       const belt = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
       if (!belt) return false;
       return this.forwardFromComponent(component, belt, 'create');
+    }
+
+    if (isComputeType(component.type)) {
+      const cacheBelts = belts.filter((b) => {
+        const port = this.portMap.get(b.toPortId);
+        return isCacheType(this.componentMap.get(port?.componentId ?? '')?.type ?? '');
+      });
+      const storageBelts = belts.filter((b) => {
+        const port = this.portMap.get(b.toPortId);
+        const targetType = this.componentMap.get(port?.componentId ?? '')?.type ?? '';
+        return isStorageType(targetType) || targetType === 'database';
+      });
+      const preferCache =
+        cacheBelts.length > 0 &&
+        (storageBelts.length === 0 || Math.random() < this.scenario.cacheHitRatio);
+      const candidates = preferCache
+        ? cacheBelts
+        : storageBelts.length > 0
+          ? storageBelts
+          : belts;
+      const belt = this.pickAvailableBelt(candidates);
+      if (belt) return this.forwardFromComponent(component, belt, 'read');
+    }
+
+    if (isStorageType(component.type) || component.type === 'database' || component.type === 'redis') {
+      if (this.finishQueuedRequest(component.id)) {
+        this.totalCompleted += 1;
+        return true;
+      }
     }
 
     return false;
@@ -1213,7 +1315,7 @@ export class SimulationEngine {
       return;
     }
 
-    const { colorIndex, celebrity } = visual ?? pickRequestColor();
+    const { colorIndex, celebrity } = visual ?? pickRequestColor(this.scenario);
     this.requests.push({
       id: nextRequestId++,
       kind,
@@ -1260,7 +1362,7 @@ export class SimulationEngine {
       components: this.components,
       telemetry: this.telemetry,
       componentState,
-      duration: SCENARIO.duration,
+      duration: this.scenario.duration,
       outcome,
       totalSpawned: this.totalSpawned,
       totalCompleted: this.totalCompleted,
@@ -1338,7 +1440,7 @@ export class SimulationEngine {
     setTimeout(() => {
       if (type === 'shutdown' || type === 'capacity') {
         // Restore capacity (this is a simplified approach)
-        const def = COMPONENT_DEFS[component.type];
+        const def = getComponentDef(component.type);
         if (def) {
           component.capacity = def.capacity;
           this.message = `✅ ${component.label} recovered from failure.`;
@@ -1367,7 +1469,7 @@ export function loadColor(load: number): string {
 }
 
 export function createComponent(type: ComponentType, x: number, y: number): PlacedComponent {
-  const def = COMPONENT_DEFS[type];
+  const def = getComponentDef(type);
   return {
     id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     type,
