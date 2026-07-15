@@ -1,4 +1,4 @@
-import { COMPONENT_DEFS, type ComponentType } from '../game/types';
+import type { ComponentType } from '../game/types';
 
 export type BoardTool = 'select' | 'hand' | 'pen' | 'text' | 'component';
 
@@ -11,12 +11,11 @@ const MAIN_TOOLS: { id: BoardTool; icon: string; label: string; shortcut?: strin
 
 export function renderFloatingChrome(
   activeTool: BoardTool,
-  placementType: ComponentType | null,
+  _placementType: ComponentType | null,
   zoomPct: number,
-  simulationSpeed: 1 | 5 | 20 | 100 = 1
+  simulationSpeed: 1 | 5 | 20 | 100 = 1,
+  challengeTitle?: string | null
 ): string {
-  const componentTypes = Object.keys(COMPONENT_DEFS) as ComponentType[];
-
   return `
     <div class="canvas-chrome">
       <div class="chrome-top-left">
@@ -24,7 +23,7 @@ export function renderFloatingChrome(
         <div class="main-menu-dropdown" id="main-menu" hidden>
           <button class="menu-item" id="menu-challenge" type="button">🎯 Choose Challenge</button>
           <div class="menu-divider"></div>
-          <button class="menu-item" id="menu-preset" type="button">⚡ Load preset</button>
+          <button class="menu-item" id="menu-preset" type="button">⚡ Load starter</button>
           <button class="menu-item" id="menu-reset" type="button">Reset board</button>
           <div class="menu-divider"></div>
           <p class="menu-hint">H hand · V select · P draw · T text</p>
@@ -32,7 +31,7 @@ export function renderFloatingChrome(
         </div>
         <div class="chrome-brand">
           <span class="chrome-brand-icon">🏗️</span>
-          <span class="chrome-brand-name">System Design Game</span>
+          <span class="chrome-brand-name">${challengeTitle ? challengeTitle : 'System Design Game'}</span>
         </div>
       </div>
 
@@ -53,28 +52,10 @@ export function renderFloatingChrome(
         ).join('<span class="tool-divider"></span>')}
       </div>
 
-      <div class="floating-toolbar component-toolbar" role="toolbar" aria-label="Components">
-        ${componentTypes
-          .map(
-            (type) => `
-          <button
-            class="component-tool-btn ${activeTool === 'component' && placementType === type ? 'active' : ''}"
-            data-component="${type}"
-            type="button"
-            title="${COMPONENT_DEFS[type].label}"
-            aria-label="${COMPONENT_DEFS[type].label}"
-          >
-            <span class="component-tool-emoji">${COMPONENT_DEFS[type].emoji}</span>
-          </button>
-        `
-          )
-          .join('')}
-      </div>
-
       <div class="chrome-top-right">
         <button class="chrome-action-btn" id="btn-traffic" type="button">📊 Traffic</button>
         <button class="chrome-action-btn" id="btn-failure" type="button">💥 Failures</button>
-        <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Preset</button>
+        <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Starter</button>
         <button class="chrome-action-btn" id="btn-reset" type="button">Reset</button>
         <div class="speed-controls">
           <button class="speed-btn ${simulationSpeed === 1 ? 'active' : ''}" data-speed="1" type="button">1x</button>

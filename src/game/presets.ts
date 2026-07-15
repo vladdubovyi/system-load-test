@@ -1,5 +1,5 @@
 import type { ComponentType, ConveyorBelt, PlacedComponent } from './types';
-import { COMPONENT_DEFS } from './types';
+import { getComponentDef } from './component-catalog';
 import { SOURCE_ID, createBelt } from './simulation';
 import type { ArchitectureConfig } from './architecture-config';
 
@@ -50,7 +50,7 @@ function createPresetComponent(
   x: number,
   y: number
 ): PlacedComponent {
-  const def = COMPONENT_DEFS[type];
+  const def = getComponentDef(type);
   return {
     id,
     type,

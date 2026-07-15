@@ -57,9 +57,114 @@ body.sandbox-mode #app {
 
 .canvas-app {
   position: relative;
+  display: flex;
   width: 100%;
   height: 100vh;
   overflow: hidden;
+}
+
+.canvas-workspace {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.components-panel {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  z-index: 60;
+}
+
+.components-panel-header {
+  padding: 14px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.components-panel-header h2 {
+  margin: 0 0 4px;
+  font-size: 0.95rem;
+}
+
+.components-panel-header p {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.components-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+.components-panel-section + .components-panel-section {
+  margin-top: 12px;
+}
+
+.components-panel-section-title {
+  margin: 0 0 8px;
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.components-panel-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+.components-panel-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fafafa;
+  padding: 8px 10px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+}
+
+.components-panel-item:hover,
+.components-panel-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.components-panel-item.is-optional {
+  opacity: 0.72;
+}
+
+.components-panel-emoji {
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.components-panel-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.problem-description {
+  margin: 0 0 8px;
+  color: var(--ink-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  max-width: 42ch;
 }
 
 /* ── Viewport & world ── */

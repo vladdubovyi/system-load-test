@@ -1,4 +1,5 @@
-import { SCENARIO, REQUEST_COLORS } from '../game/types';
+import { REQUEST_COLORS } from '../game/types';
+import { getActiveScenario } from '../game/scenario-runtime';
 import type { BoardAnnotations, DrawStroke, TextAnnotation } from '../game/board-annotations';
 import { strokeToPath } from '../game/board-annotations';
 
@@ -125,6 +126,12 @@ export class AnnotationRenderer {
     });
   }
 
+  updateProblemFrame(): void {
+    if (this.problemEl) {
+      this.problemEl.innerHTML = renderProblemFrame();
+    }
+  }
+
   destroy(): void {
     this.layer?.remove();
     this.layer = null;
@@ -136,19 +143,21 @@ export class AnnotationRenderer {
 }
 
 function renderProblemFrame(): string {
+  const scenario = getActiveScenario();
   const legend = REQUEST_COLORS.map(
     (color, i) =>
-      `<span class="problem-legend-dot ${CELEBRITY_INDICES.includes(i) ? 'celebrity' : ''}" style="background:${color}" title="URL type ${i + 1}"></span>`
+      `<span class="problem-legend-dot ${CELEBRITY_INDICES.includes(i) ? 'celebrity' : ''}" style="background:${color}" title="Request type ${i + 1}"></span>`
   ).join('');
 
   return `
     <div class="problem-frame-inner">
       <p class="problem-kicker">System design interview</p>
-      <h2 class="problem-title">${SCENARIO.title}</h2>
-      <p class="problem-duration">${SCENARIO.duration}s simulation · ${SCENARIO.baseRps} RPS base · spikes up to ${Math.round(SCENARIO.baseRps * SCENARIO.spikeMultiplier)} RPS</p>
+      <h2 class="problem-title">${scenario.title}</h2>
+      <p class="problem-description">${scenario.description}</p>
+      <p class="problem-duration">${scenario.duration}s simulation · ${scenario.baseRps} RPS base · spikes up to ${Math.round(scenario.baseRps * scenario.spikeMultiplier)} RPS</p>
       <h3 class="problem-heading">Requirements</h3>
       <ul class="problem-requirements">
-        ${SCENARIO.requirements.map((r) => `<li>${r}</li>`).join('')}
+        ${scenario.requirements.map((r) => `<li>${r}</li>`).join('')}
       </ul>
       <h3 class="problem-heading">Request colors</h3>
       <div class="problem-legend">${legend}</div>
