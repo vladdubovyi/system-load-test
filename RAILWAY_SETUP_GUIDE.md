@@ -112,15 +112,16 @@ Redeploy the backend after changing this variable.
 
 ```toml
 [build]
-buildCommand = "dotnet publish backend/SystemDesignSimulator.Api/SystemDesignSimulator.Api.csproj -c Release -o backend/out"
+builder = "DOCKERFILE"
+dockerfilePath = "backend/Dockerfile"
 watchPatterns = ["backend/**"]
 
 [deploy]
-startCommand = "dotnet backend/out/SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
+startCommand = "dotnet SystemDesignSimulator.Api.dll --urls http://0.0.0.0:$PORT"
 healthcheckPath = "/api/health"
 ```
 
-Uses Railpack (default builder) with an explicit .NET build command from the repository root — no Docker context issues.
+Uses Docker (not Railpack) because Railpack detects the root `package.json` and does not install .NET. The Dockerfile `COPY` paths are relative to the **repository root** build context.
 
 ### `/railway.toml` (frontend)
 

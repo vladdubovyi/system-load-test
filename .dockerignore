@@ -1,0 +1,15 @@
+# Docker build context is the repository root (dockerfilePath = backend/Dockerfile)
+node_modules
+dist
+.git
+.github
+*.md
+src
+public
+index.html
+vite.config.ts
+package.json
+package-lock.json
+railway.toml
+railway.json
+test-api.html
