@@ -30,8 +30,7 @@ export function renderFloatingChrome(
           <p class="menu-hint">Middle-click or Space+drag to pan · Scroll to zoom</p>
         </div>
         <div class="chrome-brand">
-          <span class="chrome-brand-icon">🏗️</span>
-          <span class="chrome-brand-name">${challengeTitle ? challengeTitle : 'System Design Game'}</span>
+          <span class="chrome-brand-name">${challengeTitle ? challengeTitle : 'BreakIT'}</span>
         </div>
       </div>
 

@@ -56,7 +56,7 @@ export function downloadReportPdf(report: SimulationReport): void {
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(18);
-  doc.text('System Design Game — Run Report', 14, 14);
+  doc.text('BreakIT — Run Report', 14, 14);
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
   doc.text(
@@ -229,7 +229,7 @@ export function downloadReportPdf(report: SimulationReport): void {
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `System Design Game · ${SCENARIO.title} · Page ${i} of ${pageCount}`,
+      `BreakIT · ${SCENARIO.title} · Page ${i} of ${pageCount}`,
       14,
       doc.internal.pageSize.getHeight() - 8
     );

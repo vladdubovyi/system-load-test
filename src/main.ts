@@ -36,13 +36,13 @@ async function renderRoute(route: RouteMatch): Promise<void> {
   }
 
   document.body.classList.toggle('sandbox-mode', route.name === 'sandbox');
-  document.title = 'System Design Game';
+  document.title = 'BreakIT';
 
   switch (route.name) {
     case 'landing': {
       app.innerHTML = renderLandingPage();
       mountLandingPage(app);
-      document.title = 'System Design Game — Practice system design interviews';
+      document.title = 'BreakIT — Practice system design interviews';
       break;
     }
     case 'challenges': {
@@ -53,13 +53,13 @@ async function renderRoute(route: RouteMatch): Promise<void> {
       };
       app.innerHTML = renderChallengesPage(challenges, selectedChallengeId);
       mountChallengesPage(app, challenges, selectedChallengeId, handleChallengeSelect);
-      document.title = 'Challenges — System Design Game';
+      document.title = 'Challenges — BreakIT';
       break;
     }
     case 'login': {
       app.innerHTML = renderLoginPage();
       await mountLoginPage(app);
-      document.title = 'Sign in — System Design Game';
+      document.title = 'Sign in — BreakIT';
       break;
     }
     case 'sandbox': {
@@ -73,8 +73,8 @@ async function renderRoute(route: RouteMatch): Promise<void> {
       });
       sandboxMounted = true;
       document.title = route.params.slug
-        ? `Sandbox: ${route.params.slug} — System Design Game`
-        : 'Sandbox — System Design Game';
+        ? `Sandbox: ${route.params.slug} — BreakIT`
+        : 'Sandbox — BreakIT';
       break;
     }
   }

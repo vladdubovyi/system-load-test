@@ -1,48 +1,57 @@
-# System Design Game
+# BreakIT
 
-A browser-based game where you architect systems under interview-style load. Start with the **URL Shortener** scenario: wire up load balancers, services, caches, and databases using conveyor belts, then survive traffic spikes and celebrity URL hotspots.
+BreakIT is a browser-based system design game: place load balancers, services, caches, and databases on a board, connect them, then run traffic until something breaks — or your design holds.
+
+Built for engineers practicing system design interviews and for anyone who wants a more production-like feel than a static whiteboard.
 
 ## Play online
 
 **https://vladdubovyi.github.io/system-load-test/**
 
-Hosted free on GitHub Pages — always available, no tunnel required.
+Hosted on GitHub Pages (repository name is still `system-load-test`).
 
-## Play locally
+## Stack
+
+- **Frontend:** Vite + TypeScript (vanilla DOM/SVG)
+- **Backend:** ASP.NET Core 8 + Entity Framework Core + PostgreSQL
+
+## Run locally
+
+### Frontend
 
 ```bash
+cp .env.example .env.development
 npm install
 npm run dev
 ```
 
 Open the URL shown in the terminal (typically http://localhost:5173).
 
+### Backend (optional, for API-backed challenges)
+
+```bash
+# PostgreSQL must be running; see backend/README.md
+cd backend/SystemDesignSimulator.Api
+dotnet run
+```
+
+Point `VITE_API_URL` in `.env.development` at the API (default in `.env.example`: `http://localhost:5063`).
+
 ## How to play
 
 1. Place components from the palette onto the board.
-2. Enter **Connect Mode** and link ports with conveyor belts:
-   - Incoming Requests → Load Balancer
-   - Load Balancer → Shortener Service (creates) and Backend Service (reads)
-   - Shortener → Database (and optionally Redis)
-   - Backend → Redis (cache hits) and/or Database (cache misses)
-3. Press **Play** and keep every component below 100% load for 45 seconds.
+2. Enter **Connect Mode** and link ports with conveyor belts.
+3. Press **Play** and keep every component below 100% load for the scenario duration.
 4. Right-click a component to remove it.
 
-## Stack
+## Roadmap
 
-- Vite + TypeScript
-- Vanilla DOM/SVG rendering (no framework)
-
-## Build
-
-```bash
-npm run build
-npm run preview
-```
+See [ROADMAP.md](./ROADMAP.md) for planned work (FE↔BE wiring, scenarios, testing, production-like env, UI/UX).
 
 ## Deployment
 
-- Pushes to `main` deploy production to the `gh-pages` branch (`.github/workflows/deploy.yml`).
-- Pull requests deploy previews to `gh-pages/previews/pr-<number>/` (`.github/workflows/pr-preview.yml`).
+GitHub Pages setup: [DEPLOY.md](./DEPLOY.md). Backend deploy notes: [backend/README.md](./backend/README.md).
 
-**Pages source must be the `gh-pages` branch** (not GitHub Actions). See [DEPLOY.md](./DEPLOY.md).
+## License
+
+MIT — see [LICENSE](./LICENSE).
