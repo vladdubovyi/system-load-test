@@ -1,8 +1,8 @@
-# GitHub Pages setup
+# GitHub Pages setup (BreakIT frontend)
 
 Hosting is free on GitHub Pages. Production and PR previews both publish to the `gh-pages` branch.
 
-## One-time enable (required)
+## One-time enable
 
 1. Open **Settings → Pages**:  
    https://github.com/vladdubovyi/system-load-test/settings/pages
@@ -17,17 +17,16 @@ Hosting is free on GitHub Pages. Production and PR previews both publish to the 
 
 5. Live URLs:
    - **Production:** https://vladdubovyi.github.io/system-load-test/
-   - **PR preview:** https://vladdubovyi.github.io/system-load-test/previews/pr/9/
+   - **PR preview:** https://vladdubovyi.github.io/system-load-test/previews/pr/<number>/
 
 ## Why PR previews 404 with "GitHub Actions" source
 
 If Pages source is **GitHub Actions**, only the production deployment artifact is served. PR previews are written to the `gh-pages` branch under `previews/pr/<number>/`, which is ignored until you switch the source to the `gh-pages` branch.
 
-The older **GitHub Actions** + `github-pages` environment approach also blocks PR merge refs (`refs/pull/N/merge`) unless you change environment protection rules. The `gh-pages` branch approach avoids that.
-
 ## Local development
 
 ```bash
+cp .env.example .env.development
 npm install
 npm run dev
 ```

@@ -3,6 +3,11 @@ dist/
 *.local
 .DS_Store
 
+# Env / secrets — keep placeholders in .env.example only
+.env
+.env.*
+!.env.example
+
 # .NET
 bin/
 obj/

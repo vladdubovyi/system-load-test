@@ -9,8 +9,7 @@ export function renderAppNav(active: 'home' | 'challenges' | 'sandbox' | 'login'
     <header class="site-header">
       <div class="site-header-inner">
         <a class="site-brand" href="/" data-link>
-          <span class="site-brand-icon">🏗️</span>
-          <span class="site-brand-text">System Design Game</span>
+          <span class="site-brand-text">BreakIT</span>
         </a>
         <nav class="site-nav" aria-label="Main">
           <a class="site-nav-link ${active === 'home' ? 'is-active' : ''}" href="/" data-link>Home</a>

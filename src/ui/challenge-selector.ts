@@ -18,7 +18,7 @@ export function renderChallengeSelector(challenges: Challenge[]): string {
 
   return `
     <div class="challenge-selector">
-      <h2>Choose a System Design Challenge</h2>
+      <h2>Choose a BreakIT challenge</h2>
       <div class="challenge-grid">
         ${challenges.map(challenge => `
           <div class="challenge-card" data-challenge-id="${challenge.id}">
