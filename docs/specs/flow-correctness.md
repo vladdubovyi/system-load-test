@@ -1,6 +1,6 @@
 # Flow Correctness — Design Spec
 
-Status: **Approved direction, pre-implementation**
+Status: **Approved for implementation** — this spec merges first (PR 0a), then one PR per phase (§8)
 Owner: Vlad
 Last updated: 2026-10-29
 
@@ -60,10 +60,11 @@ violations are explained to the user.
 - **Violation strictness:** flow violations fail the *request* (terminal state
   `violated`), hurting completion-rate objectives. They do not hard-fail the
   run the way queue overload does.
-- **Response path:** `FlowStep` reserves a `returnTo` field so round-trip
-  flows (A → DB → back to A → B) can be modeled later. Engine semantics and
-  visuals for the return leg are **out of scope** for the initial phases; the
-  field is designed now so adding it is non-breaking.
+- **Response path:** `FlowStep` includes a `returnTo` field for round-trip
+  flows (A → DB → back to A → B). Schema **and engine semantics** are specified
+  now (§4, §5) and implemented with the Phase 2 interpreter; only the **visual
+  treatment** of the return leg is deferred — in v1 the return hop is executed
+  (time charged, event logged) but not drawn on the board.
 - **Delivery:** one PR per phase (see §8), spec merged first.
 
 ## 3. Capability model
@@ -123,9 +124,12 @@ export interface FlowStep {
   /** Reaching (and being processed by) this step completes the request. */
   terminal?: boolean;
   /**
-   * RESERVED (not interpreted yet): after this step, control returns to the
-   * step with this id (round-trip / response-path modeling). Designed now so
-   * adding return legs later is a non-breaking schema change.
+   * RPC semantics: after this step's node processes the request, the request
+   * travels back to the component that satisfied the step with this id, then
+   * resumes with the next step. The return hop reuses the SAME belt in
+   * reverse — no extra connection is required on the board. Travel time is
+   * charged normally and a 'returned' event is logged; the return leg is not
+   * rendered in v1 (visual treatment decided later).
    */
   returnTo?: string;
   /** Human label used in lint/violation messages. */
@@ -177,8 +181,10 @@ scenario needs them sooner.
   `string`; spawn weights come from `TrafficProfile.requestTypes` instead of
   `readRatio`. (`readRatio` remains as a derived fallback for legacy data.)
 - `Request` gains `flow: { kind: string; stepIndex: number; pending: FlowStep[] }`
-  (the cursor; `pending` holds branch-injected steps).
-- `RequestState` gains `'violated'`; `RequestEventKind` gains `'violated'`.
+  (the cursor; `pending` holds branch-injected steps; a `returnTo` leg pushes a
+  return frame so the flow resumes at the caller).
+- `RequestState` gains `'violated'`; `RequestEventKind` gains `'violated'` and
+  `'returned'`.
 - `RuntimeScenario` / `setActiveScenarioFromChallenge`
   (`src/game/scenario-runtime.ts`) must carry `flows`, `objectives`, and
   `requestTypes` through to the engine instead of dropping them.
@@ -199,6 +205,11 @@ compute, storage auto-complete) are replaced by one interpreter:
    `violated` event with a human-readable reason. Violations are counted per
    step id for the report ("93% of creates died because no durable store is
    reachable from X").
+6. If the completed step has `returnTo`, place the request on the same belt in
+   reverse toward the caller (normal travel time, `returned` event, not drawn
+   on the board in v1) and resume the flow at the caller. The static lint
+   never fails a `returnTo` leg on reachability, since it reuses the forward
+   belt.
 
 Legacy compatibility: today's heuristics are expressed as a **default
 FlowSpec** (used when a challenge defines no flows), so the engine has exactly
@@ -277,9 +288,9 @@ New `src/game/flow-validator.ts`:
 | 0a | Spec | This document. |
 | 0b | Tracing foundation | Land the in-flight request-tracing work (request identity, `events[]`, inspector, belt-geometry, pause/resume). Include the `report.ts` `COMPONENT_DEFS` crash fix so the report survives the default starter board. |
 | 1 | Capability model + types | `capabilities.ts`, taxonomy adapter, `flow-types.ts`, URL Shortener FlowSpec as a TS constant, `ScenarioDefinition.flows/objectives` fields, runtime plumbing (`scenario-runtime.ts`, `api/client.ts` mapping consolidation). No engine behavior change. |
-| 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; per-flow counters; generalized `RequestKind`; legacy default FlowSpec for challenges without flows; wire URL Shortener challenge to its flows. |
+| 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; `returnTo` execution (reverse-belt leg, unrendered); per-flow counters; generalized `RequestKind`; legacy default FlowSpec for challenges without flows; wire URL Shortener challenge to its flows. |
 | 3 | Lint + UX | `flow-validator.ts`, lint panel, violation reasons in request inspector, toast for rejected connections. |
-| 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks. |
+| 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks; wire the traffic config panel into the engine (its edits are currently ignored). |
 | 5 | Serialization + authoring | Flows/objectives/capabilities into backend `ScenarioConfig` (jsonb, no migration) and `ChallengeSeeder`; tags (§4.1); challenge-authoring endpoints/UI. Separate mini-spec before implementation. |
 
 Each phase keeps the build green (`tsc && vite build`) and the existing
@@ -287,7 +298,8 @@ scenarios playable.
 
 ## 9. Out of scope (for now)
 
-- Return-leg execution and visuals (`returnTo` is schema-only).
+- Visual rendering of `returnTo` return legs (the engine executes them from
+  Phase 2; they are simply not drawn until the visual treatment is decided).
 - Message-queue / async worker semantics (today messaging nodes dead-end;
   fixing that is a natural FlowSpec extension but a separate effort).
 - Persisting user designs.
