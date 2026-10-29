@@ -4,6 +4,7 @@ import {
   type PlacedComponent,
   type ConveyorBelt,
   type Port,
+  type Request,
 } from '../game/types';
 import {
   SimulationEngine,
@@ -59,6 +60,12 @@ import {
 import { initializeApp } from '../game/app-init';
 import { mountTrafficConfigPanel } from '../ui/traffic-config-panel';
 import { mountFailureInjectionPanel } from '../ui/failure-injection-panel';
+import {
+  mountRequestInspector,
+  unmountRequestInspector,
+  updateRequestInspector,
+  isRequestInspectorMounted,
+} from '../ui/request-inspector';
 import type { Challenge, TrafficProfile } from '../game/scenario-types';
 
 type BoardSelection =
@@ -105,6 +112,10 @@ interface GameState {
   trafficConfigOpen: boolean;
   customTrafficConfig: TrafficProfile | null;
   failureInjectionOpen: boolean;
+  /** True while a running simulation is frozen; the engine keeps its state. */
+  paused: boolean;
+  /** Request currently being traced in the inspector. */
+  tracedRequestId: number | null;
 }
 
 interface HistoryEntry {
@@ -149,6 +160,8 @@ const state: GameState = {
   trafficConfigOpen: false,
   customTrafficConfig: null,
   failureInjectionOpen: false,
+  paused: false,
+  tracedRequestId: null,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -445,13 +458,70 @@ function mountBoard(): void {
     selectedComponentId(),
     state.componentConfigs
   );
+  boardRenderer.setTracedRequest(tracedRequest());
   boardRenderer.update(null, 0);
   positionSourceNode();
 }
 
-function refreshBoardVisuals(snapshot = state.engine?.getSnapshot() ?? null, dt = 0): void {
-  boardRenderer.update(snapshot, dt);
+/**
+ * The traced request object is pinned here so it stays inspectable even after
+ * the engine evicts it from its bounded finished-request archive. The engine
+ * mutates the same object in place, so reading it each frame stays live.
+ */
+let tracedRequestRef: Request | null = null;
+
+function tracedRequest(): Request | null {
+  if (state.tracedRequestId === null || !state.engine) return null;
+  if (tracedRequestRef && tracedRequestRef.id === state.tracedRequestId) return tracedRequestRef;
+  tracedRequestRef = state.engine.getRequest(state.tracedRequestId);
+  return tracedRequestRef;
+}
+
+function refreshBoardVisuals(
+  snapshot = state.engine?.getSnapshot() ?? null,
+  dt = 0,
+  interpSeconds = 0
+): void {
+  boardRenderer.update(snapshot, dt, interpSeconds);
   positionSourceNode();
+  refreshRequestInspector();
+}
+
+function refreshRequestInspector(): void {
+  if (!isRequestInspectorMounted()) return;
+  const request = tracedRequest();
+  updateRequestInspector(request, {
+    now: state.engine?.getTime() ?? 0,
+    paused: state.paused,
+    running: isSimRunning(),
+  });
+}
+
+function traceRequest(id: number): void {
+  if (!state.engine) return;
+  const request = state.engine.getRequest(id);
+  if (!request) return;
+  state.tracedRequestId = id;
+  tracedRequestRef = request;
+  boardRenderer.setTracedRequest(request);
+
+  if (!isRequestInspectorMounted()) {
+    const host = document.querySelector('.canvas-workspace') as HTMLElement | null;
+    if (host) mountRequestInspector(host, closeRequestTrace);
+  }
+  refreshBoardVisuals(state.engine.getSnapshot(), 0, state.paused ? 0 : state.simAccumulator);
+}
+
+function closeRequestTrace(): void {
+  state.tracedRequestId = null;
+  tracedRequestRef = null;
+  boardRenderer.setTracedRequest(null);
+  unmountRequestInspector();
+  if (state.engine) {
+    refreshBoardVisuals(state.engine.getSnapshot(), 0, 0);
+  }
+  const viewport = document.getElementById('board-viewport');
+  viewport?.classList.remove('is-over-request');
 }
 
 function positionSourceNode(): void {
@@ -475,13 +545,19 @@ function updateStatus(dt = 0): void {
   const snap = state.engine?.getSnapshot() ?? null;
   const running = snap?.status === 'running';
 
+  const paused = running && state.paused;
+
   bar.className = 'floating-status';
   if (snap?.status === 'won') bar.classList.add('won');
   if (snap?.status === 'lost') bar.classList.add('lost');
-  if (snap?.spikeActive) bar.classList.add('spike');
-  bar.textContent =
-    snap?.message ??
-    'Drag configs onto components, drag ports to connect, then press Play.';
+  if (snap?.spikeActive && !paused) bar.classList.add('spike');
+  if (paused) bar.classList.add('paused');
+  bar.textContent = paused
+    ? '⏸ Paused — click any request dot to trace its journey, then Resume to follow it live.'
+    : snap?.message ??
+      'Drag configs onto components, drag ports to connect, then press Play.';
+
+  document.querySelector('.canvas-app')?.classList.toggle('sim-paused', paused);
 
   if (snap) {
     if (dt > 0) {
@@ -518,7 +594,7 @@ function updateStatus(dt = 0): void {
 
   const playBtn = document.getElementById('btn-play') as HTMLButtonElement | null;
   if (playBtn) {
-    playBtn.textContent = running ? '⏸ Pause' : '▶ Play';
+    playBtn.textContent = !running ? '▶ Play' : state.paused ? '▶ Resume' : '⏸ Pause';
     playBtn.disabled = state.components.length === 0;
   }
 }
@@ -623,8 +699,9 @@ function bindEvents(): void {
   });
 
   document.getElementById('btn-play')?.addEventListener('click', () => {
-    if (isSimRunning()) stopSimulation();
-    else startSimulation();
+    if (!isSimRunning()) startSimulation();
+    else if (state.paused) resumeSimulation();
+    else pauseSimulation();
   });
   document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
   document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
@@ -632,11 +709,13 @@ function bindEvents(): void {
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
   
   // Speed control buttons
-  document.querySelectorAll('.speed-btn').forEach(btn => {
+  document.querySelectorAll('.speed-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const speed = parseInt(btn.getAttribute('data-speed') || '1');
       state.simulationSpeed = speed as 1 | 5 | 20 | 100;
-      render();
+      document.querySelectorAll('.speed-btn').forEach((el) => {
+        el.classList.toggle('active', el === btn);
+      });
     });
   });
 
@@ -699,6 +778,10 @@ function bindEvents(): void {
     if (e.key === 'p' || e.key === 'P') setTool('pen');
     if (e.key === 't' || e.key === 'T') setTool('text');
     if (e.key === 'Escape') {
+      if (state.tracedRequestId !== null) {
+        closeRequestTrace();
+        return;
+      }
       setTool('hand');
       selectItem(null);
       if (menu) menu.hidden = true;
@@ -753,6 +836,14 @@ function bindEvents(): void {
 
   viewport.addEventListener('pointermove', (e) => {
     state.lastPointer = { x: e.clientX, y: e.clientY };
+
+    if (isSimRunning() && state.paused && !state.panning) {
+      const world = eventToWorld(e);
+      const hit = boardRenderer.hitTestRequest(world.x, world.y, 10 / state.viewport.zoom);
+      viewport.classList.toggle('is-over-request', hit !== null);
+    } else if (viewport.classList.contains('is-over-request')) {
+      viewport.classList.remove('is-over-request');
+    }
 
     if (state.connectingFromPortId) {
       const from = getPortById(state.connectingFromPortId);
@@ -886,7 +977,12 @@ function bindEvents(): void {
 
   viewport.addEventListener('click', (e) => {
     if (state.pointerDragged) return;
-    if (isSimRunning()) return;
+    if (isSimRunning()) {
+      const world = eventToWorld(e);
+      const hit = boardRenderer.hitTestRequest(world.x, world.y, 12 / state.viewport.zoom);
+      if (hit !== null) traceRequest(hit);
+      return;
+    }
     if ((e.target as HTMLElement).closest('.port')) return;
 
     const world = eventToWorld(e);
@@ -1011,6 +1107,7 @@ function zoomAt(screenX: number, screenY: number, factor: number): void {
 
 function resetBoard(): void {
   stopSimulation();
+  closeRequestTrace();
   invalidateBoardSnapshot();
   state.components = [];
   state.belts = [];
@@ -1025,6 +1122,7 @@ function resetBoard(): void {
 
 function loadChallengeStarter(): void {
   if (isSimRunning()) stopSimulation();
+  closeRequestTrace();
   invalidateBoardSnapshot();
 
   const slug = state.currentChallenge?.slug;
@@ -1071,15 +1169,27 @@ function startSimulation(): void {
   );
   state.engine.start();
   state.lastRunStatus = 'running';
+  state.paused = false;
+  closeRequestTrace();
   state.lastTick = performance.now();
   state.simAccumulator = 0;
   state.displayedHud = { time: 0, rps: 0, spawned: 0, completed: 0, dropped: 0 };
+
+  runSimulationLoop();
+  updateStatus();
+}
+
+function runSimulationLoop(): void {
+  if (state.animFrame !== null) {
+    cancelAnimationFrame(state.animFrame);
+    state.animFrame = null;
+  }
 
   const loop = (now: number) => {
     const snap = state.engine?.getSnapshot();
     if (!state.engine || snap?.status !== 'running') {
       state.animFrame = null;
-      refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
+      refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
       updateStatus();
 
       if (
@@ -1093,6 +1203,11 @@ function startSimulation(): void {
       return;
     }
 
+    if (state.paused) {
+      state.animFrame = null;
+      return;
+    }
+
     const frameDt = Math.min((now - state.lastTick) / 1000, 0.05);
     state.lastTick = now;
     state.simAccumulator += frameDt * state.simulationSpeed;
@@ -1102,12 +1217,33 @@ function startSimulation(): void {
       state.simAccumulator -= SIM_STEP;
     }
 
-    refreshBoardVisuals(state.engine.getSnapshot(), frameDt);
+    // Leftover accumulator is simulation time not yet ticked; the renderer
+    // advances traveling requests by it so motion is smooth between ticks.
+    refreshBoardVisuals(state.engine.getSnapshot(), frameDt, state.simAccumulator);
     updateStatus(frameDt);
     state.animFrame = requestAnimationFrame(loop);
   };
 
   state.animFrame = requestAnimationFrame(loop);
+}
+
+function pauseSimulation(): void {
+  if (!isSimRunning() || state.paused) return;
+  state.paused = true;
+  if (state.animFrame !== null) {
+    cancelAnimationFrame(state.animFrame);
+    state.animFrame = null;
+  }
+  refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
+  updateStatus();
+}
+
+function resumeSimulation(): void {
+  if (!isSimRunning() || !state.paused) return;
+  state.paused = false;
+  state.lastTick = performance.now();
+  state.simAccumulator = 0;
+  runSimulationLoop();
   updateStatus();
 }
 
@@ -1118,8 +1254,9 @@ function stopSimulation(): void {
   }
   const snap = state.engine?.getSnapshot();
   state.engine?.stop();
+  state.paused = false;
   if (snap?.status === 'running') state.lastRunStatus = 'idle';
-  refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0);
+  refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
   updateStatus();
 }
 
@@ -1233,6 +1370,7 @@ function pushHistory(): void {
 }
 
 function undo(): void {
+  if (isSimRunning()) return;
   if (state.historyIndex > 0) {
     state.historyIndex--;
     const entry = state.history[state.historyIndex];
@@ -1245,6 +1383,7 @@ function undo(): void {
 }
 
 function redo(): void {
+  if (isSimRunning()) return;
   if (state.historyIndex < state.history.length - 1) {
     state.historyIndex++;
     const entry = state.history[state.historyIndex];
@@ -1346,6 +1485,18 @@ export interface SandboxMountOptions {
 export async function mountSandboxApp(options: SandboxMountOptions): Promise<void> {
   mountContainer = options.container;
   await initSandbox(options.challengeSlug, options.loadReferencePreset ?? true);
+  if (import.meta.env.DEV) {
+    // Dev-only hooks for driving the sandbox from automation/devtools.
+    (window as unknown as { __breakitDebug?: unknown }).__breakitDebug = {
+      state,
+      boardRenderer,
+      startSimulation,
+      pauseSimulation,
+      resumeSimulation,
+      traceRequest,
+      closeRequestTrace,
+    };
+  }
 }
 
 export function destroySandboxApp(): void {
@@ -1354,6 +1505,9 @@ export function destroySandboxApp(): void {
     state.animFrame = null;
   }
   state.engine = null;
+  state.paused = false;
+  state.tracedRequestId = null;
+  unmountRequestInspector();
   closeChallengeSelector();
   closeTrafficConfig();
   closeFailureInjection();

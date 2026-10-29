@@ -46,17 +46,60 @@ export interface ConveyorBelt {
   capacity: number;
 }
 
+export type RequestState = 'traveling' | 'queued' | 'processing' | 'done' | 'dropped';
+
+/**
+ * One entry in a request's journey log. The sequence of events for a single
+ * request reads like a trace: spawned → arrived → (routed | processed → forwarded)
+ * → … → completed | dropped.
+ */
+export type RequestEventKind =
+  | 'spawned'
+  | 'arrived'
+  | 'routed'
+  | 'processed'
+  | 'forwarded'
+  | 'completed'
+  | 'dropped';
+
+export interface RequestEvent {
+  kind: RequestEventKind;
+  /** Simulation time in seconds. */
+  at: number;
+  componentId?: string;
+  componentLabel?: string;
+  componentType?: ComponentType;
+  beltId?: string;
+  /** Human readable detail such as the next hop or a drop reason. */
+  detail?: string;
+}
+
 export interface Request {
   id: number;
   kind: RequestKind;
   colorIndex: number;
   celebrity: boolean;
+  /** 0..1 position along the current belt while traveling. */
   progress: number;
   beltId: string | null;
   currentComponentId: string | null;
   targetPortId: string | null;
-  state: 'traveling' | 'queued' | 'processing' | 'done' | 'dropped';
+  state: RequestState;
+  /** Total seconds spent waiting in component queues. */
   waitTime: number;
+  /** Simulation time the request entered the system. */
+  spawnedAt: number;
+  /** Simulation time the request completed or was dropped, if finished. */
+  finishedAt: number | null;
+  /** Progress units per second on the current belt (1 / travel seconds). */
+  travelSpeed: number;
+  /** Stable lateral offset in [-1, 1] so a stream spreads across the belt. */
+  lane: number;
+  /** Stable pseudo-random key in [0, 1) used for deterministic sub-sampling. */
+  visualKey: number;
+  /** Simulation time the request arrived at its current component (if queued). */
+  arrivedAt: number | null;
+  events: RequestEvent[];
 }
 
 export interface ComponentState {

@@ -6,9 +6,29 @@ import type { ComponentInstanceConfig } from '../game/component-config';
 import { renderConfigBadgesHtml } from '../game/component-config';
 import { collectScaleGroupFrames, type ScaleGroupFrame } from '../game/board-layout';
 import { WORLD_HEIGHT, WORLD_WIDTH } from './viewport';
+import { beltLength, beltPathD, beltPoint, beltTangent } from '../game/belt-geometry';
 
-const MAX_VISIBLE_REQUESTS = 96;
+/** Upper bound on dots drawn per frame; beyond this we sub-sample deterministically. */
+const MAX_VISIBLE_REQUESTS = 260;
+/**
+ * Target spacing between drawn dots along a belt, in world px. Busy belts are
+ * sub-sampled down to roughly this density so streams read as a flow rather
+ * than a solid bar of overlapping circles.
+ */
+const MIN_DOT_SPACING = 11;
+/** Max world-pixel offset from the belt centreline for lane spreading. */
+const LANE_SPREAD = 6;
+/** How far behind (in progress units) the motion trail starts. */
+const TRAIL_LENGTH = 0.028;
+/** Max queued requests drawn as beads in front of a component's input port. */
+const MAX_QUEUE_BEADS = 10;
 const LOAD_LERP_SPEED = 1.8;
+
+interface DrawnRequest {
+  x: number;
+  y: number;
+  r: number;
+}
 
 interface BeltGraphics {
   belt: ConveyorBelt;
@@ -39,6 +59,10 @@ export class BoardRenderer {
   private belts: ConveyorBelt[] = [];
   private beltById = new Map<string, ConveyorBelt>();
   private componentConfigs = new Map<string, ComponentInstanceConfig>();
+  private drawnRequests = new Map<number, DrawnRequest>();
+  private beltLengths = new Map<string, number>();
+  private tracedRequest: Request | null = null;
+  private tracedComponentId: string | null = null;
 
   mount(
     board: HTMLElement,
@@ -112,28 +136,16 @@ export class BoardRenderer {
   }
 
   private beltPath(from: Port, to: Port): string {
-    const dx = to.x - from.x;
-    const cx1 = from.x + dx * 0.45;
-    const cx2 = to.x - dx * 0.45;
-    return `M ${from.x} ${from.y} C ${cx1} ${from.y}, ${cx2} ${to.y}, ${to.x} ${to.y}`;
+    return beltPathD(from, to);
   }
 
-  private pointOnBelt(from: Port, to: Port, t: number): { x: number; y: number } {
-    const dx = to.x - from.x;
-    const cx1 = from.x + dx * 0.45;
-    const cx2 = to.x - dx * 0.45;
-    const u = 1 - t;
-    const x =
-      u * u * u * from.x +
-      3 * u * u * t * cx1 +
-      3 * u * t * t * cx2 +
-      t * t * t * to.x;
-    const y =
-      u * u * u * from.y +
-      3 * u * u * t * from.y +
-      3 * u * t * t * to.y +
-      t * t * t * to.y;
-    return { x, y: y + Math.sin(t * Math.PI) * -12 };
+  /** Point on the belt plus a lateral lane offset so streams spread out. */
+  private pointOnBelt(from: Port, to: Port, t: number, lane = 0): { x: number; y: number } {
+    const p = beltPoint(from, to, t);
+    if (lane === 0) return p;
+    const tangent = beltTangent(from, to, t);
+    const offset = lane * LANE_SPREAD;
+    return { x: p.x - tangent.y * offset, y: p.y + tangent.x * offset };
   }
 
   private buildBelts(): void {
@@ -161,6 +173,7 @@ export class BoardRenderer {
       group.append(track, fill);
       this.svg.appendChild(group);
       this.beltGraphics.push({ belt, track, fill });
+      this.beltLengths.set(belt.id, beltLength(from, to));
     }
   }
 
@@ -307,6 +320,7 @@ export class BoardRenderer {
       const path = this.beltPath(from, to);
       track.setAttribute('d', path);
       fill.setAttribute('d', path);
+      this.beltLengths.set(belt.id, beltLength(from, to));
     }
   }
 
@@ -315,7 +329,35 @@ export class BoardRenderer {
     return current + (target - current) * factor;
   }
 
-  update(snapshot: SimulationSnapshot | null, dt: number): void {
+  /** Highlight one request on the board (or clear with null). */
+  setTracedRequest(request: Request | null): void {
+    this.tracedRequest = request;
+  }
+
+  getTracedRequest(): Request | null {
+    return this.tracedRequest;
+  }
+
+  /** Find the request drawn closest to a world point within `radius` world px. */
+  hitTestRequest(worldX: number, worldY: number, radius: number): number | null {
+    let bestId: number | null = null;
+    let bestDist = Infinity;
+    for (const [id, drawn] of this.drawnRequests) {
+      const d = Math.hypot(drawn.x - worldX, drawn.y - worldY) - drawn.r;
+      if (d <= radius && d < bestDist) {
+        bestDist = d;
+        bestId = id;
+      }
+    }
+    return bestId;
+  }
+
+  /**
+   * @param dt           wall-clock seconds since last frame (for lerps)
+   * @param interpSeconds simulation seconds not yet consumed by a fixed tick;
+   *                      traveling requests are advanced by this for smooth motion
+   */
+  update(snapshot: SimulationSnapshot | null, dt: number, interpSeconds = 0): void {
     if (!snapshot) {
       for (const gfx of this.componentGraphics.values()) {
         gfx.displayedLoad = 0;
@@ -329,6 +371,7 @@ export class BoardRenderer {
         fill.style.setProperty('--belt-load', '0');
       }
       this.clearParticles();
+      this.setTracedComponent(null);
       return;
     }
 
@@ -386,53 +429,166 @@ export class BoardRenderer {
       fill.style.setProperty('--belt-load', String(Math.min(displayed, 100)));
     }
 
-    this.drawRequestCircles(snapshot);
+    this.drawRequests(snapshot, interpSeconds);
   }
 
   private clearParticles(): void {
     if (!this.ctx || !this.canvas) return;
     this.ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    this.drawnRequests.clear();
   }
 
-  private drawRequestCircles(snapshot: SimulationSnapshot): void {
+  private setTracedComponent(componentId: string | null): void {
+    if (componentId === this.tracedComponentId) return;
+    if (this.tracedComponentId) {
+      this.componentGraphics.get(this.tracedComponentId)?.root.classList.remove('tracing');
+    }
+    this.tracedComponentId = componentId;
+    if (componentId) {
+      this.componentGraphics.get(componentId)?.root.classList.add('tracing');
+    }
+  }
+
+  private drawRequests(snapshot: SimulationSnapshot, interpSeconds: number): void {
     if (!this.ctx || !this.canvas) return;
-    this.ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+    this.drawnRequests.clear();
 
-    const traveling = snapshot.activeRequests.filter(
-      (req): req is Request & { beltId: string } =>
-        req.state === 'traveling' && req.beltId !== null
-    );
+    const traced = this.tracedRequest;
+    const tracedId = traced?.id ?? null;
 
-    if (traveling.length === 0) return;
+    const traveling: Request[] = [];
+    const queuedByComponent = new Map<string, Request[]>();
+    for (const req of snapshot.activeRequests) {
+      if (req.state === 'traveling' && req.beltId) {
+        traveling.push(req);
+      } else if ((req.state === 'queued' || req.state === 'processing') && req.currentComponentId) {
+        const list = queuedByComponent.get(req.currentComponentId);
+        if (list) list.push(req);
+        else queuedByComponent.set(req.currentComponentId, [req]);
+      }
+    }
 
-    const stride =
-      traveling.length > MAX_VISIBLE_REQUESTS
-        ? traveling.length / MAX_VISIBLE_REQUESTS
-        : 1;
+    // Deterministic sub-sampling: each request has a stable key, so the same
+    // dots stay visible from frame to frame instead of flickering. The keep
+    // ratio is computed per belt from its length, so a long, busy belt shows
+    // more dots than a short one but neither turns into a solid bar.
+    const travelingPerBelt = new Map<string, number>();
+    for (const req of traveling) {
+      travelingPerBelt.set(req.beltId!, (travelingPerBelt.get(req.beltId!) ?? 0) + 1);
+    }
+    const globalKeep =
+      traveling.length > MAX_VISIBLE_REQUESTS ? MAX_VISIBLE_REQUESTS / traveling.length : 1;
+    const keepPerBelt = new Map<string, number>();
+    for (const [beltId, count] of travelingPerBelt) {
+      const length = this.beltLengths.get(beltId) ?? 400;
+      const capacity = Math.max(4, Math.floor(length / MIN_DOT_SPACING));
+      keepPerBelt.set(beltId, Math.min(globalKeep, count > capacity ? capacity / count : 1));
+    }
 
-    for (let i = 0, drawn = 0; i < traveling.length && drawn < MAX_VISIBLE_REQUESTS; i += stride, drawn++) {
-      const req = traveling[Math.floor(i)];
-      const belt = this.beltById.get(req.beltId);
+    for (const req of traveling) {
+      const isTraced = req.id === tracedId;
+      const keep = keepPerBelt.get(req.beltId!) ?? 1;
+      if (!isTraced && keep < 1 && req.visualKey >= keep) continue;
+
+      const belt = this.beltById.get(req.beltId!);
       if (!belt) continue;
-
       const from = this.portMap.get(belt.fromPortId);
       const to = this.portMap.get(belt.toPortId);
       if (!from || !to) continue;
 
-      const pos = this.pointOnBelt(from, to, req.progress);
+      const progress = Math.min(0.999, req.progress + req.travelSpeed * interpSeconds);
+      const pos = this.pointOnBelt(from, to, progress, req.lane);
       const color = REQUEST_COLORS[req.colorIndex];
-      const radius = req.celebrity ? 6 : 4;
+      const radius = req.celebrity ? 4.2 : 3.1;
 
-      this.ctx.beginPath();
-      this.ctx.fillStyle = color;
-      this.ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
-      this.ctx.fill();
+      // Short motion trail behind the dot.
+      const trailT = Math.max(0, progress - TRAIL_LENGTH);
+      if (trailT < progress) {
+        const tail = this.pointOnBelt(from, to, trailT, req.lane);
+        ctx.beginPath();
+        ctx.moveTo(tail.x, tail.y);
+        ctx.lineTo(pos.x, pos.y);
+        ctx.strokeStyle = color;
+        ctx.globalAlpha = 0.22;
+        ctx.lineWidth = radius * 1.3;
+        ctx.lineCap = 'round';
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.arc(pos.x, pos.y, radius, 0, Math.PI * 2);
+      ctx.fill();
 
       if (req.celebrity) {
-        this.ctx.strokeStyle = 'rgba(30, 30, 30, 0.45)';
-        this.ctx.lineWidth = 1.25;
-        this.ctx.stroke();
+        ctx.strokeStyle = 'rgba(30, 30, 30, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+
+      this.drawnRequests.set(req.id, { x: pos.x, y: pos.y, r: radius });
+      if (isTraced) this.drawTraceHalo(pos.x, pos.y, radius);
+    }
+
+    // Queued requests wait as a small column of beads in front of the input port.
+    let tracedComponentId: string | null = null;
+    for (const [componentId, queued] of queuedByComponent) {
+      const inPort = this.portMap.get(`${componentId}:in`);
+      if (!inPort) continue;
+
+      const count = queued.length;
+      const shown = Math.min(count, MAX_QUEUE_BEADS);
+      const spacing = 7;
+      const startY = inPort.y - ((shown - 1) * spacing) / 2;
+      const x = inPort.x - 14;
+
+      for (let i = 0; i < shown; i++) {
+        const req = queued[i];
+        const y = startY + i * spacing;
+        ctx.beginPath();
+        ctx.fillStyle = REQUEST_COLORS[req.colorIndex];
+        ctx.globalAlpha = 0.9;
+        ctx.arc(x, y, 2.6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        this.drawnRequests.set(req.id, { x, y, r: 2.6 });
+        if (req.id === tracedId) this.drawTraceHalo(x, y, 2.6);
+      }
+
+      if (count > shown) {
+        ctx.fillStyle = 'rgba(95, 99, 104, 0.9)';
+        ctx.font = '600 9px ui-monospace, monospace';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        ctx.fillText(`+${count - shown}`, x, startY + shown * spacing);
+      }
+
+      if (tracedId !== null && queued.some((r) => r.id === tracedId)) {
+        tracedComponentId = componentId;
+        if (!this.drawnRequests.has(tracedId)) {
+          this.drawTraceHalo(x, startY + shown * spacing + 12, 3);
+        }
       }
     }
+
+    this.setTracedComponent(tracedComponentId);
+  }
+
+  private drawTraceHalo(x: number, y: number, radius: number): void {
+    if (!this.ctx) return;
+    const ctx = this.ctx;
+    ctx.beginPath();
+    ctx.arc(x, y, radius + 6, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(105, 101, 219, 0.95)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, radius + 11, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(105, 101, 219, 0.3)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
   }
 }

@@ -7,6 +7,7 @@ import type {
   PlacedComponent,
   Port,
   Request,
+  RequestEvent,
   RequestKind,
   SimulationReport,
   SimulationSnapshot,
@@ -44,6 +45,7 @@ import {
 } from './component-taxonomy';
 import { getComponentDef } from './component-catalog';
 import { getActiveScenario, type RuntimeScenario } from './scenario-runtime';
+import { beltLength, beltTravelSeconds } from './belt-geometry';
 import {
   CELEBRITY_COLOR_INDICES,
   COMPONENT_DEFS,
@@ -53,8 +55,22 @@ import {
 
 const SOURCE_ID = '__source__';
 const IDLE_LOAD_THRESHOLD = 15;
+/** How many completed/dropped requests stay inspectable after they finish. */
+const FINISHED_ARCHIVE_LIMIT = 400;
 
 let nextRequestId = 1;
+
+type AcceptResult = { ok: true; routed: boolean } | { ok: false; reason: string };
+
+/** Deterministic lateral lane in [-1, 1] so a stream spreads across the belt. */
+function laneFor(id: number): number {
+  return ((id * 0.7548776662466927) % 1) * 2 - 1;
+}
+
+/** Deterministic key in [0, 1) used to sub-sample which requests get drawn. */
+function visualKeyFor(id: number): number {
+  return (id * 0.6180339887498949) % 1;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -289,6 +305,9 @@ export class SimulationEngine {
   private startupUntil = new Map<string, number>();
   private onTopologyChange: TopologyChangeListener | null = null;
   private readonly scenario: RuntimeScenario;
+  private beltTravelTime = new Map<string, number>();
+  private finishedRequests: Request[] = [];
+  private pendingRecoveries: { componentId: string; at: number }[] = [];
 
   constructor(
     components: PlacedComponent[],
@@ -766,6 +785,18 @@ export class SimulationEngine {
         this.portMap.set(port.id, port);
       }
     }
+    this.rebuildBeltTravelTimes();
+  }
+
+  /** Constant pixel speed: long belts take longer than short ones. */
+  private rebuildBeltTravelTimes(): void {
+    this.beltTravelTime.clear();
+    for (const belt of this.belts) {
+      const from = this.portMap.get(belt.fromPortId);
+      const to = this.portMap.get(belt.toPortId);
+      if (!from || !to) continue;
+      this.beltTravelTime.set(belt.id, beltTravelSeconds(beltLength(from, to)));
+    }
   }
 
   private resetStates(): void {
@@ -792,6 +823,8 @@ export class SimulationEngine {
     this.totalCompleted = 0;
     this.totalDropped = 0;
     this.requests = [];
+    this.finishedRequests = [];
+    this.pendingRecoveries = [];
     this.peakRps = 0;
     this.spikeEvents = 0;
     this.wasSpikeActive = false;
@@ -813,6 +846,8 @@ export class SimulationEngine {
     this.status = 'idle';
     this.time = 0;
     this.requests = [];
+    this.finishedRequests = [];
+    this.pendingRecoveries = [];
     this.restoreInitialTopology();
     this.resetStates();
     this.onTopologyChange?.();
@@ -829,6 +864,7 @@ export class SimulationEngine {
 
     this.time += dt;
     this.updateStartupStates();
+    this.processRecoveries();
     const inDrain =
       this.draining || this.time >= this.scenario.duration;
 
@@ -836,9 +872,13 @@ export class SimulationEngine {
       this.updateTrafficPattern(dt);
       this.applyPredictiveScaling();
       this.spawnAccumulator += this.currentRps * dt;
-      while (this.spawnAccumulator >= 1) {
-        this.spawnAccumulator -= 1;
-        this.spawnRequest();
+      const spawnCount = Math.floor(this.spawnAccumulator);
+      if (spawnCount > 0) {
+        this.spawnAccumulator -= spawnCount;
+        // Spread this tick's arrivals across the tick so they form a stream.
+        for (let i = 0; i < spawnCount; i++) {
+          this.spawnRequest(dt * (i / spawnCount));
+        }
       }
     } else if (!this.draining) {
       this.draining = true;
@@ -943,7 +983,84 @@ export class SimulationEngine {
     }
   }
 
-  private spawnRequest(): void {
+  private labelFor(componentId: string): string {
+    return this.componentMap.get(componentId)?.label ?? componentId;
+  }
+
+  private targetComponentOf(belt: ConveyorBelt): PlacedComponent | undefined {
+    const port = this.portMap.get(belt.toPortId);
+    return port ? this.componentMap.get(port.componentId) : undefined;
+  }
+
+  private beltTravelSpeed(belt: ConveyorBelt): number {
+    const seconds = this.beltTravelTime.get(belt.id) ?? 1.2;
+    return 1 / seconds;
+  }
+
+  private logEvent(request: Request, event: RequestEvent): void {
+    request.events.push(event);
+  }
+
+  private componentEvent(
+    kind: RequestEvent['kind'],
+    component: PlacedComponent,
+    extra: Partial<RequestEvent> = {}
+  ): RequestEvent {
+    return {
+      kind,
+      at: this.time,
+      componentId: component.id,
+      componentLabel: component.label,
+      componentType: component.type,
+      ...extra,
+    };
+  }
+
+  /**
+   * Put a request onto a belt. `headStart` is how many seconds of travel have
+   * notionally already elapsed, which lets a batch emitted within one tick be
+   * spread evenly along the belt instead of stacking at the start.
+   */
+  private placeOnBelt(request: Request, belt: ConveyorBelt, headStart = 0): void {
+    const beltSt = this.beltState.get(belt.id)!;
+    request.beltId = belt.id;
+    request.targetPortId = belt.toPortId;
+    request.currentComponentId = null;
+    request.arrivedAt = null;
+    request.state = 'traveling';
+    request.travelSpeed = this.beltTravelSpeed(belt);
+    request.progress = clamp(request.travelSpeed * Math.max(0, headStart), 0, 0.999);
+    beltSt.traveling += 1;
+  }
+
+  private archiveRequest(request: Request): void {
+    this.finishedRequests.push(request);
+    if (this.finishedRequests.length > FINISHED_ARCHIVE_LIMIT) {
+      this.finishedRequests.splice(0, this.finishedRequests.length - FINISHED_ARCHIVE_LIMIT);
+    }
+  }
+
+  private finishRequest(request: Request, state: 'done' | 'dropped'): void {
+    request.state = state;
+    request.finishedAt = this.time;
+    request.beltId = null;
+    this.archiveRequest(request);
+  }
+
+  private dropRequest(request: Request, reason: string, component?: PlacedComponent): void {
+    this.logEvent(request, {
+      kind: 'dropped',
+      at: this.time,
+      componentId: component?.id,
+      componentLabel: component?.label,
+      componentType: component?.type,
+      detail: reason,
+    });
+    this.finishRequest(request, 'dropped');
+    this.totalDropped += 1;
+  }
+
+  private spawnRequest(headStart = 0): void {
     const sourcePort = getSourcePort(this.components);
     const outgoing = this.beltByFromPort.get(sourcePort.id) ?? [];
     if (outgoing.length === 0) {
@@ -961,42 +1078,63 @@ export class SimulationEngine {
 
     const kind: RequestKind = Math.random() < this.scenario.readRatio ? 'read' : 'create';
     const { colorIndex, celebrity } = pickRequestColor(this.scenario);
+    const id = nextRequestId++;
 
-    this.requests.push({
-      id: nextRequestId++,
+    const request: Request = {
+      id,
       kind,
       colorIndex,
       celebrity,
       progress: 0,
-      beltId: belt.id,
+      beltId: null,
       currentComponentId: null,
-      targetPortId: belt.toPortId,
+      targetPortId: null,
       state: 'traveling',
       waitTime: 0,
+      spawnedAt: this.time,
+      finishedAt: null,
+      travelSpeed: 1,
+      lane: laneFor(id),
+      visualKey: visualKeyFor(id),
+      arrivedAt: null,
+      events: [],
+    };
+
+    const target = this.targetComponentOf(belt);
+    this.logEvent(request, {
+      kind: 'spawned',
+      at: this.time,
+      beltId: belt.id,
+      detail: target ? `→ ${target.label}` : undefined,
     });
-    beltSt.traveling += 1;
+    this.placeOnBelt(request, belt, headStart);
+    this.requests.push(request);
     this.totalSpawned += 1;
   }
 
   private updateBelts(dt: number): void {
-    const speed = 0.85;
     for (const request of this.requests) {
       if (request.state !== 'traveling' || !request.beltId) continue;
 
-      request.progress += speed * dt;
+      request.progress += request.travelSpeed * dt;
       if (request.progress < 1) continue;
 
-      request.progress = 0;
-      const belt = request.beltId ? this.beltById.get(request.beltId) : undefined;
-      if (!belt) continue;
+      // Carry the overshoot into the next hop so streams stay evenly spaced.
+      const overshootSeconds = (request.progress - 1) / request.travelSpeed;
+      request.progress = 1;
 
-      const beltSt = this.beltState.get(belt.id)!;
-      beltSt.traveling = Math.max(0, beltSt.traveling - 1);
+      const belt = this.beltById.get(request.beltId);
+      if (!belt) {
+        this.dropRequest(request, 'belt no longer exists');
+        continue;
+      }
+
+      const beltSt = this.beltState.get(belt.id);
+      if (beltSt) beltSt.traveling = Math.max(0, beltSt.traveling - 1);
 
       const targetPort = this.portMap.get(belt.toPortId);
       if (!targetPort) {
-        request.state = 'dropped';
-        this.totalDropped += 1;
+        this.dropRequest(request, 'target port missing');
         continue;
       }
 
@@ -1004,24 +1142,24 @@ export class SimulationEngine {
       const compSt = this.componentState.get(componentId);
       const component = this.componentMap.get(componentId);
       if (!compSt || !component) {
-        request.state = 'dropped';
-        this.totalDropped += 1;
+        this.dropRequest(request, 'target component missing');
         continue;
       }
 
-      if (!this.acceptRequest(request, component, compSt)) {
-        request.state = 'dropped';
+      request.beltId = null;
+      this.logEvent(request, this.componentEvent('arrived', component));
+
+      const result = this.acceptRequest(request, component, compSt, overshootSeconds);
+      if (!result.ok) {
         compSt.dropped += 1;
-        this.totalDropped += 1;
+        this.dropRequest(request, result.reason, component);
         continue;
       }
 
-      if (component.type === 'load-balancer' && request.state === 'traveling') {
-        continue;
-      }
+      if (result.routed) continue;
 
       request.currentComponentId = componentId;
-      request.beltId = null;
+      request.arrivedAt = this.time;
       request.state = 'queued';
     }
   }
@@ -1029,9 +1167,11 @@ export class SimulationEngine {
   private acceptRequest(
     request: Request,
     component: PlacedComponent,
-    state: ComponentState
-  ): boolean {
-    if (state.failed || state.startingUp) return false;
+    state: ComponentState,
+    headStart: number
+  ): AcceptResult {
+    if (state.failed) return { ok: false, reason: `${component.label} is down` };
+    if (state.startingUp) return { ok: false, reason: `${component.label} is still starting up` };
 
     if (
       component.type === 'load-balancer' ||
@@ -1040,55 +1180,54 @@ export class SimulationEngine {
     ) {
       if (request.kind === 'create') {
         if (this.ingressHasTarget(component, 'shortener')) {
-          return this.routeFromIngress(request, component, (type) => type === 'shortener');
+          return this.routeFromIngress(request, component, (type) => type === 'shortener', headStart);
         }
-        return this.routeFromIngress(request, component, (type) => isComputeType(type));
+        return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
       }
       if (this.ingressHasTarget(component, 'backend')) {
-        return this.routeFromIngress(request, component, (type) => type === 'backend');
+        return this.routeFromIngress(request, component, (type) => type === 'backend', headStart);
       }
-      return this.routeFromIngress(request, component, (type) => isComputeType(type));
+      return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
     }
 
     if (component.type === 'rate-limiter' || component.type === 'cdn') {
-      return this.routeFromIngress(request, component, (type) => isComputeType(type));
+      return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
     }
 
     if (component.type === 'shortener' && request.kind !== 'create') {
-      return false;
+      return { ok: false, reason: 'Shortener only handles create requests' };
     }
     if (component.type === 'backend' && request.kind !== 'read') {
-      return false;
+      return { ok: false, reason: 'Backend only handles read requests' };
     }
 
-    if (this.queuedCount(component.id) >= this.getEffectiveQueueLimit(component)) return false;
-    return true;
+    const limit = this.getEffectiveQueueLimit(component);
+    const queued = this.queuedCount(component.id);
+    if (queued >= limit) {
+      return { ok: false, reason: `queue full (${queued}/${limit})` };
+    }
+    return { ok: true, routed: false };
   }
 
   private ingressHasTarget(ingress: PlacedComponent, targetType: ComponentType): boolean {
     const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
     if (!outPort) return false;
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
-    return belts.some((belt) => {
-      const port = this.portMap.get(belt.toPortId);
-      const comp = port ? this.componentMap.get(port.componentId) : undefined;
-      return comp?.type === targetType;
-    });
+    return belts.some((belt) => this.targetComponentOf(belt)?.type === targetType);
   }
 
   private routeFromIngress(
     request: Request,
     ingress: PlacedComponent,
-    matches: (type: ComponentType) => boolean
-  ): boolean {
+    matches: (type: ComponentType) => boolean,
+    headStart: number
+  ): AcceptResult {
     const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
-    if (!outPort) return false;
+    if (!outPort) return { ok: false, reason: `${ingress.label} has no outgoing port` };
 
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
     const validBelts = belts.filter((belt) => {
-      const port = this.portMap.get(belt.toPortId);
-      if (!port) return false;
-      const comp = this.componentMap.get(port.componentId);
+      const comp = this.targetComponentOf(belt);
       if (!comp || !matches(comp.type)) return false;
       const compSt = this.componentState.get(comp.id);
       if (!compSt || compSt.failed) return false;
@@ -1096,22 +1235,29 @@ export class SimulationEngine {
       return true;
     });
 
-    if (validBelts.length === 0) return false;
+    if (validBelts.length === 0) {
+      return { ok: false, reason: `no healthy ${request.kind} route from ${ingress.label}` };
+    }
 
     const belt = validBelts[Math.floor(Math.random() * validBelts.length)];
     const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.9) return false;
+    if (beltSt.traveling >= belt.capacity * 0.9) {
+      return { ok: false, reason: `link out of ${ingress.label} is congested` };
+    }
 
-    const targetPort = this.portMap.get(belt.toPortId)!;
-    const targetComp = this.componentMap.get(targetPort.componentId)!;
-    if (this.queuedCount(targetComp.id) >= this.getEffectiveQueueLimit(targetComp)) return false;
+    const targetComp = this.targetComponentOf(belt)!;
+    const limit = this.getEffectiveQueueLimit(targetComp);
+    const queued = this.queuedCount(targetComp.id);
+    if (queued >= limit) {
+      return { ok: false, reason: `${targetComp.label} queue full (${queued}/${limit})` };
+    }
 
-    request.beltId = belt.id;
-    request.targetPortId = belt.toPortId;
-    request.state = 'traveling';
-    request.currentComponentId = null;
-    beltSt.traveling += 1;
-    return true;
+    this.logEvent(
+      request,
+      this.componentEvent('routed', ingress, { beltId: belt.id, detail: `→ ${targetComp.label}` })
+    );
+    this.placeOnBelt(request, belt, headStart);
+    return { ok: true, routed: true };
   }
 
   private updateComponents(dt: number): void {
@@ -1129,7 +1275,9 @@ export class SimulationEngine {
       if (completions > 0) {
         let processed = 0;
         for (let i = 0; i < completions; i++) {
-          if (this.completeOneRequest(component)) {
+          // Spread this tick's batch along the outgoing belt.
+          const headStart = dt * (i / completions);
+          if (this.completeOneRequest(component, headStart)) {
             processed += 1;
             continue;
           }
@@ -1179,14 +1327,10 @@ export class SimulationEngine {
     return available[Math.floor(Math.random() * available.length)];
   }
 
-  private completeOneRequest(component: PlacedComponent): boolean {
+  private completeOneRequest(component: PlacedComponent, headStart = 0): boolean {
     const outPort = getComponentPorts(component).find((p) => p.side === 'out');
     if (!outPort) {
-      if (this.finishQueuedRequest(component.id)) {
-        this.totalCompleted += 1;
-        return true;
-      }
-      return false;
+      return this.completeQueuedRequest(component);
     }
 
     const belts = this.beltByFromPort.get(outPort.id) ?? [];
@@ -1196,23 +1340,14 @@ export class SimulationEngine {
         component.type === 'database' ||
         component.type === 'redis'
       ) {
-        if (this.finishQueuedRequest(component.id)) {
-          this.totalCompleted += 1;
-          return true;
-        }
+        return this.completeQueuedRequest(component);
       }
       return false;
     }
 
     if (component.type === 'backend') {
-      const redisBelts = belts.filter((b) => {
-        const port = this.portMap.get(b.toPortId);
-        return this.componentMap.get(port?.componentId ?? '')?.type === 'redis';
-      });
-      const dbBelts = belts.filter((b) => {
-        const port = this.portMap.get(b.toPortId);
-        return this.componentMap.get(port?.componentId ?? '')?.type === 'database';
-      });
+      const redisBelts = belts.filter((b) => this.targetComponentOf(b)?.type === 'redis');
+      const dbBelts = belts.filter((b) => this.targetComponentOf(b)?.type === 'database');
 
       const preferRedis =
         redisBelts.length > 0 &&
@@ -1223,30 +1358,32 @@ export class SimulationEngine {
         if (!preferRedis) return false;
         const fallback = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
         if (!fallback) return false;
-        return this.forwardFromComponent(component, fallback, 'read');
+        return this.forwardFromComponent(component, fallback, headStart, 'cache link congested, falling back to storage');
       }
-      return this.forwardFromComponent(component, belt, 'read');
+      return this.forwardFromComponent(
+        component,
+        belt,
+        headStart,
+        preferRedis ? 'cache hit' : 'cache miss'
+      );
     }
 
     if (component.type === 'shortener') {
       const dbBelts = belts.filter((b) => {
-        const port = this.portMap.get(b.toPortId);
-        const targetType = this.componentMap.get(port?.componentId ?? '')?.type;
+        const targetType = this.targetComponentOf(b)?.type;
         return isStorageType(targetType ?? '') || targetType === 'database';
       });
       const belt = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
       if (!belt) return false;
-      return this.forwardFromComponent(component, belt, 'create');
+      return this.forwardFromComponent(component, belt, headStart, 'generated short code, persisting mapping');
     }
 
     if (isComputeType(component.type)) {
-      const cacheBelts = belts.filter((b) => {
-        const port = this.portMap.get(b.toPortId);
-        return isCacheType(this.componentMap.get(port?.componentId ?? '')?.type ?? '');
-      });
+      const cacheBelts = belts.filter((b) =>
+        isCacheType(this.targetComponentOf(b)?.type ?? '')
+      );
       const storageBelts = belts.filter((b) => {
-        const port = this.portMap.get(b.toPortId);
-        const targetType = this.componentMap.get(port?.componentId ?? '')?.type ?? '';
+        const targetType = this.targetComponentOf(b)?.type ?? '';
         return isStorageType(targetType) || targetType === 'database';
       });
       const preferCache =
@@ -1258,77 +1395,66 @@ export class SimulationEngine {
           ? storageBelts
           : belts;
       const belt = this.pickAvailableBelt(candidates);
-      if (belt) return this.forwardFromComponent(component, belt, 'read');
+      if (belt) {
+        return this.forwardFromComponent(
+          component,
+          belt,
+          headStart,
+          cacheBelts.length > 0 ? (preferCache ? 'cache hit' : 'cache miss') : undefined
+        );
+      }
     }
 
     if (isStorageType(component.type) || component.type === 'database' || component.type === 'redis') {
-      if (this.finishQueuedRequest(component.id)) {
-        this.totalCompleted += 1;
-        return true;
-      }
+      return this.completeQueuedRequest(component);
     }
 
     return false;
   }
 
+  /** Oldest queued request at a component, charged for its queue wait. */
+  private takeQueuedRequest(component: PlacedComponent): Request | undefined {
+    const request = this.requests.find(
+      (r) => r.state === 'queued' && r.currentComponentId === component.id
+    );
+    if (!request) return undefined;
+    if (request.arrivedAt !== null) {
+      request.waitTime += Math.max(0, this.time - request.arrivedAt);
+    }
+    return request;
+  }
+
   private forwardFromComponent(
     component: PlacedComponent,
     belt: ConveyorBelt,
-    kind: RequestKind
+    headStart: number,
+    detail?: string
   ): boolean {
     if (!this.canEmitOnBelt(belt)) return false;
-    const visual = this.takeQueuedVisual(component);
-    if (!visual) return false;
-    this.emitOnBelt(belt, kind, visual);
+    const request = this.takeQueuedRequest(component);
+    if (!request) return false;
+
+    const target = this.targetComponentOf(belt);
+    this.logEvent(request, this.componentEvent('processed', component, { detail }));
+    this.logEvent(
+      request,
+      this.componentEvent('forwarded', component, {
+        beltId: belt.id,
+        detail: `→ ${target?.label ?? this.labelFor(belt.toPortId)}`,
+      })
+    );
+    this.placeOnBelt(request, belt, headStart);
     return true;
   }
 
-  private takeQueuedVisual(
-    component: PlacedComponent
-  ): { colorIndex: number; celebrity: boolean } | undefined {
-    const idx = this.requests.findIndex(
-      (r) => r.state === 'queued' && r.currentComponentId === component.id
-    );
-    if (idx === -1) return undefined;
-    const req = this.requests[idx];
-    req.state = 'done';
-    return { colorIndex: req.colorIndex, celebrity: req.celebrity };
-  }
-
-  private finishQueuedRequest(componentId: string): boolean {
-    const idx = this.requests.findIndex(
-      (r) => r.state === 'queued' && r.currentComponentId === componentId
-    );
-    if (idx === -1) return false;
-    this.requests[idx].state = 'done';
+  private completeQueuedRequest(component: PlacedComponent): boolean {
+    const request = this.takeQueuedRequest(component);
+    if (!request) return false;
+    this.logEvent(request, this.componentEvent('processed', component));
+    this.logEvent(request, this.componentEvent('completed', component));
+    this.finishRequest(request, 'done');
+    this.totalCompleted += 1;
     return true;
-  }
-
-  private emitOnBelt(
-    belt: ConveyorBelt,
-    kind: RequestKind,
-    visual?: { colorIndex: number; celebrity: boolean }
-  ): void {
-    const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.9) {
-      this.totalDropped += 1;
-      return;
-    }
-
-    const { colorIndex, celebrity } = visual ?? pickRequestColor(this.scenario);
-    this.requests.push({
-      id: nextRequestId++,
-      kind,
-      colorIndex,
-      celebrity,
-      progress: 0,
-      beltId: belt.id,
-      currentComponentId: null,
-      targetPortId: belt.toPortId,
-      state: 'traveling',
-      waitTime: 0,
-    });
-    beltSt.traveling += 1;
   }
 
   private updateLoads(): void {
@@ -1347,6 +1473,19 @@ export class SimulationEngine {
       const state = this.beltState.get(belt.id)!;
       state.load = clamp((state.traveling / belt.capacity) * 100, 0, 100);
     }
+  }
+
+  /** Look up a request by id among active and recently finished requests. */
+  getRequest(id: number): Request | null {
+    return (
+      this.requests.find((r) => r.id === id) ??
+      this.finishedRequests.find((r) => r.id === id) ??
+      null
+    );
+  }
+
+  getTime(): number {
+    return this.time;
   }
 
   getReport(): SimulationReport {
@@ -1436,19 +1575,28 @@ export class SimulationEngine {
         break;
     }
 
-    // Schedule recovery after duration
-    setTimeout(() => {
-      if (type === 'shutdown' || type === 'capacity') {
-        // Restore capacity (this is a simplified approach)
-        const def = getComponentDef(component.type);
-        if (def) {
-          component.capacity = def.capacity;
-          this.message = `✅ ${component.label} recovered from failure.`;
-        }
-      }
-    }, duration * 1000);
+    // Schedule recovery in simulation time so pausing also pauses the outage.
+    if (type === 'shutdown' || type === 'capacity') {
+      this.pendingRecoveries.push({ componentId, at: this.time + duration });
+    }
 
     console.log(`Injected ${type} failure to ${component.label} for ${duration}s`);
+  }
+
+  private processRecoveries(): void {
+    if (this.pendingRecoveries.length === 0) return;
+    const due = this.pendingRecoveries.filter((r) => r.at <= this.time);
+    if (due.length === 0) return;
+    this.pendingRecoveries = this.pendingRecoveries.filter((r) => r.at > this.time);
+    for (const recovery of due) {
+      const component = this.componentMap.get(recovery.componentId);
+      if (!component) continue;
+      const def = getComponentDef(component.type);
+      if (def) {
+        component.capacity = def.capacity;
+        this.message = `✅ ${component.label} recovered from failure.`;
+      }
+    }
   }
 }
 
