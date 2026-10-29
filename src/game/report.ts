@@ -16,6 +16,7 @@ import {
   getDatabaseConfigForComponent,
 } from './component-config';
 import { getScaleGroupMembers } from './scale-instances';
+import { getComponentDef } from './component-catalog';
 
 const REQUIRED_COMPONENTS: ComponentType[] = [
   'load-balancer',
@@ -69,7 +70,7 @@ function effectiveMonthlyCost(
   component: PlacedComponent,
   input: ReportInput
 ): number {
-  const def = COMPONENT_DEFS[component.type];
+  const def = getComponentDef(component.type);
   if (component.scaleGroupId && component.scaleGroupId !== component.id) {
     return 0;
   }
@@ -103,7 +104,7 @@ function buildComponentReports(input: ReportInput): ComponentReport[] {
     .map((component) => {
     const tel = input.telemetry.get(component.id);
     const st = input.componentState.get(component.id);
-    const def = COMPONENT_DEFS[component.type];
+    const def = getComponentDef(component.type);
     const avgLoad = tel ? tel.loadIntegral / Math.max(input.duration, 0.001) : 0;
     const processed = st?.processed ?? 0;
     const scaling = input.scalingState.get(component.id);
