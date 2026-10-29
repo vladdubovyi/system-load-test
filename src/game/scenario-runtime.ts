@@ -1,4 +1,6 @@
 import type { Challenge } from './scenario-types';
+import type { FlowSpec, Objectives } from './flow-types';
+import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import { SCENARIO } from './types';
 
 export interface RuntimeScenario {
@@ -15,6 +17,12 @@ export interface RuntimeScenario {
   readRatio: number;
   celebrityShare: number;
   cacheHitRatio: number;
+  /** Spawn weights per request kind (normalized by the engine). */
+  requestTypes: Record<string, number>;
+  /** Required request flows; undefined means legacy routing (Phase 2 default). */
+  flows?: FlowSpec[];
+  /** Data-driven win conditions evaluated at the end of a run (Phase 4). */
+  objectives?: Objectives;
 }
 
 const DEFAULT_SCENARIO: RuntimeScenario = {
@@ -31,6 +39,9 @@ const DEFAULT_SCENARIO: RuntimeScenario = {
   readRatio: SCENARIO.readRatio,
   celebrityShare: SCENARIO.celebrityShare,
   cacheHitRatio: SCENARIO.cacheHitRatio,
+  requestTypes: { read: SCENARIO.readRatio, create: 1 - SCENARIO.readRatio },
+  flows: getPresetFlows('url-shortener'),
+  objectives: getPresetObjectives('url-shortener'),
 };
 
 let activeScenario: RuntimeScenario = { ...DEFAULT_SCENARIO };
@@ -48,6 +59,15 @@ export function setActiveScenarioFromChallenge(challenge: Challenge | null): voi
   const traffic = challenge.scenario.traffic;
   const characteristics = traffic.characteristics ?? {};
 
+  const readRatio =
+    typeof traffic.requestTypes?.read === 'number'
+      ? traffic.requestTypes.read
+      : challenge.slug === 'url-shortener'
+        ? 0.72
+        : challenge.slug === 'instagram-feed'
+          ? 0.95
+          : DEFAULT_SCENARIO.readRatio;
+
   activeScenario = {
     id: challenge.id,
     slug: challenge.slug,
@@ -61,14 +81,13 @@ export function setActiveScenarioFromChallenge(challenge: Challenge | null): voi
     baseRps: traffic.baseRps,
     spikeMultiplier: traffic.spikeMultiplier ?? DEFAULT_SCENARIO.spikeMultiplier,
     spikeChance: traffic.spikeChance ?? DEFAULT_SCENARIO.spikeChance,
-    readRatio:
-      typeof traffic.requestTypes?.read === 'number'
-        ? traffic.requestTypes.read
-        : challenge.slug === 'url-shortener'
-          ? 0.72
-          : challenge.slug === 'instagram-feed'
-            ? 0.95
-            : DEFAULT_SCENARIO.readRatio,
+    readRatio,
+    requestTypes:
+      traffic.requestTypes && Object.keys(traffic.requestTypes).length > 0
+        ? { ...traffic.requestTypes }
+        : { read: readRatio, create: 1 - readRatio },
+    flows: challenge.scenario.flows ?? getPresetFlows(challenge.slug),
+    objectives: challenge.scenario.objectives ?? getPresetObjectives(challenge.slug),
     celebrityShare:
       typeof characteristics.celebrityShare === 'number'
         ? characteristics.celebrityShare

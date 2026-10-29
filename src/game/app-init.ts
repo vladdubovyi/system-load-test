@@ -1,5 +1,6 @@
 import { apiClient } from '../api/client';
 import { componentRegistry } from './component-registry';
+import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import type { Challenge, ComponentDefinition } from './scenario-types';
 
 export interface AppInitResult {
@@ -96,6 +97,8 @@ function createLegacyUrlShortenerChallenge(): Challenge {
         scalability: 20,
         cost: 10,
       },
+      flows: getPresetFlows('url-shortener'),
+      objectives: getPresetObjectives('url-shortener'),
     },
   };
 }

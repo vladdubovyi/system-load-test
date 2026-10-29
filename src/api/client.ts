@@ -2,6 +2,45 @@ import { getAuthToken } from '../auth/auth-store';
 import type { AuthResponse, UserResponse } from '../auth/types';
 import type { Challenge, ComponentDefinition } from '../game/scenario-types';
 
+/**
+ * Transform a backend challenge payload into the frontend Challenge shape.
+ * Exported for tests.
+ */
+export function mapChallengeFromApi(item: any): Challenge {
+  const config = item.scenario.scenarioConfig ?? {};
+  return {
+    id: item.id,
+    name: item.name,
+    slug: item.slug,
+    description: item.description,
+    difficulty: item.difficulty,
+    createdAt: item.createdAt,
+    allowedComponents: item.allowedComponents || [],
+    overviewContent: item.overviewContent,
+    videoUrl: item.videoUrl,
+    scenario: {
+      id: item.scenario.id,
+      title: item.name,
+      description: item.description,
+      duration: item.scenario.durationSeconds,
+      drainDuration: config.drainDuration || 10,
+      requirements: config.requirements || [],
+      traffic: {
+        baseRps: item.scenario.baseRps,
+        spikeMultiplier: item.scenario.spikeMultiplier,
+        spikeChance: item.scenario.spikeChance,
+        pattern: config.pattern || 'constant',
+        requestTypes: config.requestTypes,
+        characteristics: config.characteristics,
+      },
+      allowedComponents: item.allowedComponents || [],
+      scoringPriorities: item.scenario.scoringWeights || {},
+      flows: config.flows,
+      objectives: config.objectives,
+    },
+  };
+}
+
 export class ApiClient {
   private baseUrl: string;
 
@@ -71,37 +110,9 @@ export class ApiClient {
   async getChallenges(): Promise<Challenge[]> {
     try {
       const data = await this.request<any[]>('/api/challenges');
-      
+
       // Transform backend response to frontend format
-      return data.map((item: any) => ({
-        id: item.id,
-        name: item.name,
-        slug: item.slug,
-        description: item.description,
-        difficulty: item.difficulty,
-        createdAt: item.createdAt,
-        allowedComponents: item.allowedComponents || [],
-        overviewContent: item.overviewContent,
-        videoUrl: item.videoUrl,
-        scenario: {
-          id: item.scenario.id,
-          title: item.name,
-          description: item.description,
-          duration: item.scenario.durationSeconds,
-          drainDuration: item.scenario.scenarioConfig?.drainDuration || 10,
-          requirements: item.scenario.scenarioConfig?.requirements || [],
-          traffic: {
-            baseRps: item.scenario.baseRps,
-            spikeMultiplier: item.scenario.spikeMultiplier,
-            spikeChance: item.scenario.spikeChance,
-            pattern: item.scenario.scenarioConfig?.pattern || 'constant',
-            requestTypes: item.scenario.scenarioConfig?.requestTypes,
-            characteristics: item.scenario.scenarioConfig?.characteristics,
-          },
-          allowedComponents: item.allowedComponents || [],
-          scoringPriorities: item.scenario.scoringWeights || {},
-        },
-      }));
+      return data.map(mapChallengeFromApi);
     } catch (error) {
       console.error('Error fetching challenges:', error);
       throw error;
@@ -111,36 +122,8 @@ export class ApiClient {
   async getChallenge(id: string): Promise<Challenge> {
     try {
       const item = await this.request<any>(`/api/challenges/${id}`);
-      
-      return {
-        id: item.id,
-        name: item.name,
-        slug: item.slug,
-        description: item.description,
-        difficulty: item.difficulty,
-        createdAt: item.createdAt,
-        allowedComponents: item.allowedComponents || [],
-        overviewContent: item.overviewContent,
-        videoUrl: item.videoUrl,
-        scenario: {
-          id: item.scenario.id,
-          title: item.name,
-          description: item.description,
-          duration: item.scenario.durationSeconds,
-          drainDuration: item.scenario.scenarioConfig?.drainDuration || 10,
-          requirements: item.scenario.scenarioConfig?.requirements || [],
-          traffic: {
-            baseRps: item.scenario.baseRps,
-            spikeMultiplier: item.scenario.spikeMultiplier,
-            spikeChance: item.scenario.spikeChance,
-            pattern: item.scenario.scenarioConfig?.pattern || 'constant',
-            requestTypes: item.scenario.scenarioConfig?.requestTypes,
-            characteristics: item.scenario.scenarioConfig?.characteristics,
-          },
-          allowedComponents: item.allowedComponents || [],
-          scoringPriorities: item.scenario.scoringWeights || {},
-        },
-      };
+
+      return mapChallengeFromApi(item);
     } catch (error) {
       console.error('Error fetching challenge:', error);
       throw error;
@@ -150,36 +133,8 @@ export class ApiClient {
   async getChallengeBySlug(slug: string): Promise<Challenge> {
     try {
       const item = await this.request<any>(`/api/challenges/slug/${slug}`);
-      
-      return {
-        id: item.id,
-        name: item.name,
-        slug: item.slug,
-        description: item.description,
-        difficulty: item.difficulty,
-        createdAt: item.createdAt,
-        allowedComponents: item.allowedComponents || [],
-        overviewContent: item.overviewContent,
-        videoUrl: item.videoUrl,
-        scenario: {
-          id: item.scenario.id,
-          title: item.name,
-          description: item.description,
-          duration: item.scenario.durationSeconds,
-          drainDuration: item.scenario.scenarioConfig?.drainDuration || 10,
-          requirements: item.scenario.scenarioConfig?.requirements || [],
-          traffic: {
-            baseRps: item.scenario.baseRps,
-            spikeMultiplier: item.scenario.spikeMultiplier,
-            spikeChance: item.scenario.spikeChance,
-            pattern: item.scenario.scenarioConfig?.pattern || 'constant',
-            requestTypes: item.scenario.scenarioConfig?.requestTypes,
-            characteristics: item.scenario.scenarioConfig?.characteristics,
-          },
-          allowedComponents: item.allowedComponents || [],
-          scoringPriorities: item.scenario.scoringWeights || {},
-        },
-      };
+
+      return mapChallengeFromApi(item);
     } catch (error) {
       console.error('Error fetching challenge by slug:', error);
       throw error;

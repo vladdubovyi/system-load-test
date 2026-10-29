@@ -1,3 +1,5 @@
+import type { FlowSpec, Objectives } from './flow-types';
+
 export interface ScenarioDefinition {
   id: string;
   title: string;
@@ -10,6 +12,10 @@ export interface ScenarioDefinition {
   scoringPriorities: ScoringPriorities;
   failureScenarios?: FailureScenario[];
   referenceArchitecture?: ReferenceArchitecture;
+  /** Required request flows (docs/specs/flow-correctness.md); falls back to flow-presets by slug. */
+  flows?: FlowSpec[];
+  /** Data-driven win conditions evaluated at the end of a run. */
+  objectives?: Objectives;
 }
 
 export interface TrafficProfile {
@@ -87,4 +93,6 @@ export interface ComponentDefinition {
   height: number;
   description: string;
   enabled: boolean;
+  /** Semantic capabilities (see capabilities.ts); falls back to built-in per-type table. */
+  capabilities?: string[];
 }
