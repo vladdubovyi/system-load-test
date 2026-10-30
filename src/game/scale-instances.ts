@@ -1,5 +1,5 @@
 import type { ComponentType, ConveyorBelt, PlacedComponent } from './types';
-import { COMPONENT_DEFS } from './types';
+import { getComponentDef } from './component-catalog';
 import { isScalableType } from './architecture-config';
 
 const SOURCE_ID = '__source__';
@@ -38,7 +38,7 @@ export function createScaleInstance(
   primary: PlacedComponent,
   instanceIndex: number
 ): PlacedComponent {
-  const def = COMPONENT_DEFS[primary.type];
+  const def = getComponentDef(primary.type);
 
   return {
     id: `${primary.type}-inst-${primary.id}-${instanceIndex}-${Date.now().toString(36)}`,

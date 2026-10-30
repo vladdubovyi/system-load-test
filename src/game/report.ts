@@ -4,7 +4,7 @@ import type {
   PlacedComponent,
   SimulationReport,
 } from './types';
-import { COMPONENT_DEFS, SCENARIO } from './types';
+import { getActiveScenario } from './scenario-runtime';
 import type { ComponentTelemetry } from './types';
 import type {
   ArchitectureConfig,
@@ -274,7 +274,7 @@ function computeScore(
   if (input.outcome === 'won') {
     score += 30;
   } else {
-    const survivalRatio = input.duration / SCENARIO.duration;
+    const survivalRatio = input.duration / getActiveScenario().duration;
     score += Math.round(30 * survivalRatio * 0.5);
   }
 
@@ -351,7 +351,7 @@ function buildRecommendations(
 
   if (missing.length > 0) {
     tips.push(
-      `Add missing components: ${missing.map((t) => COMPONENT_DEFS[t].label).join(', ')}.`
+      `Add missing components: ${missing.map((t) => getComponentDef(t).label).join(', ')}.`
     );
   }
 

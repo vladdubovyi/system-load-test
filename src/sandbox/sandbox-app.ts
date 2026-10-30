@@ -18,7 +18,11 @@ import {
 import { buildPreset, URL_SHORTENER_PRESET } from '../game/presets';
 import { buildChallengePreset } from '../game/challenge-presets';
 import { getComponentDef } from '../game/component-catalog';
-import { getActiveScenario, setActiveScenarioFromChallenge } from '../game/scenario-runtime';
+import {
+  getActiveScenario,
+  setActiveScenarioFromChallenge,
+  setActiveTrafficOverride,
+} from '../game/scenario-runtime';
 import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
 import { ConnectionPreview } from '../ui/connection-preview';
@@ -653,7 +657,9 @@ function deleteSelection(): void {
     });
     state.selection = null;
     mountBoard();
+    refreshConfigPalette();
     invalidateBoardSnapshot();
+    updateStatus();
     pushHistory();
     return;
   }
@@ -997,6 +1003,7 @@ function bindEvents(): void {
       mountBoard();
       invalidateBoardSnapshot();
       selectItem({ kind: 'component', id: comp.id });
+      updateStatus();
       pushHistory();
       setTool('hand');
       return;
@@ -1284,8 +1291,6 @@ function copySelection(): void {
       ? new Map([[selectedId, state.componentConfigs.get(selectedId)!]])
       : new Map(),
   };
-  
-  console.log('Copied component to clipboard');
 }
 
 function pasteSelection(): void {
@@ -1344,9 +1349,8 @@ function pasteSelection(): void {
   
   mountBoard();
   invalidateBoardSnapshot();
+  updateStatus();
   pushHistory();
-  
-  console.log('Pasted component from clipboard');
 }
 
 // History management functions
@@ -1427,12 +1431,22 @@ function showTrafficConfigPanel(): void {
   mountTrafficConfigPanel(
     container,
     traffic,
-    (newTraffic) => {
-      state.customTrafficConfig = newTraffic;
-      console.log('Traffic config updated:', newTraffic);
-    },
-    () => closeTrafficConfig()
+    (newTraffic) => applyTrafficConfig(newTraffic),
+    () => closeTrafficConfig(),
+    () => applyTrafficConfig(null)
   );
+}
+
+/**
+ * Push a Traffic-panel profile into the active scenario so the next run uses
+ * it. A running simulation keeps the parameters it started with; the HUD and
+ * problem frame update immediately so the change is visible before Play.
+ */
+function applyTrafficConfig(traffic: TrafficProfile | null): void {
+  state.customTrafficConfig = traffic;
+  setActiveTrafficOverride(traffic);
+  annotationRenderer.updateProblemFrame();
+  updateStatus();
 }
 
 function closeTrafficConfig(): void {

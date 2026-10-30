@@ -53,7 +53,7 @@ export function renderLoginPage(errorMessage = ''): string {
           <h1>Sign in to save progress</h1>
           <p class="login-lead">Continue with Google for the fastest sign-in, or use email and password.</p>
 
-          ${errorMessage ? `<div class="login-error" role="alert">${errorMessage}</div>` : ''}
+          <div class="login-error" role="alert" ${errorMessage ? '' : 'hidden'}>${errorMessage}</div>
 
           <div class="login-google-section">
             <div id="google-signin-button" class="google-signin-host"></div>

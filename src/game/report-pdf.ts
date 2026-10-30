@@ -2,7 +2,7 @@ import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import type { SimulationReport } from './types';
 import { formatCost, formatSeconds } from './report';
-import { SCENARIO } from './types';
+import { getActiveScenario } from './scenario-runtime';
 
 function reportFilename(report: SimulationReport): string {
   const date = new Date().toISOString().slice(0, 10);
@@ -60,7 +60,7 @@ export function downloadReportPdf(report: SimulationReport): void {
   doc.setFontSize(11);
   doc.setFont('helvetica', 'normal');
   doc.text(
-    `${SCENARIO.title} · ${report.duration.toFixed(1)}s · ${won ? 'Survived' : 'Failed'}`,
+    `${getActiveScenario().title} · ${report.duration.toFixed(1)}s · ${won ? 'Survived' : 'Failed'}`,
     14,
     21
   );
@@ -229,7 +229,7 @@ export function downloadReportPdf(report: SimulationReport): void {
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
     doc.text(
-      `BreakIT · ${SCENARIO.title} · Page ${i} of ${pageCount}`,
+      `BreakIT · ${getActiveScenario().title} · Page ${i} of ${pageCount}`,
       14,
       doc.internal.pageSize.getHeight() - 8
     );

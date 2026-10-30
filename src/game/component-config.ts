@@ -29,7 +29,8 @@ export interface ConfigChipDef {
   label: string;
   emoji: string;
   description: string;
-  forTypes: ComponentType[];
+  /** Whether this chip can be dropped on a component of the given type. */
+  appliesTo: (type: ComponentType) => boolean;
 }
 
 export const CONFIG_CHIPS: ConfigChipDef[] = [
@@ -38,42 +39,42 @@ export const CONFIG_CHIPS: ConfigChipDef[] = [
     label: 'Horizontal scaling',
     emoji: '↔️',
     description: 'Add/remove instances by load',
-    forTypes: ['shortener', 'backend'],
+    appliesTo: isScalableType,
   },
   {
     id: 'vertical-scaling',
     label: 'Vertical scaling',
     emoji: '↕️',
     description: 'Increase per-instance capacity',
-    forTypes: ['shortener', 'backend'],
+    appliesTo: isScalableType,
   },
   {
     id: 'reactive-scaling',
     label: 'Reactive scaling',
     emoji: '⚡',
     description: 'Scale on real-time utilization',
-    forTypes: ['shortener', 'backend'],
+    appliesTo: isScalableType,
   },
   {
     id: 'predictive-scaling',
     label: 'Predictive scaling',
     emoji: '📈',
     description: 'Pre-scale before traffic spikes',
-    forTypes: ['shortener', 'backend'],
+    appliesTo: isScalableType,
   },
   {
     id: 'db-replication',
     label: 'Read replication',
     emoji: '📚',
     description: 'Offload reads to replicas',
-    forTypes: ['database'],
+    appliesTo: (type) => type === 'database',
   },
   {
     id: 'db-sharding',
     label: 'Sharding',
     emoji: '🧩',
     description: 'Partition data across shards',
-    forTypes: ['database'],
+    appliesTo: (type) => type === 'database',
   },
 ];
 
@@ -105,35 +106,50 @@ function ensureDatabase(config: ComponentInstanceConfig): DatabaseConfig {
   return config.database;
 }
 
+/**
+ * Auto-scaling template for a component type. The reference architecture only
+ * describes the two legacy service types, so every other compute tier reuses
+ * the backend profile.
+ */
+function referenceAutoScalingFor(
+  reference: ArchitectureConfig,
+  componentType: ComponentType
+): AutoScalingConfig {
+  return componentType === 'shortener'
+    ? reference.autoScaling.shortener
+    : reference.autoScaling.backend;
+}
+
 export function applyConfigChip(
   config: ComponentInstanceConfig,
   chipId: ConfigChipId,
   componentType: ComponentType
 ): boolean {
   const chip = CONFIG_CHIPS.find((c) => c.id === chipId);
-  if (!chip || !chip.forTypes.includes(componentType)) return false;
+  if (!chip || !chip.appliesTo(componentType)) return false;
 
   const reference = createReferenceArchitectureConfig();
+  const template = referenceAutoScalingFor(reference, componentType);
 
   switch (chipId) {
     case 'horizontal-scaling': {
       const auto = ensureAutoScaling(config);
-      auto.horizontal = { ...reference.autoScaling[componentType as 'shortener' | 'backend'].horizontal, enabled: true };
+      auto.horizontal = { ...template.horizontal, enabled: true };
       return true;
     }
     case 'vertical-scaling': {
       const auto = ensureAutoScaling(config);
-      auto.vertical = { ...reference.autoScaling[componentType as 'shortener' | 'backend'].vertical, enabled: true };
+      auto.vertical = { ...template.vertical, enabled: true };
       return true;
     }
     case 'reactive-scaling': {
       const auto = ensureAutoScaling(config);
-      auto.reactive = { ...reference.autoScaling[componentType as 'shortener' | 'backend'].reactive, enabled: true };
+      auto.reactive = { ...template.reactive, enabled: true };
       return true;
     }
     case 'predictive-scaling': {
       const auto = ensureAutoScaling(config);
-      auto.predictive = { ...reference.autoScaling[componentType as 'shortener' | 'backend'].predictive, enabled: true };
+      auto.predictive = { ...template.predictive, enabled: true };
       return true;
     }
     case 'db-replication': {
@@ -178,11 +194,9 @@ export function aggregateArchitectureConfig(
     const cfg = configs.get(component.id);
     if (!cfg) continue;
 
-    if (component.type === 'shortener' && cfg.autoScaling) {
-      aggregate.autoScaling.shortener = structuredClone(cfg.autoScaling);
-    }
-    if (component.type === 'backend' && cfg.autoScaling) {
-      aggregate.autoScaling.backend = structuredClone(cfg.autoScaling);
+    if (cfg.autoScaling && isScalableType(component.type)) {
+      const slot = component.type === 'shortener' ? 'shortener' : 'backend';
+      aggregate.autoScaling[slot] = structuredClone(cfg.autoScaling);
     }
     if (component.type === 'database' && cfg.database) {
       aggregate.database = structuredClone(cfg.database);
@@ -198,14 +212,13 @@ export function buildReferenceComponentConfigs(
   const reference = createReferenceArchitectureConfig();
   const map = new Map<string, ComponentInstanceConfig>();
 
+  // Only the legacy reference architecture ships pre-tuned auto-scaling.
+  // Challenge starters are authored without it on purpose — configuring
+  // scaling is part of the exercise.
   for (const component of components) {
-    if (component.type === 'shortener') {
+    if (component.type === 'shortener' || component.type === 'backend') {
       map.set(component.id, {
-        autoScaling: structuredClone(reference.autoScaling.shortener),
-      });
-    } else if (component.type === 'backend') {
-      map.set(component.id, {
-        autoScaling: structuredClone(reference.autoScaling.backend),
+        autoScaling: structuredClone(referenceAutoScalingFor(reference, component.type)),
       });
     } else if (component.type === 'database') {
       map.set(component.id, {

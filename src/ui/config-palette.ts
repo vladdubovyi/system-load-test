@@ -1,6 +1,6 @@
 import { CONFIG_CHIPS, type ConfigChipId } from '../game/component-config';
 import type { ComponentType } from '../game/types';
-import { COMPONENT_DEFS } from '../game/types';
+import { getComponentDef } from '../game/component-catalog';
 
 export function renderConfigPalette(
   selectedComponentId: string | null,
@@ -23,7 +23,7 @@ export function renderConfigPalette(
   ).join('');
 
   const selectionHint = selectedComponentId
-    ? `<p class="palette-selection">Configuring <strong>${COMPONENT_DEFS[selectedComponentType!]?.label ?? 'Component'}</strong></p>`
+    ? `<p class="palette-selection">Configuring <strong>${getComponentDef(selectedComponentType!).label}</strong></p>`
     : `<p class="palette-selection muted">Select a component to configure it</p>`;
 
   return `

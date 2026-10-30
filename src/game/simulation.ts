@@ -211,6 +211,21 @@ export function getComponentPorts(component: PlacedComponent): Port[] {
   }
 }
 
+/**
+ * Types an ingress node may forward to: compute tiers, traffic filters
+ * (rate limiter / CDN), and other ingress nodes — an API gateway behind a
+ * load balancer is a normal topology. `canConnect` and the engine's routing
+ * must agree on this, otherwise a wire the UI accepts drops every request.
+ */
+export function isIngressForwardTarget(type: ComponentType): boolean {
+  return (
+    isComputeType(type) ||
+    isIngressType(type) ||
+    type === 'rate-limiter' ||
+    type === 'cdn'
+  );
+}
+
 export function canConnect(
   fromPort: Port,
   toPort: Port,
@@ -232,13 +247,7 @@ export function canConnect(
   }
 
   if (isIngressType(fromType ?? '')) {
-    return (
-      isComputeType(toType) ||
-      toType === 'shortener' ||
-      toType === 'backend' ||
-      toType === 'rate-limiter' ||
-      toType === 'cdn'
-    );
+    return isIngressForwardTarget(toType);
   }
 
   if (fromType === 'rate-limiter' || fromType === 'cdn') {
@@ -1182,12 +1191,12 @@ export class SimulationEngine {
         if (this.ingressHasTarget(component, 'shortener')) {
           return this.routeFromIngress(request, component, (type) => type === 'shortener', headStart);
         }
-        return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
+        return this.routeFromIngress(request, component, isIngressForwardTarget, headStart);
       }
       if (this.ingressHasTarget(component, 'backend')) {
         return this.routeFromIngress(request, component, (type) => type === 'backend', headStart);
       }
-      return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
+      return this.routeFromIngress(request, component, isIngressForwardTarget, headStart);
     }
 
     if (component.type === 'rate-limiter' || component.type === 'cdn') {

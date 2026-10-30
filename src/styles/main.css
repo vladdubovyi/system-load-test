@@ -821,6 +821,9 @@ body.sandbox-mode #app {
   position: absolute;
   inset: 0;
   z-index: 3;
+  /* Full-board overlay: it must not intercept clicks meant for the source
+     node or the board itself. Components re-enable hits on themselves. */
+  pointer-events: none;
 }
 
 .scale-groups-layer {

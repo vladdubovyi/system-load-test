@@ -1,4 +1,5 @@
 import type { ComponentType } from './types';
+import { isComputeType } from './component-taxonomy';
 
 export type ShardStrategy = 'hash' | 'range';
 
@@ -176,8 +177,13 @@ export function createReferenceArchitectureConfig(): ArchitectureConfig {
   };
 }
 
-export function isScalableType(type: ComponentType): type is ScalableServiceType {
-  return type === 'shortener' || type === 'backend';
+/**
+ * Any compute tier can be auto-scaled, not just the two legacy service types.
+ * Backend-defined components (backend-service, microservice, worker-service, …)
+ * must qualify too, otherwise scaling configured in the UI is silently ignored.
+ */
+export function isScalableType(type: ComponentType): boolean {
+  return isComputeType(type);
 }
 
 export function cloneArchitectureConfig(config: ArchitectureConfig): ArchitectureConfig {

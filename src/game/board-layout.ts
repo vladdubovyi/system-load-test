@@ -1,5 +1,5 @@
 import type { PlacedComponent } from './types';
-import { COMPONENT_DEFS } from './types';
+import { getComponentDef } from './component-catalog';
 import {
   getScaleGroupMembers,
   getScalePrimaryId,
@@ -102,7 +102,7 @@ export function layoutScaleGroupMembers(members: PlacedComponent[]): void {
   const primary =
     members.find((member) => isScalePrimary(member)) ?? members[0];
   const anchor = ensureGroupAnchor(primary);
-  const def = COMPONENT_DEFS[primary.type];
+  const def = getComponentDef(primary.type);
   const cellW = def.width;
   const cellH = def.height;
 
@@ -215,7 +215,7 @@ export function collectScaleGroupFrames(components: PlacedComponent[]): ScaleGro
     const members = getScaleGroupMembers(components, component.id);
     if (members.length <= 1) continue;
 
-    const def = COMPONENT_DEFS[component.type];
+    const def = getComponentDef(component.type);
     frames.push({
       primaryId: component.id,
       label: def.label,

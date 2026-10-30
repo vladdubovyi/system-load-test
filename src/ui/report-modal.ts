@@ -1,7 +1,7 @@
 import type { SimulationReport } from '../game/types';
 import { formatCost, formatSeconds } from '../game/report';
 import { downloadReportPdf } from '../game/report-pdf';
-import { SCENARIO } from '../game/types';
+import { getActiveScenario } from '../game/scenario-runtime';
 
 function loadBar(pct: number): string {
   const width = Math.min(100, Math.max(0, pct));
@@ -54,7 +54,7 @@ export function renderReportModal(report: SimulationReport): string {
           <div>
             <p class="report-kicker">Simulation complete</p>
             <h2 id="report-title">${won ? 'Architecture survived' : 'Architecture failed'}</h2>
-            <p class="report-subtitle">${SCENARIO.title} · ${report.duration.toFixed(1)}s run</p>
+            <p class="report-subtitle">${getActiveScenario().title} · ${report.duration.toFixed(1)}s run</p>
           </div>
           <div class="report-score-block">
             <div class="report-score">${report.score}</div>
