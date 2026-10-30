@@ -14,3 +14,9 @@ obj/
 *.user
 *.suo
 .vs/
+
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
