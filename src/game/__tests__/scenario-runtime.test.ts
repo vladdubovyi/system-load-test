@@ -85,3 +85,48 @@ describe('scenario runtime plumbing', () => {
     expect(scenario.requestTypes.create).toBeCloseTo(0.28);
   });
 });
+
+describe('traffic overrides (Traffic panel)', () => {
+  it('layers a custom traffic profile over the active challenge', async () => {
+    const { setActiveTrafficOverride } = await import('../scenario-runtime');
+    setActiveScenarioFromChallenge(makeChallenge({ requestTypes: { read: 0.6, create: 0.4 } }));
+    expect(getActiveScenario().baseRps).toBe(100);
+
+    setActiveTrafficOverride({
+      baseRps: 1000,
+      pattern: 'spike',
+      spikeMultiplier: 2,
+      spikeChance: 0,
+      requestTypes: { read: 0.9, create: 0.1 },
+    });
+
+    const scenario = getActiveScenario();
+    expect(scenario.baseRps).toBe(1000);
+    expect(scenario.spikeMultiplier).toBe(2);
+    expect(scenario.spikeChance).toBe(0);
+    expect(scenario.readRatio).toBeCloseTo(0.9);
+    expect(scenario.requestTypes).toEqual({ read: 0.9, create: 0.1 });
+    // Non-traffic fields are untouched.
+    expect(scenario.duration).toBe(30);
+    expect(scenario.title).toBe('Test Challenge');
+  });
+
+  it('clearing the override restores the challenge traffic', async () => {
+    const { setActiveTrafficOverride } = await import('../scenario-runtime');
+    setActiveScenarioFromChallenge(makeChallenge({}));
+    setActiveTrafficOverride({ baseRps: 999, pattern: 'constant' });
+    expect(getActiveScenario().baseRps).toBe(999);
+
+    setActiveTrafficOverride(null);
+    expect(getActiveScenario().baseRps).toBe(100);
+  });
+
+  it('switching challenge drops any previous override', async () => {
+    const { setActiveTrafficOverride } = await import('../scenario-runtime');
+    setActiveScenarioFromChallenge(makeChallenge({}));
+    setActiveTrafficOverride({ baseRps: 999, pattern: 'constant' });
+
+    setActiveScenarioFromChallenge(makeChallenge({ slug: 'other' }));
+    expect(getActiveScenario().baseRps).toBe(100);
+  });
+});

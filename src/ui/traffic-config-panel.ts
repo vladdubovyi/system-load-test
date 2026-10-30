@@ -97,7 +97,8 @@ export function mountTrafficConfigPanel(
   container: HTMLElement,
   traffic: TrafficProfile,
   onApply: (traffic: TrafficProfile) => void,
-  onClose: () => void
+  onClose: () => void,
+  onReset: () => void = onClose
 ): void {
   container.innerHTML = renderTrafficConfigPanel(traffic);
   
@@ -130,8 +131,9 @@ export function mountTrafficConfigPanel(
     onClose();
   });
   
-  // Reset button
+  // Reset: discard custom traffic and return to the challenge defaults.
   container.querySelector('#traffic-reset')?.addEventListener('click', () => {
+    onReset();
     onClose();
   });
   

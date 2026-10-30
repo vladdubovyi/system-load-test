@@ -1,4 +1,4 @@
-import type { Challenge } from './scenario-types';
+import type { Challenge, TrafficProfile } from './scenario-types';
 import type { FlowSpec, Objectives } from './flow-types';
 import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import { SCENARIO } from './types';
@@ -45,17 +45,59 @@ const DEFAULT_SCENARIO: RuntimeScenario = {
 };
 
 let activeScenario: RuntimeScenario = { ...DEFAULT_SCENARIO };
+let activeChallenge: Challenge | null = null;
+/** User edits from the Traffic panel, layered over the challenge's own profile. */
+let trafficOverride: TrafficProfile | null = null;
 
 export function getActiveScenario(): RuntimeScenario {
   return activeScenario;
 }
 
+/** Select a challenge. Any Traffic-panel override from a previous challenge is discarded. */
 export function setActiveScenarioFromChallenge(challenge: Challenge | null): void {
-  if (!challenge) {
-    activeScenario = { ...DEFAULT_SCENARIO };
-    return;
-  }
+  activeChallenge = challenge;
+  trafficOverride = null;
+  rebuildActiveScenario();
+}
 
+/**
+ * Apply (or, with `null`, clear) a custom traffic profile on top of the active
+ * challenge. The engine reads `getActiveScenario()` when a run starts, so this
+ * is what makes the Traffic panel's "Apply" actually change the next run.
+ */
+export function setActiveTrafficOverride(traffic: TrafficProfile | null): void {
+  trafficOverride = traffic;
+  rebuildActiveScenario();
+}
+
+export function getActiveTrafficOverride(): TrafficProfile | null {
+  return trafficOverride;
+}
+
+function rebuildActiveScenario(): void {
+  const base = activeChallenge
+    ? buildScenarioFromChallenge(activeChallenge)
+    : { ...DEFAULT_SCENARIO };
+  activeScenario = trafficOverride ? applyTrafficOverride(base, trafficOverride) : base;
+}
+
+function applyTrafficOverride(base: RuntimeScenario, traffic: TrafficProfile): RuntimeScenario {
+  const hasRequestTypes =
+    traffic.requestTypes !== undefined && Object.keys(traffic.requestTypes).length > 0;
+  const readRatio =
+    typeof traffic.requestTypes?.read === 'number' ? traffic.requestTypes.read : base.readRatio;
+
+  return {
+    ...base,
+    baseRps: traffic.baseRps,
+    spikeMultiplier: traffic.spikeMultiplier ?? base.spikeMultiplier,
+    spikeChance: traffic.spikeChance ?? base.spikeChance,
+    readRatio,
+    requestTypes: hasRequestTypes ? { ...traffic.requestTypes } : base.requestTypes,
+  };
+}
+
+function buildScenarioFromChallenge(challenge: Challenge): RuntimeScenario {
   const traffic = challenge.scenario.traffic;
   const characteristics = traffic.characteristics ?? {};
 
@@ -68,7 +110,7 @@ export function setActiveScenarioFromChallenge(challenge: Challenge | null): voi
           ? 0.95
           : DEFAULT_SCENARIO.readRatio;
 
-  activeScenario = {
+  return {
     id: challenge.id,
     slug: challenge.slug,
     title: challenge.name,
