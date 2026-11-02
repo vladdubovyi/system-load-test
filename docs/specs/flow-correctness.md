@@ -170,8 +170,8 @@ service" vs "read service", or "service A must call the DB before service B").
 A scenario can define **tags** with selectors, and the user assigns tags to
 placed components via the component config UI (same interaction family as
 config chips). For the URL Shortener v1 we avoid needing tags by selecting on
-capability only; tags ship with the authoring phase (Phase 5) unless a
-scenario needs them sooner.
+capability only. *(Shipped in Phase 5 — `TagDefinition`, `PlacedComponent.tags`,
+palette role chips; see [flow-authoring.md](./flow-authoring.md) §2.3.)*
 
 ### 4.2 Fit with existing types
 
@@ -218,6 +218,10 @@ fan-out (an LB picking uniformly among heterogeneous forward targets), which
 pre-flow starters depend on — ordered steps either starve or overload them.
 Old behavior is preserved exactly until a challenge opts into real flows; the
 legacy path is deleted in Phase 5 once every challenge carries flows.
+*(Done in Phase 5: every seeded challenge now carries flows and the legacy
+path is gone. A request kind without a FlowSpec is a lint error and its
+requests are violated on arrival — see
+[flow-authoring.md](./flow-authoring.md) §5.)*
 
 Per-flow counters: `totalCompleted`/`totalDropped` become per-kind maps, plus
 `totalViolated`. Telemetry and the report consume these.
@@ -335,7 +339,7 @@ New `src/game/flow-validator.ts`:
 | 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; `returnTo` execution (reverse-belt leg, unrendered); per-flow counters; generalized `RequestKind`; legacy heuristics retained for challenges without flows (see §5 amendment); wire URL Shortener challenge to its flows. *(Shipped; the Instagram feed opted into flows shortly after.)* |
 | 3 | Lint + UX | `flow-validator.ts`, lint panel, violation reasons in request inspector, toast for rejected connections. *(Shipped; the inspector's violation rendering had already landed with Phase 2 and is now covered by e2e tests.)* |
 | 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks; wire the traffic config panel into the engine (its edits are currently ignored). *(Shipped; see the §6 amendments. The traffic panel turned out to be wired already. A design that violates its flows now **loses** the run, which changed two Phase 2/3 e2e expectations.)* |
-| 5 | Serialization + authoring | Flows/objectives/capabilities into backend `ScenarioConfig` (jsonb, no migration) and `ChallengeSeeder`; tags (§4.1); challenge-authoring endpoints/UI. Separate mini-spec before implementation. |
+| 5 | Serialization + authoring | Flows/objectives/capabilities into backend `ScenarioConfig` (jsonb, no migration) and `ChallengeSeeder`; tags (§4.1); challenge-authoring endpoints/UI. Separate mini-spec before implementation. *(Shipped per [flow-authoring.md](./flow-authoring.md): JSON scenario editor + `PUT …/scenario-config` behind an author allowlist, tags as palette chips, Dropbox and Rate Limiter flows, legacy routing deleted. Verified by 72 xUnit integration tests against real PostgreSQL and a live-backend Playwright suite — see flow-authoring.md §7.)* |
 
 Each phase keeps the build green (`tsc && vite build`) and the existing
 scenarios playable.

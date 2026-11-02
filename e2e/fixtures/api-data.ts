@@ -18,6 +18,8 @@ export interface ApiComponentDefinition {
   width: number;
   height: number;
   enabled: boolean;
+  /** Semantic capabilities (docs/specs/flow-authoring.md §2.2); optional like the backend's. */
+  capabilities?: string[];
 }
 
 function def(
@@ -237,7 +239,9 @@ export const STARTER_PRESETS: Record<string, { components: number; belts: number
   },
   dropbox: {
     components: 7,
-    belts: 7,
+    // Includes the Worker Service → Object Storage belt that lands the async
+    // upload path (flow-authoring §4).
+    belts: 8,
     labels: ['Load Balancer', 'API Gateway', 'Backend Service', 'Worker Service', 'SQL Database', 'Object Storage', 'Message Queue'],
   },
   'instagram-feed': {
@@ -249,7 +253,8 @@ export const STARTER_PRESETS: Record<string, { components: number; belts: number
   },
   'rate-limiter': {
     components: 5,
-    belts: 5,
+    // Includes the Redis → SQL Database belt that carries cache misses.
+    belts: 6,
     labels: ['Load Balancer', 'Rate Limiter', 'Backend Service', 'Redis Cache', 'SQL Database'],
   },
 };

@@ -12,8 +12,31 @@ export interface NodeSelector {
   capability?: Capability;
   /** Exact component type, e.g. 'shortener'. */
   componentType?: string;
-  /** Scenario-assigned role tag (reserved — ships with authoring, Phase 5). */
+  /** Scenario-defined role the user assigned to the placed component (see TagDefinition). */
   tag?: string;
+}
+
+/**
+ * A role a scenario lets the user assign to placed components, so a flow can
+ * single out one component among several of the same type ("write service"
+ * vs "read service"). See docs/specs/flow-authoring.md §2.3.
+ */
+export interface TagDefinition {
+  /** Selector value, e.g. 'write-service'. */
+  id: string;
+  /** Chip and badge text, e.g. 'Write service'. */
+  label: string;
+  description?: string;
+  /** Which component types may carry the tag; omitted means any. */
+  appliesTo?: NodeSelector;
+}
+
+/** The authorable part of a scenario — what the scenario editor edits and the backend stores. */
+export interface ScenarioDocument {
+  requestTypes?: Record<string, number>;
+  tags?: TagDefinition[];
+  flows?: FlowSpec[];
+  objectives?: Objectives;
 }
 
 export interface FlowBranch {

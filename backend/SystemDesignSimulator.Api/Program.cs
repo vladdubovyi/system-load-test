@@ -160,6 +160,7 @@ using (var scope = app.Services.CreateScope())
         // Seed data
         ChallengeSeeder.SeedData(context);
         ChallengeSeeder.EnsureChallengeContent(context);
+        ChallengeSeeder.EnsureFlowDefinitions(context);
         
         app.Logger.LogInformation("Database initialized successfully");
     }
@@ -184,3 +185,9 @@ app.UseAuthorization();
 app.MapControllers().RequireCors("AllowFrontend");
 
 app.Run();
+
+/// <summary>
+/// Exposed so the integration test project can host the real application
+/// with WebApplicationFactory&lt;Program&gt;.
+/// </summary>
+public partial class Program { }

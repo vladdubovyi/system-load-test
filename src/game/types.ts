@@ -44,6 +44,8 @@ export interface PlacedComponent {
   /** Fixed top-left anchor for laying out a scale group grid. */
   scaleAnchorX?: number;
   scaleAnchorY?: number;
+  /** Scenario-defined roles assigned by the user (TagDefinition ids). */
+  tags?: string[];
 }
 
 export interface ConveyorBelt {

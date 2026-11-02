@@ -1,6 +1,8 @@
 import { getAuthToken } from '../auth/auth-store';
 import type { AuthResponse, UserResponse } from '../auth/types';
 import type { Challenge, ComponentDefinition } from '../game/scenario-types';
+import type { ScenarioDocument } from '../game/flow-types';
+import { stripNulls } from '../game/flows';
 
 /**
  * Transform a backend challenge payload into the frontend Challenge shape.
@@ -35,8 +37,11 @@ export function mapChallengeFromApi(item: any): Challenge {
       },
       allowedComponents: item.allowedComponents || [],
       scoringPriorities: item.scenario.scoringWeights || {},
-      flows: config.flows,
-      objectives: config.objectives,
+      // Authored data (docs/specs/flow-authoring.md §2.1): System.Text.Json
+      // writes unset members as null, which selectors must not see.
+      flows: config.flows == null ? undefined : stripNulls(config.flows),
+      objectives: config.objectives == null ? undefined : stripNulls(config.objectives),
+      tags: config.tags == null ? undefined : stripNulls(config.tags),
     },
   };
 }
@@ -139,6 +144,18 @@ export class ApiClient {
       console.error('Error fetching challenge by slug:', error);
       throw error;
     }
+  }
+
+  /**
+   * Authoring (docs/specs/flow-authoring.md §3.2): replace the given keys of
+   * the challenge's scenario config. Requires a signed-in author.
+   */
+  async saveScenarioConfig(slug: string, doc: ScenarioDocument): Promise<Challenge> {
+    const item = await this.request<any>(`/api/challenges/slug/${encodeURIComponent(slug)}/scenario-config`, {
+      method: 'PUT',
+      body: JSON.stringify(doc),
+    });
+    return mapChallengeFromApi(item);
   }
 
   async getComponentDefinitions(): Promise<ComponentDefinition[]> {

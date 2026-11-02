@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using SystemDesignSimulator.Api.Data;
+using SystemDesignSimulator.Api.Data.Seed;
 
 namespace SystemDesignSimulator.Api.Controllers;
 
@@ -45,7 +46,9 @@ public class ComponentsController : ControllerBase
             c.Width,
             c.Height,
             c.Description,
-            c.Enabled
+            c.Enabled,
+            // Semantic capabilities (docs/specs/flow-authoring.md §2.2), stored in ConfigSchema.
+            Capabilities = FlowDefinitions.CapabilitiesFromSchema(c.ConfigSchema)
         });
 
         return Ok(result);
@@ -75,7 +78,8 @@ public class ComponentsController : ControllerBase
             component.Width,
             component.Height,
             component.Description,
-            component.Enabled
+            component.Enabled,
+            Capabilities = FlowDefinitions.CapabilitiesFromSchema(component.ConfigSchema)
         };
 
         return Ok(result);

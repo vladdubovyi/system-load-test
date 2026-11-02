@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { componentRegistry } from '../component-registry';
-import { allSteps, selectorMatches, validateFlowSpec, validateFlows } from '../flows';
+import {
+  allSteps,
+  selectorMatches,
+  stripNulls,
+  validateFlowSpec,
+  validateFlows,
+  validateScenarioDocument,
+} from '../flows';
 import {
   INSTAGRAM_FEED_FLOWS,
   URL_SHORTENER_FLOWS,
@@ -236,5 +243,128 @@ describe('Instagram feed preset', () => {
       expect(terminals[0].require.capability).toBe('durable-store');
       expect(allSteps(spec).some((s) => s.require.capability === 'cache')).toBe(false);
     }
+  });
+});
+
+describe('selectorMatches with tags', () => {
+  beforeEach(async () => {
+    await componentRegistry.initialize([]);
+  });
+
+  it('matches a tag criterion only on components carrying the tag', () => {
+    expect(selectorMatches({ tag: 'write-service' }, { type: 'backend', tags: ['write-service'] })).toBe(true);
+    expect(selectorMatches({ tag: 'write-service' }, { type: 'backend', tags: ['read-service'] })).toBe(false);
+    expect(selectorMatches({ tag: 'write-service' }, { type: 'backend' })).toBe(false);
+    // A bare type string carries no tags.
+    expect(selectorMatches({ tag: 'write-service' }, 'backend')).toBe(false);
+  });
+
+  it('ANDs the tag with the other criteria', () => {
+    const tagged = { type: 'redis', tags: ['primary'] };
+    expect(selectorMatches({ tag: 'primary', capability: 'cache' }, tagged)).toBe(true);
+    expect(selectorMatches({ tag: 'primary', capability: 'durable-store' }, tagged)).toBe(false);
+  });
+});
+
+describe('stripNulls', () => {
+  it('removes null members recursively but keeps falsy values and arrays', () => {
+    const input = {
+      kind: 'create',
+      steps: [
+        { id: 'a', require: { capability: 'ingress', componentType: null, tag: null }, optional: null, terminal: false },
+        { id: 'b', require: { capability: 'compute' }, branch: null, returnTo: null },
+      ],
+      weight: 0,
+    };
+    expect(stripNulls(input)).toEqual({
+      kind: 'create',
+      steps: [
+        { id: 'a', require: { capability: 'ingress' }, terminal: false },
+        { id: 'b', require: { capability: 'compute' } },
+      ],
+      weight: 0,
+    });
+  });
+
+  it('makes a System.Text.Json-style selector matchable again', async () => {
+    await componentRegistry.initialize([]);
+    const raw = { capability: 'compute', componentType: null, tag: null } as unknown as { capability: 'compute' };
+    expect(selectorMatches(raw, 'backend')).toBe(false);
+    expect(selectorMatches(stripNulls(raw), 'backend')).toBe(true);
+  });
+});
+
+describe('validateScenarioDocument', () => {
+  const create: FlowSpec = {
+    kind: 'create',
+    steps: [{ id: 'persist', require: { capability: 'durable-store' }, terminal: true }],
+  };
+
+  it('accepts a consistent document', () => {
+    expect(
+      validateScenarioDocument({
+        requestTypes: { create: 1 },
+        flows: [create],
+        objectives: { minCompletionRate: { create: 0.5 }, maxViolationRate: 0 },
+        tags: [{ id: 'w', label: 'Writer' }],
+      })
+    ).toEqual([]);
+  });
+
+  it('reports traffic kinds that have no flow', () => {
+    const problems = validateScenarioDocument({ requestTypes: { create: 0.5, analytics: 0.5 }, flows: [create] });
+    expect(problems).toEqual([expect.stringContaining('"analytics" has no flow')]);
+  });
+
+  it('reports objectives for kinds that do not exist', () => {
+    const problems = validateScenarioDocument({
+      requestTypes: { create: 1 },
+      flows: [create],
+      objectives: { minCompletionRate: { ghost: 0.5 } },
+    });
+    expect(problems).toEqual([expect.stringContaining('"ghost"')]);
+  });
+
+  it('reports tag selectors that reference undeclared tags and unknown capabilities', () => {
+    const problems = validateScenarioDocument({
+      requestTypes: { create: 1 },
+      flows: [
+        {
+          kind: 'create',
+          steps: [
+            { id: 's', require: { tag: 'write-service' } },
+            { id: 'p', require: { capability: 'blob' as never }, terminal: true },
+          ],
+        },
+      ],
+      tags: [],
+    });
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('selects tag "write-service"'),
+        expect.stringContaining('unknown capability "blob"'),
+      ])
+    );
+  });
+
+  it('rejects malformed tags and out-of-range rates', () => {
+    const problems = validateScenarioDocument({
+      flows: [create],
+      objectives: { maxViolationRate: 1.5, minCompletionRate: { create: -1 } },
+      tags: [{ id: '', label: 'x' } as never, { id: 'a', label: 'A' }, { id: 'a', label: 'A again' }],
+    });
+    expect(problems).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('maxViolationRate'),
+        expect.stringContaining('Completion floor for "create"'),
+        expect.stringContaining('Every tag needs a string "id"'),
+        expect.stringContaining('Duplicate tag id "a"'),
+      ])
+    );
+  });
+
+  it('still surfaces per-flow structural problems', () => {
+    const problems = validateScenarioDocument({ flows: [{ kind: 'create', steps: [] }] });
+    expect(problems.some((p) => p.includes('has no steps'))).toBe(true);
   });
 });

@@ -57,6 +57,8 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: 'db-api:out', to: 'db-blob:in' },
       { from: 'db-api:out', to: 'db-queue:in' },
       { from: 'db-queue:out', to: 'db-worker:in' },
+      // The async upload path lands processed files in blob storage.
+      { from: 'db-worker:out', to: 'db-blob:in' },
     ],
   },
   'instagram-feed': {
@@ -101,6 +103,8 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: 'rl-limit:out', to: 'rl-api:in' },
       { from: 'rl-api:out', to: 'rl-redis:in' },
       { from: 'rl-api:out', to: 'rl-db:in' },
+      // Counter-cache misses chain onward from Redis to the database.
+      { from: 'rl-redis:out', to: 'rl-db:in' },
     ],
   },
 };

@@ -1,6 +1,13 @@
 import type { ConveyorBelt, PlacedComponent } from './types';
-import type { FlowSpec, FlowStep } from './flow-types';
+import type { FlowSpec, FlowStep, TagDefinition } from './flow-types';
 import { describeSelector, matchPendingStep, selectorMatches, validateFlows } from './flows';
+
+export interface LintOptions {
+  /** Spawn weights; kinds with traffic but no flow are reported (flow-authoring §5). */
+  requestTypes?: Record<string, number>;
+  /** Tag definitions, for phrasing tag steps by label. */
+  tags?: readonly TagDefinition[];
+}
 import { SOURCE_ID } from './simulation';
 
 /**
@@ -73,7 +80,7 @@ interface LintState {
   satisfiedBy: Record<string, string>;
 }
 
-function lintFlow(spec: FlowSpec, graph: BoardGraph): FlowLintIssue[] {
+function lintFlow(spec: FlowSpec, graph: BoardGraph, tags?: readonly TagDefinition[]): FlowLintIssue[] {
   const issues = new Map<string, FlowLintIssue>();
   const visited = new Set<string>();
   const queue: LintState[] = [];
@@ -112,7 +119,7 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph): FlowLintIssue[] {
   ): void => {
     for (const step of pending) {
       const matching = (graph.targets.get(component.id) ?? []).filter((t) =>
-        selectorMatches(step.require, t.type)
+        selectorMatches(step.require, t)
       );
       if (matching.length > 0) {
         for (const target of matching) {
@@ -124,7 +131,7 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph): FlowLintIssue[] {
         record(`stuck:${step.id}:${component.id}`, {
           stepId: step.id,
           componentIds: [component.id],
-          message: `${spec.kind} requests need ${describeSelector(step.require)} after "${component.label}", but ${connectedPhrase(graph, component)}.`,
+          message: `${spec.kind} requests need ${describeSelector(step.require, tags)} after "${component.label}", but ${connectedPhrase(graph, component)}.`,
         });
         return;
       }
@@ -145,14 +152,14 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph): FlowLintIssue[] {
   while (queue.length > 0) {
     const { component, pending, satisfiedBy } = queue.shift()!;
 
-    const idx = matchPendingStep(pending, component.type);
+    const idx = matchPendingStep(pending, component);
     if (idx === -1) {
       const next = pending.find((s) => !s.optional) ?? pending[0] ?? null;
       record(`arrive:${next?.id ?? 'end'}:${component.id}`, {
         stepId: next?.id ?? null,
         componentIds: [component.id],
         message: next
-          ? `${spec.kind} requests need ${describeSelector(next.require)} but arrive at "${component.label}" instead.`
+          ? `${spec.kind} requests need ${describeSelector(next.require, tags)} but arrive at "${component.label}" instead.`
           : `${spec.kind} requests arrive at "${component.label}" after their flow has ended.`,
       });
       continue;
@@ -198,7 +205,8 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph): FlowLintIssue[] {
 export function lintBoard(
   flows: FlowSpec[],
   components: PlacedComponent[],
-  belts: ConveyorBelt[]
+  belts: ConveyorBelt[],
+  options: LintOptions = {}
 ): FlowLintIssue[] {
   if (flows.length === 0) return [];
 
@@ -208,6 +216,20 @@ export function lintBoard(
     componentIds: [],
     message,
   }));
+
+  // Traffic the engine cannot route: there is no heuristic fallback any
+  // more, so every request of such a kind will be violated on arrival.
+  const flowKinds = new Set(flows.map((f) => f.kind));
+  for (const [kind, weight] of Object.entries(options.requestTypes ?? {})) {
+    if (weight > 0 && !flowKinds.has(kind)) {
+      issues.push({
+        kind,
+        stepId: null,
+        componentIds: [],
+        message: `Request kind "${kind}" has no flow — every ${kind} request will fail as a flow violation. Add a flow in the scenario editor or remove the kind from the traffic mix.`,
+      });
+    }
+  }
 
   const graph = buildGraph(components, belts);
   if (graph.entries.length === 0) {
@@ -222,7 +244,7 @@ export function lintBoard(
   }
 
   for (const spec of flows) {
-    issues.push(...lintFlow(spec, graph));
+    issues.push(...lintFlow(spec, graph, options.tags));
   }
   return issues;
 }

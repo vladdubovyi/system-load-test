@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures/test';
+import { CHALLENGES } from './fixtures/api-data';
 import { SandboxPage, readFlowStats, readObjectives, readReport } from './helpers/sandbox';
 
 // Full runs at 100x are CPU-bound; same headroom as the other run suites.
@@ -107,18 +108,43 @@ test.describe('Objectives: URL shortener', () => {
 });
 
 test.describe('Objectives: scenarios without flows', () => {
-  test('the rate limiter is still judged on survival alone', async ({ page }) => {
-    // No flows and no objectives for this challenge: the only win condition
-    // is the legacy one, and the starter passes it.
+  test('a challenge with no flows is still judged on survival alone', async ({ page, api }) => {
+    // Every seeded challenge carries flows since Phase 5, so model a
+    // not-yet-authored challenge from the API: no flows, no objectives, and a
+    // slug with no built-in preset. The only win condition is the legacy
+    // one, and the fallback board passes it.
+    const template = CHALLENGES.find((c) => c.slug === 'rate-limiter')!;
+    await api.install({
+      challenges: [
+        ...CHALLENGES,
+        {
+          ...template,
+          id: '55555555-5555-4555-8555-555555555555',
+          name: 'Legacy Service',
+          slug: 'legacy-service',
+          scenario: {
+            ...template.scenario,
+            id: 'sc-legacy-service',
+            scenarioConfig: { ...template.scenario.scenarioConfig, requestTypes: { check: 1 } },
+          },
+        },
+      ],
+    });
     const sandbox = new SandboxPage(page);
-    await sandbox.goto('rate-limiter');
+    await sandbox.goto('legacy-service');
+    await expect(sandbox.title).toHaveText('Legacy Service');
 
-    const overlay = await sandbox.runToReport();
-    const report = await readReport(overlay);
+    await sandbox.setSpeed(100);
+    await sandbox.playButton.click();
+    // No flows means nothing to lint.
+    await expect(sandbox.lintPanel).toHaveCount(0);
+    await expect(sandbox.reportOverlay).toBeVisible({ timeout: 60_000 });
+
+    const report = await readReport(sandbox.reportOverlay);
     expect(report.title).toBe('Architecture survived');
     expect(await sandbox.engineStatus()).toBe('won');
 
-    const objectives = await readObjectives(overlay);
+    const objectives = await readObjectives(sandbox.reportOverlay);
     expect(objectives.map((o) => o.id)).toEqual(['failures']);
     expect(objectives[0].met).toBe(true);
   });

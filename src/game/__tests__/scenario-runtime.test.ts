@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { getActiveScenario, setActiveScenarioFromChallenge } from '../scenario-runtime';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  getActiveScenario,
+  getActiveScenarioDocument,
+  setActiveScenarioFromChallenge,
+  setActiveScenarioOverride,
+} from '../scenario-runtime';
+import { DROPBOX_FLOWS, RATE_LIMITER_FLOWS } from '../flow-presets';
 import { URL_SHORTENER_FLOWS, URL_SHORTENER_OBJECTIVES } from '../flow-presets';
 import type { Challenge } from '../scenario-types';
 import type { FlowSpec } from '../flow-types';
@@ -128,5 +134,65 @@ describe('traffic overrides (Traffic panel)', () => {
 
     setActiveScenarioFromChallenge(makeChallenge({ slug: 'other' }));
     expect(getActiveScenario().baseRps).toBe(100);
+  });
+});
+
+describe('scenario override (authoring)', () => {
+  const create: FlowSpec = {
+    kind: 'create',
+    steps: [{ id: 'persist', require: { capability: 'durable-store' }, terminal: true }],
+  };
+
+  it('layers an applied document over the challenge and clears on challenge change', () => {
+    setActiveScenarioFromChallenge(makeChallenge({ slug: 'url-shortener' }));
+    setActiveScenarioOverride({
+      requestTypes: { create: 1 },
+      flows: [create],
+      tags: [{ id: 'w', label: 'Writer' }],
+    });
+
+    const active = getActiveScenario();
+    expect(active.flows).toEqual([create]);
+    expect(active.requestTypes).toEqual({ create: 1 });
+    expect(active.tags).toEqual([{ id: 'w', label: 'Writer' }]);
+    // Objectives were not overridden, so the challenge's (preset) ones remain.
+    expect(active.objectives).toEqual(URL_SHORTENER_OBJECTIVES);
+
+    setActiveScenarioFromChallenge(makeChallenge({ slug: 'url-shortener' }));
+    expect(getActiveScenario().flows).toEqual(URL_SHORTENER_FLOWS);
+    expect(getActiveScenario().tags).toBeUndefined();
+  });
+
+  it('exposes the editable document with preset fallbacks resolved', () => {
+    setActiveScenarioFromChallenge(makeChallenge({ slug: 'url-shortener', requestTypes: { read: 0.6, create: 0.4 } }));
+    const doc = getActiveScenarioDocument();
+    expect(doc.flows).toEqual(URL_SHORTENER_FLOWS);
+    expect(doc.objectives).toEqual(URL_SHORTENER_OBJECTIVES);
+    expect(doc.requestTypes).toEqual({ read: 0.6, create: 0.4 });
+    expect(doc.tags).toEqual([]);
+    // A copy, not the live preset.
+    (doc.flows as FlowSpec[])[0].kind = 'mutated';
+    expect(URL_SHORTENER_FLOWS[0].kind).toBe('create');
+  });
+
+  it('falls back to the preset when a challenge ships invalid flows', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    setActiveScenarioFromChallenge(
+      makeChallenge({ slug: 'url-shortener', flows: [{ kind: 'create', steps: [] }] })
+    );
+    expect(getActiveScenario().flows).toEqual(URL_SHORTENER_FLOWS);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('every seeded challenge has preset flows', () => {
+    for (const [slug, flows] of [
+      ['dropbox', DROPBOX_FLOWS],
+      ['rate-limiter', RATE_LIMITER_FLOWS],
+    ] as const) {
+      setActiveScenarioFromChallenge(makeChallenge({ slug }));
+      expect(getActiveScenario().flows, slug).toEqual(flows);
+      expect(getActiveScenario().objectives?.maxViolationRate, slug).toBe(0);
+    }
   });
 });

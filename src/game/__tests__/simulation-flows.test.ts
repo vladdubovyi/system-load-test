@@ -266,19 +266,90 @@ describe('flow interpreter', () => {
     expect(kinds.indexOf('completed')).toBeGreaterThan(kinds.indexOf('returned'));
   });
 
-  it('routes kinds without a flow spec through the legacy heuristics', () => {
+  it('violates kinds without a flow spec on arrival instead of guessing a route', () => {
+    // The legacy heuristics are gone (flow-authoring §5): traffic the
+    // scenario defines no flow for is a configuration error, surfaced per
+    // request with a message that names the kind.
     const lb = comp('load-balancer');
     const svc = comp('backend-service');
     const redis = comp('redis');
-    // No flows at all: the legacy engine completes requests at the cache.
-    const { snapshot } = runToEnd(
+    const { snapshot, engine } = runToEnd(
       [lb, svc, redis],
       [belt('source', lb), belt(lb, svc), belt(svc, redis)],
       scenario({ requestTypes: { check: 1 }, flows: undefined, cacheHitRatio: 1 })
     );
 
+    expect(snapshot.completedByKind['check'] ?? 0).toBe(0);
+    // Every request that reached a component was violated there; the rest
+    // were still travelling from the source when the clock ran out.
+    expect(snapshot.violatedByKind['check']).toBeGreaterThan(0);
+    expect(snapshot.violatedByKind['check'] + snapshot.activeRequests.length).toBe(
+      snapshot.spawnedByKind['check']
+    );
+    // Nothing ever queued: the cache saw no traffic.
+    expect(snapshot.components.get(redis.id)!.processed).toBe(0);
+    const finished = (engine as unknown as { finishedRequests: { events: { kind: string; detail?: string }[] }[] })
+      .finishedRequests;
+    const reason = finished.flatMap((r) => r.events).find((e) => e.kind === 'violated')?.detail;
+    expect(reason).toContain('"check" has no flow');
+  });
+
+  it('lets a tag step select one component among several of the same type', () => {
+    const lb = comp('load-balancer');
+    const writes = comp('microservice', 'Writes');
+    const reads = comp('microservice', 'Reads');
+    const db = comp('database');
+    writes.tags = ['write-service'];
+    const taggedCreate: FlowSpec = {
+      kind: 'create',
+      steps: [
+        { id: 'ingress', require: { capability: 'ingress' } },
+        { id: 'service', require: { tag: 'write-service' } },
+        { id: 'persist', require: { capability: 'durable-store' }, terminal: true },
+      ],
+    };
+    const { snapshot } = runToEnd(
+      [lb, writes, reads, db],
+      [belt('source', lb), belt(lb, writes), belt(lb, reads), belt(writes, db), belt(reads, db)],
+      scenario({ requestTypes: { create: 1 }, flows: [taggedCreate] })
+    );
+
     expect(snapshot.totalViolated).toBe(0);
-    expect(snapshot.completedByKind['check']).toBeGreaterThan(0);
+    expect(snapshot.completedByKind['create']).toBeGreaterThan(0);
+    // The ingress only ever routes to the tagged service.
+    expect(snapshot.components.get(writes.id)!.processed).toBeGreaterThan(0);
+    expect(snapshot.components.get(reads.id)!.processed).toBe(0);
+  });
+
+  it('names the tag in the violation reason when no component carries it', () => {
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const db = comp('database');
+    const taggedCreate: FlowSpec = {
+      kind: 'create',
+      steps: [
+        { id: 'ingress', require: { capability: 'ingress' } },
+        { id: 'service', require: { tag: 'write-service' } },
+        { id: 'persist', require: { capability: 'durable-store' }, terminal: true },
+      ],
+    };
+    const { snapshot, engine } = runToEnd(
+      [lb, svc, db],
+      [belt('source', lb), belt(lb, svc), belt(svc, db)],
+      scenario({
+        requestTypes: { create: 1 },
+        flows: [taggedCreate],
+        tags: [{ id: 'write-service', label: 'Write service' }],
+      })
+    );
+
+    expect(snapshot.violatedByKind['create']).toBeGreaterThan(0);
+    const finished = (engine as unknown as { finishedRequests: { events: { kind: string; detail?: string }[] }[] })
+      .finishedRequests;
+    const reason = finished
+      .flatMap((r) => r.events)
+      .find((e) => e.kind === 'violated')?.detail;
+    expect(reason).toContain('tagged "Write service"');
   });
 
   it('falls through to the following steps when a branch miss injects nothing', () => {
@@ -415,10 +486,10 @@ describe('predictive scaling traffic share', () => {
     expect(instancesDuringSpike([CREATE_FLOW])).toBe(5);
   });
 
-  it('keeps the legacy readRatio split for scenarios without flows', () => {
-    // Legacy share for a non-"backend" type is 1 - readRatio = 0.28:
-    // ceil(280 rps / 200 capacity) = 2 instances.
-    expect(instancesDuringSpike(undefined)).toBe(2);
+  it('gives no predictive share to traffic that has no flow', () => {
+    // Without a flow the kind is never routed, so there is nothing to
+    // pre-scale for: the group stays at its single instance.
+    expect(instancesDuringSpike(undefined)).toBe(1);
   });
 });
 

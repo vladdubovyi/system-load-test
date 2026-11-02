@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using SystemDesignSimulator.Api.Models;
 
 namespace SystemDesignSimulator.Api.Data.Seed;
@@ -47,6 +48,74 @@ public static class ChallengeSeeder
         if (updated)
         {
             context.SaveChanges();
+        }
+    }
+
+    /// <summary>
+    /// Backfill flows/objectives into scenarios and capabilities into component
+    /// definitions that predate flow correctness. Idempotent: only keys that
+    /// are missing are added, so authored edits are never overwritten.
+    /// </summary>
+    public static void EnsureFlowDefinitions(ApplicationDbContext context)
+    {
+        var updated = false;
+
+        foreach (var scenario in context.Scenarios.Include(s => s.Challenge).ToList())
+        {
+            var slug = scenario.Challenge?.Slug;
+            if (slug == null) continue;
+            var flows = FlowDefinitions.Flows(slug);
+            if (flows.Length == 0) continue;
+
+            var config = ParseObject(scenario.ScenarioConfig);
+            var changed = false;
+            if (!config.ContainsKey("flows"))
+            {
+                config["flows"] = JsonSerializer.SerializeToElement(flows);
+                changed = true;
+            }
+            var objectives = FlowDefinitions.ObjectivesFor(slug);
+            if (objectives != null && !config.ContainsKey("objectives"))
+            {
+                config["objectives"] = JsonSerializer.SerializeToElement(objectives);
+                changed = true;
+            }
+            if (changed)
+            {
+                scenario.ScenarioConfig = JsonSerializer.Serialize(config);
+                updated = true;
+            }
+        }
+
+        foreach (var definition in context.ComponentDefinitions.ToList())
+        {
+            if (FlowDefinitions.CapabilitiesFromSchema(definition.ConfigSchema) != null) continue;
+            var capabilities = FlowDefinitions.Capabilities(definition.ComponentType);
+            if (capabilities.Length == 0) continue;
+
+            var schema = ParseObject(definition.ConfigSchema);
+            schema["capabilities"] = JsonSerializer.SerializeToElement(capabilities);
+            definition.ConfigSchema = JsonSerializer.Serialize(schema);
+            updated = true;
+        }
+
+        if (updated)
+        {
+            context.SaveChanges();
+        }
+    }
+
+    private static Dictionary<string, JsonElement> ParseObject(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new Dictionary<string, JsonElement>();
+        try
+        {
+            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)
+                ?? new Dictionary<string, JsonElement>();
+        }
+        catch (JsonException)
+        {
+            return new Dictionary<string, JsonElement>();
         }
     }
 
@@ -142,6 +211,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "load-balancer",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("load-balancer"),
                 Label = "Load Balancer",
                 Category = "networking",
                 DefaultCapacity = 800,
@@ -156,6 +226,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "api-gateway",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("api-gateway"),
                 Label = "API Gateway",
                 Category = "networking",
                 DefaultCapacity = 1000,
@@ -170,6 +241,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "cdn",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("cdn"),
                 Label = "CDN",
                 Category = "networking",
                 DefaultCapacity = 5000,
@@ -184,6 +256,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "dns",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("dns"),
                 Label = "DNS",
                 Category = "networking",
                 DefaultCapacity = 10000,
@@ -198,6 +271,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "reverse-proxy",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("reverse-proxy"),
                 Label = "Reverse Proxy",
                 Category = "networking",
                 DefaultCapacity = 1200,
@@ -214,6 +288,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "backend-service",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("backend-service"),
                 Label = "Backend Service",
                 Category = "compute",
                 DefaultCapacity = 220,
@@ -228,6 +303,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "microservice",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("microservice"),
                 Label = "Microservice",
                 Category = "compute",
                 DefaultCapacity = 180,
@@ -242,6 +318,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "worker-service",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("worker-service"),
                 Label = "Worker Service",
                 Category = "compute",
                 DefaultCapacity = 150,
@@ -256,6 +333,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "serverless-function",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("serverless-function"),
                 Label = "Serverless Function",
                 Category = "compute",
                 DefaultCapacity = 500,
@@ -270,6 +348,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "container",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("container"),
                 Label = "Container",
                 Category = "compute",
                 DefaultCapacity = 200,
@@ -286,6 +365,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "database",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("database"),
                 Label = "SQL Database",
                 Category = "storage",
                 DefaultCapacity = 140,
@@ -300,6 +380,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "redis",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("redis"),
                 Label = "Redis Cache",
                 Category = "storage",
                 DefaultCapacity = 900,
@@ -314,6 +395,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "nosql-database",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("nosql-database"),
                 Label = "NoSQL Database",
                 Category = "storage",
                 DefaultCapacity = 180,
@@ -328,6 +410,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "object-storage",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("object-storage"),
                 Label = "Object Storage",
                 Category = "storage",
                 DefaultCapacity = 1000,
@@ -342,6 +425,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "file-system",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("file-system"),
                 Label = "File System",
                 Category = "storage",
                 DefaultCapacity = 500,
@@ -358,6 +442,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "message-queue",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("message-queue"),
                 Label = "Message Queue",
                 Category = "messaging",
                 DefaultCapacity = 300,
@@ -372,6 +457,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "kafka",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("kafka"),
                 Label = "Kafka",
                 Category = "messaging",
                 DefaultCapacity = 500,
@@ -386,6 +472,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "rabbitmq",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("rabbitmq"),
                 Label = "RabbitMQ",
                 Category = "messaging",
                 DefaultCapacity = 400,
@@ -400,6 +487,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "pubsub",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("pubsub"),
                 Label = "Pub/Sub",
                 Category = "messaging",
                 DefaultCapacity = 600,
@@ -416,6 +504,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "rate-limiter",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("rate-limiter"),
                 Label = "Rate Limiter",
                 Category = "infrastructure",
                 DefaultCapacity = 2000,
@@ -430,6 +519,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "auth-service",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("auth-service"),
                 Label = "Auth Service",
                 Category = "infrastructure",
                 DefaultCapacity = 800,
@@ -444,6 +534,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "monitoring",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("monitoring"),
                 Label = "Monitoring",
                 Category = "infrastructure",
                 DefaultCapacity = 5000,
@@ -458,6 +549,7 @@ public static class ChallengeSeeder
             new() {
                 Id = Guid.NewGuid(),
                 ComponentType = "search-service",
+                ConfigSchema = FlowDefinitions.CapabilitiesSchema("search-service"),
                 Label = "Search Service",
                 Category = "infrastructure",
                 DefaultCapacity = 300,
@@ -536,7 +628,10 @@ public static class ChallengeSeeder
                 drainDuration = 10,
                 pattern = "spike",
                 requestTypes = new { read = 0.72, create = 0.28 },
-                characteristics = new { celebrityShare = 0.82 }
+                characteristics = new { celebrityShare = 0.82 },
+                // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                flows = FlowDefinitions.Flows("url-shortener"),
+                objectives = FlowDefinitions.ObjectivesFor("url-shortener")
             }),
             ScoringWeights = JsonSerializer.Serialize(new
             {
@@ -596,7 +691,10 @@ public static class ChallengeSeeder
                 drainDuration = 15,
                 pattern = "gradual",
                 requestTypes = new { upload = 0.2, download = 0.5, metadata = 0.3 },
-                characteristics = new { fileSize = "10MB-500MB", avgFileSize = 50 }
+                characteristics = new { fileSize = "10MB-500MB", avgFileSize = 50 },
+                // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                flows = FlowDefinitions.Flows("dropbox"),
+                objectives = FlowDefinitions.ObjectivesFor("dropbox")
             }),
             ScoringWeights = JsonSerializer.Serialize(new
             {
@@ -659,7 +757,10 @@ public static class ChallengeSeeder
                 drainDuration = 10,
                 pattern = "spike",
                 requestTypes = new { feedLoad = 0.85, post = 0.05, like = 0.10 },
-                characteristics = new { hotDataRatio = 0.9 }
+                characteristics = new { hotDataRatio = 0.9 },
+                // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                flows = FlowDefinitions.Flows("instagram-feed"),
+                objectives = FlowDefinitions.ObjectivesFor("instagram-feed")
             }),
             ScoringWeights = JsonSerializer.Serialize(new
             {
@@ -722,7 +823,10 @@ public static class ChallengeSeeder
                 drainDuration = 5,
                 pattern = "spike",
                 requestTypes = new { check = 1.0 },
-                characteristics = new { }
+                characteristics = new { },
+                // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                flows = FlowDefinitions.Flows("rate-limiter"),
+                objectives = FlowDefinitions.ObjectivesFor("rate-limiter")
             }),
             ScoringWeights = JsonSerializer.Serialize(new
             {

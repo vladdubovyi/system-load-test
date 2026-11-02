@@ -1,7 +1,15 @@
 import { getCapabilities } from './capabilities';
 import type { Capability } from './capabilities';
 import { getComponentDef } from './component-catalog';
-import type { FlowSpec, FlowStep, NodeSelector } from './flow-types';
+import type {
+  FlowSpec,
+  FlowStep,
+  NodeSelector,
+  Objectives,
+  ScenarioDocument,
+  TagDefinition,
+} from './flow-types';
+import { isCapability } from './capabilities';
 
 /**
  * Runtime helpers over flow specs: selector matching (used by the Phase 2
@@ -18,15 +26,34 @@ export const CAPABILITY_PHRASES: Record<Capability, string> = {
   queue: 'a message queue',
 };
 
-export function describeSelector(selector: NodeSelector): string {
+/** What a selector is matched against: a bare type, or a placed component with its tags. */
+export type SelectorTarget = string | { type: string; tags?: readonly string[] };
+
+function targetType(target: SelectorTarget): string {
+  return typeof target === 'string' ? target : target.type;
+}
+
+function targetTags(target: SelectorTarget): readonly string[] {
+  return typeof target === 'string' ? [] : (target.tags ?? []);
+}
+
+/** Human label for a tag id, falling back to the id when the scenario does not define it. */
+export function tagLabel(tagId: string, tags?: readonly TagDefinition[]): string {
+  return tags?.find((tag) => tag.id === tagId)?.label ?? tagId;
+}
+
+export function describeSelector(selector: NodeSelector, tags?: readonly TagDefinition[]): string {
+  if (selector.tag) return `a component tagged "${tagLabel(selector.tag, tags)}"`;
   if (selector.componentType) return `a ${getComponentDef(selector.componentType).label}`;
   if (selector.capability) return CAPABILITY_PHRASES[selector.capability];
-  if (selector.tag) return `a component tagged "${selector.tag}"`;
   return 'a matching component';
 }
 
-/** True when a component type satisfies a selector. All given criteria must match. */
-export function selectorMatches(selector: NodeSelector, componentType: string): boolean {
+/**
+ * True when a component satisfies a selector. All given criteria must match:
+ * the exact type, the capability, and the user-assigned tag.
+ */
+export function selectorMatches(selector: NodeSelector, target: SelectorTarget): boolean {
   if (
     selector.capability === undefined &&
     selector.componentType === undefined &&
@@ -34,14 +61,14 @@ export function selectorMatches(selector: NodeSelector, componentType: string): 
   ) {
     return false;
   }
-  if (selector.componentType !== undefined && selector.componentType !== componentType) {
+  const type = targetType(target);
+  if (selector.componentType !== undefined && selector.componentType !== type) {
     return false;
   }
-  if (selector.capability !== undefined && !getCapabilities(componentType).has(selector.capability)) {
+  if (selector.capability !== undefined && !getCapabilities(type).has(selector.capability)) {
     return false;
   }
-  // Tags ship with authoring (Phase 5); until then a tag criterion never matches.
-  if (selector.tag !== undefined) {
+  if (selector.tag !== undefined && !targetTags(target).includes(selector.tag)) {
     return false;
   }
   return true;
@@ -52,13 +79,33 @@ export function selectorMatches(selector: NodeSelector, componentType: string): 
  * cursor semantics: leading optional steps that do not match are skippable,
  * while a non-matching required step stops the scan.
  */
-export function matchPendingStep(pending: readonly FlowStep[], componentType: string): number {
+export function matchPendingStep(pending: readonly FlowStep[], target: SelectorTarget): number {
   for (let i = 0; i < pending.length; i++) {
     const step = pending[i];
-    if (selectorMatches(step.require, componentType)) return i;
+    if (selectorMatches(step.require, target)) return i;
     if (!step.optional) return -1;
   }
   return -1;
+}
+
+/**
+ * Deep-copy a JSON value dropping `null` members. System.Text.Json writes
+ * unset members as null, and a `componentType: null` would otherwise be
+ * treated as a criterion that can never match.
+ */
+export function stripNulls<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripNulls(item)) as unknown as T;
+  }
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item === null) continue;
+      out[key] = stripNulls(item);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 function collectSteps(steps: FlowStep[], out: FlowStep[]): void {
@@ -178,5 +225,87 @@ export function validateFlows(specs: FlowSpec[]): string[] {
     }
     kinds.add(spec.kind);
   }
+  return problems;
+}
+
+/**
+ * Validate an authorable scenario document as a whole: the flows themselves,
+ * plus the cross-references between request kinds, objectives and tags that
+ * the engine would otherwise only surface at run time.
+ */
+export function validateScenarioDocument(doc: ScenarioDocument): string[] {
+  const problems: string[] = [];
+  const flows = doc.flows ?? [];
+  const flowKinds = new Set(flows.map((f) => f.kind));
+
+  if (doc.flows !== undefined && !Array.isArray(doc.flows)) {
+    return ['"flows" must be an array of flow specs.'];
+  }
+  for (const flow of flows) {
+    if (!flow || typeof flow !== 'object' || !Array.isArray((flow as FlowSpec).steps)) {
+      return ['Every flow needs a "kind" and a "steps" array.'];
+    }
+  }
+
+  problems.push(...validateFlows(flows));
+
+  const requestTypes = doc.requestTypes ?? {};
+  for (const [kind, weight] of Object.entries(requestTypes)) {
+    if (typeof weight !== 'number' || weight < 0 || Number.isNaN(weight)) {
+      problems.push(`Request kind "${kind}" has an invalid weight; expected a number ≥ 0.`);
+    } else if (weight > 0 && flows.length > 0 && !flowKinds.has(kind)) {
+      problems.push(`Request kind "${kind}" has no flow — add a flow with kind "${kind}" or remove it from requestTypes.`);
+    }
+  }
+
+  const objectives: Objectives = doc.objectives ?? {};
+  for (const [kind, rate] of Object.entries(objectives.minCompletionRate ?? {})) {
+    if (typeof rate !== 'number' || rate < 0 || rate > 1) {
+      problems.push(`Completion floor for "${kind}" must be a number in [0, 1].`);
+    }
+    if (!flowKinds.has(kind) && !(kind in requestTypes)) {
+      problems.push(`Objective references request kind "${kind}", which has neither a flow nor traffic.`);
+    }
+  }
+  if (
+    objectives.maxViolationRate !== undefined &&
+    (typeof objectives.maxViolationRate !== 'number' ||
+      objectives.maxViolationRate < 0 ||
+      objectives.maxViolationRate > 1)
+  ) {
+    problems.push('maxViolationRate must be a number in [0, 1].');
+  }
+
+  const tags = doc.tags ?? [];
+  const tagIds = new Set<string>();
+  for (const tag of tags) {
+    if (!tag || typeof tag !== 'object' || typeof tag.id !== 'string' || !tag.id) {
+      problems.push('Every tag needs a string "id".');
+      continue;
+    }
+    if (tagIds.has(tag.id)) problems.push(`Duplicate tag id "${tag.id}".`);
+    tagIds.add(tag.id);
+    if (typeof tag.label !== 'string' || !tag.label) {
+      problems.push(`Tag "${tag.id}" needs a "label".`);
+    }
+    if (tag.appliesTo?.capability !== undefined && !isCapability(tag.appliesTo.capability)) {
+      problems.push(`Tag "${tag.id}" applies to unknown capability "${tag.appliesTo.capability}".`);
+    }
+  }
+  for (const flow of flows) {
+    for (const step of allSteps(flow)) {
+      if (step.require?.tag !== undefined && !tagIds.has(step.require.tag)) {
+        problems.push(
+          `Flow "${flow.kind}" step "${step.id}" selects tag "${step.require.tag}", which the scenario does not define.`
+        );
+      }
+      if (step.require?.capability !== undefined && !isCapability(step.require.capability)) {
+        problems.push(
+          `Flow "${flow.kind}" step "${step.id}" uses unknown capability "${step.require.capability}".`
+        );
+      }
+    }
+  }
+
   return problems;
 }

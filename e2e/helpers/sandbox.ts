@@ -22,6 +22,9 @@ export class SandboxPage {
   readonly lintIssues: Locator;
   readonly boardToast: Locator;
   readonly requestInspector: Locator;
+  readonly scenarioEditor: Locator;
+  readonly scenarioJson: Locator;
+  readonly scenarioErrors: Locator;
 
   constructor(readonly page: Page) {
     this.board = page.locator('#board');
@@ -37,6 +40,30 @@ export class SandboxPage {
     this.lintIssues = page.locator('#lint-panel .lint-issue');
     this.boardToast = page.locator('#board-toast');
     this.requestInspector = page.locator('#request-inspector');
+    this.scenarioEditor = page.locator('#scenario-editor');
+    this.scenarioJson = page.locator('#scenario-json');
+    this.scenarioErrors = page.locator('#scenario-editor .scenario-error');
+  }
+
+  /** Open the scenario (flow authoring) editor from the chrome actions. */
+  async openScenarioEditor(): Promise<void> {
+    await this.page.locator('#btn-scenario').click();
+    await expect(this.scenarioEditor).toBeVisible();
+  }
+
+  /** The current editor document, parsed. */
+  async scenarioDocument(): Promise<Record<string, unknown>> {
+    return JSON.parse(await this.scenarioJson.inputValue()) as Record<string, unknown>;
+  }
+
+  /** Replace the editor document wholesale. */
+  async setScenarioDocument(doc: unknown): Promise<void> {
+    await this.scenarioJson.fill(typeof doc === 'string' ? doc : JSON.stringify(doc, null, 2));
+  }
+
+  /** A scenario-defined role chip in the configuration palette. */
+  tagChip(tagId: string): Locator {
+    return this.configPalette.locator(`[data-tag-chip="${tagId}"]`);
   }
 
   async goto(slug?: string): Promise<void> {
@@ -229,6 +256,22 @@ export class SandboxPage {
     });
   }
 
+  /**
+   * Id of the challenge the sandbox loaded. The offline fallback uses
+   * 'legacy-url-shortener', so a GUID here proves the data came from the
+   * backend rather than the built-in challenge.
+   */
+  async loadedChallengeId(): Promise<string | null> {
+    return this.page.evaluate(() => {
+      const dbg = (
+        window as unknown as {
+          __breakitDebug?: { state: { currentChallenge: { id: string } | null } };
+        }
+      ).__breakitDebug;
+      return dbg?.state.currentChallenge?.id ?? null;
+    });
+  }
+
   async componentTypes(): Promise<string[]> {
     return this.page.evaluate(() => {
       const dbg = (window as unknown as { __breakitDebug?: { state: { components: { type: string }[] } } }).__breakitDebug;
@@ -327,4 +370,19 @@ export async function readFlowStats(overlay: Locator): Promise<FlowStatRow[]> {
     });
   }
   return out;
+}
+
+/**
+ * Start the page already signed in as the canned test user. Mirrors what the
+ * login form stores (see src/auth/auth-store.ts); the API mock accepts the
+ * same token for `/api/auth/me` and the authoring endpoint.
+ */
+export async function signInBeforeLoad(page: Page, token: string, user: object): Promise<void> {
+  await page.addInitScript(
+    ([t, u]) => {
+      localStorage.setItem('sds_auth_token', t);
+      localStorage.setItem('sds_auth_user', u);
+    },
+    [token, JSON.stringify(user)] as const
+  );
 }

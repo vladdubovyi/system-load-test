@@ -31,13 +31,23 @@ import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
 import { ConnectionPreview } from '../ui/connection-preview';
 import { mountReportModal } from '../ui/report-modal';
-import { renderConfigPalette, getChipFromEvent } from '../ui/config-palette';
+import { renderConfigPalette, getChipFromEvent, getTagChipFromEvent } from '../ui/config-palette';
+import { mountScenarioEditor } from '../ui/scenario-editor';
+import {
+  getActiveScenarioDocument,
+  getActiveScenarioOverride,
+  setActiveScenarioOverride,
+} from '../game/scenario-runtime';
+import { describeSelector } from '../game/flows';
+import { isAuthenticated } from '../auth/auth-store';
+import { apiClient } from '../api/client';
 import { renderComponentsPanel, mountComponentsPanel } from '../ui/components-panel';
 import {
   applyConfigChip,
   buildReferenceComponentConfigs,
   cloneComponentConfigMap,
   createEmptyComponentConfig,
+  toggleComponentTag,
   type ComponentInstanceConfig,
   type ConfigChipId,
 } from '../game/component-config';
@@ -91,6 +101,8 @@ interface GameState {
   selection: BoardSelection;
   connectingFromPortId: string | null;
   configChipDrag: ConfigChipId | null;
+  /** Scenario role chip being dragged from the palette, if any. */
+  tagChipDrag: string | null;
   dragging: { kind: 'component' | 'text'; id: string; offsetX: number; offsetY: number } | null;
   panning: { startX: number; startY: number; panX: number; panY: number } | null;
   drawing: DrawStroke | null;
@@ -145,6 +157,7 @@ const state: GameState = {
   selection: null,
   connectingFromPortId: null,
   configChipDrag: null,
+  tagChipDrag: null,
   dragging: null,
   panning: null,
   drawing: null,
@@ -239,7 +252,7 @@ function render(): void {
           state.simulationSpeed,
           state.currentChallenge?.name
         )}
-        ${renderConfigPalette(selectedComponentId(), selectedComponentType())}
+        ${renderConfigPalette(selectedComponentId(), selectedComponentType(), getActiveScenario().tags ?? [])}
 
         <div class="board-viewport" id="board-viewport">
           <div class="board-pan" id="board-pan">
@@ -647,6 +660,119 @@ function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): v
   }
 }
 
+/** Drag sources in the palette: configuration chips and scenario role chips. */
+function bindChipDrag(): void {
+  document.querySelectorAll('[data-config-chip]').forEach((chip) => {
+    chip.addEventListener('dragstart', (e) => {
+      const chipId = getChipFromEvent(e.target);
+      if (!chipId) return;
+      state.configChipDrag = chipId;
+      (e as DragEvent).dataTransfer?.setData('text/plain', chipId);
+      if (e instanceof DragEvent) e.dataTransfer!.effectAllowed = 'copy';
+    });
+    chip.addEventListener('dragend', () => {
+      state.configChipDrag = null;
+    });
+  });
+  document.querySelectorAll('[data-tag-chip]').forEach((chip) => {
+    chip.addEventListener('dragstart', (e) => {
+      const tagId = getTagChipFromEvent(e.target);
+      if (!tagId) return;
+      state.tagChipDrag = tagId;
+      (e as DragEvent).dataTransfer?.setData('text/plain', `tag:${tagId}`);
+      if (e instanceof DragEvent) e.dataTransfer!.effectAllowed = 'copy';
+    });
+    chip.addEventListener('dragend', () => {
+      state.tagChipDrag = null;
+    });
+  });
+}
+
+/**
+ * Re-render the palette wholesale (the scenario's roles may have changed)
+ * and rebind its drag sources.
+ */
+function rerenderConfigPalette(): void {
+  const palette = document.getElementById('config-palette');
+  if (!palette) return;
+  palette.outerHTML = renderConfigPalette(
+    selectedComponentId(),
+    selectedComponentType(),
+    getActiveScenario().tags ?? []
+  );
+  bindChipDrag();
+}
+
+/** Assign (or remove) a scenario role on a component; refuses ineligible types with a toast. */
+function dropTagOnComponent(componentId: string, tagId: string): void {
+  if (isSimRunning()) return;
+  const component = state.components.find((c) => c.id === componentId);
+  const tag = (getActiveScenario().tags ?? []).find((t) => t.id === tagId);
+  if (!component || !tag) return;
+
+  const updated = toggleComponentTag(component, tag);
+  if (!updated) {
+    const allowed = tag.appliesTo ? describeSelector(tag.appliesTo) : 'a matching component';
+    showBoardToast(`"${tag.label}" can only be assigned to ${allowed} — not ${component.label}.`);
+    return;
+  }
+
+  state.components = state.components.map((c) => (c.id === componentId ? updated : c));
+  mountBoard();
+  selectItem({ kind: 'component', id: componentId });
+  invalidateBoardSnapshot();
+  pushHistory();
+}
+
+// Scenario editor (docs/specs/flow-authoring.md §3.1)
+function openScenarioEditor(): void {
+  closeScenarioEditor();
+  const container = document.createElement('div');
+  container.id = 'scenario-editor-container';
+  document.body.appendChild(container);
+
+  const afterScenarioChange = (): void => {
+    rerenderConfigPalette();
+    hideLintPanel();
+    invalidateBoardSnapshot();
+    updateStatus();
+  };
+
+  mountScenarioEditor(
+    container,
+    getActiveScenarioDocument(),
+    { canSave: isAuthenticated(), overridden: getActiveScenarioOverride() !== null },
+    {
+      onApply: (doc) => {
+        setActiveScenarioOverride(doc);
+        afterScenarioChange();
+      },
+      onReset: () => {
+        setActiveScenarioOverride(null);
+        afterScenarioChange();
+      },
+      onSave: async (doc) => {
+        const slug = state.currentChallenge?.slug;
+        if (!slug) throw new Error('No challenge is loaded');
+        const updated = await apiClient.saveScenarioConfig(slug, doc);
+        state.currentChallenge = updated;
+        state.availableChallenges = state.availableChallenges.map((c) =>
+          c.slug === updated.slug ? updated : c
+        );
+        // The saved document is now the challenge's own definition.
+        setActiveScenarioFromChallenge(updated);
+        afterScenarioChange();
+        showBoardToast('Scenario saved to the challenge.');
+      },
+      onClose: closeScenarioEditor,
+    }
+  );
+}
+
+function closeScenarioEditor(): void {
+  document.getElementById('scenario-editor-container')?.remove();
+}
+
 function deleteSelection(): void {
   if (!state.selection || isSimRunning()) return;
 
@@ -714,6 +840,7 @@ function bindEvents(): void {
     else pauseSimulation();
   });
   document.getElementById('btn-traffic')?.addEventListener('click', openTrafficConfig);
+  document.getElementById('btn-scenario')?.addEventListener('click', openScenarioEditor);
   document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
   document.getElementById('btn-preset')?.addEventListener('click', loadChallengeStarter);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
@@ -740,35 +867,29 @@ function bindEvents(): void {
     zoomAt(rect.left + rect.width / 2, rect.top + rect.height / 2, 1 / state.viewport.zoom);
   });
 
-  document.querySelectorAll('[data-config-chip]').forEach((chip) => {
-    chip.addEventListener('dragstart', (e) => {
-      const chipId = getChipFromEvent(e.target);
-      if (!chipId) return;
-      state.configChipDrag = chipId;
-      (e as DragEvent).dataTransfer?.setData('text/plain', chipId);
-      if (e instanceof DragEvent) e.dataTransfer!.effectAllowed = 'copy';
-    });
-    chip.addEventListener('dragend', () => {
-      state.configChipDrag = null;
-    });
-  });
+  bindChipDrag();
 
   viewport.addEventListener('dragover', (e) => {
-    if (!state.configChipDrag) return;
+    if (!state.configChipDrag && !state.tagChipDrag) return;
     e.preventDefault();
   });
 
   viewport.addEventListener('drop', (e) => {
     e.preventDefault();
-    const chipId = state.configChipDrag ?? (e.dataTransfer?.getData('text/plain') as ConfigChipId);
+    const tagId = state.tagChipDrag;
+    const chipId =
+      state.configChipDrag ??
+      (tagId ? null : (e.dataTransfer?.getData('text/plain') as ConfigChipId | null));
     state.configChipDrag = null;
-    if (!chipId) return;
+    state.tagChipDrag = null;
+    if (!chipId && !tagId) return;
 
     const elements = document.elementsFromPoint(e.clientX, e.clientY);
     for (const el of elements) {
       const comp = (el as HTMLElement).closest('.component') as HTMLElement | null;
       if (comp?.dataset.id) {
-        dropConfigChipOnComponent(comp.dataset.id, chipId);
+        if (tagId) dropTagOnComponent(comp.dataset.id, tagId);
+        else if (chipId) dropConfigChipOnComponent(comp.dataset.id, chipId);
         return;
       }
     }
@@ -1137,6 +1258,18 @@ function resetBoard(): void {
   mountBoard();
   updateStatus();
   setTool('hand');
+  seedHistory();
+}
+
+/**
+ * Start undo history from the board as just loaded. Without a baseline entry
+ * the first edit after Reset/Starter becomes the only entry and Ctrl+Z has
+ * nothing earlier to return to.
+ */
+function seedHistory(): void {
+  state.history = [];
+  state.historyIndex = -1;
+  pushHistory();
 }
 
 function loadChallengeStarter(): void {
@@ -1159,6 +1292,7 @@ function loadChallengeStarter(): void {
   mountBoard();
   annotationRenderer.updateProblemFrame();
   updateStatus();
+  seedHistory();
 }
 
 function showRunReport(): void {
@@ -1183,11 +1317,11 @@ function startSimulation(): void {
 
   // Design-time flow lint (spec §7): warnings only — the run proceeds, and
   // requests that cannot take a required step fail as flow violations.
-  const lintIssues = lintBoard(
-    getActiveScenario().flows ?? [],
-    state.components,
-    state.belts
-  );
+  const lintScenario = getActiveScenario();
+  const lintIssues = lintBoard(lintScenario.flows ?? [], state.components, state.belts, {
+    requestTypes: lintScenario.requestTypes,
+    tags: lintScenario.tags,
+  });
   const workspace = document.querySelector('.canvas-workspace') as HTMLElement | null;
   if (workspace && lintIssues.length > 0) {
     showLintPanel(workspace, lintIssues);
@@ -1554,6 +1688,7 @@ export function destroySandboxApp(): void {
   closeChallengeSelector();
   closeTrafficConfig();
   closeFailureInjection();
+  closeScenarioEditor();
   document.getElementById('challenge-overlay')?.remove();
   document.getElementById('challenge-selector-container')?.remove();
   document.getElementById('traffic-config-container')?.remove();

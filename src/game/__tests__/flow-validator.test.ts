@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { lintBoard } from '../flow-validator';
 import { SOURCE_ID } from '../simulation';
-import { URL_SHORTENER_FLOWS, INSTAGRAM_FEED_FLOWS } from '../flow-presets';
+import {
+  URL_SHORTENER_FLOWS,
+  INSTAGRAM_FEED_FLOWS,
+  DROPBOX_FLOWS,
+  RATE_LIMITER_FLOWS,
+} from '../flow-presets';
+import { buildChallengePreset } from '../challenge-presets';
 import type { FlowSpec } from '../flow-types';
 import type { ConveyorBelt, PlacedComponent } from '../types';
 
@@ -210,5 +216,74 @@ describe('lintBoard', () => {
     const lb = comp('load-balancer');
     const issues = lintBoard([broken], [lb], [belt('source', lb)]);
     expect(issues.some((i) => i.kind === null && i.message.includes('no steps'))).toBe(true);
+  });
+});
+
+describe('lint: flow authoring (Phase 5)', () => {
+  it('reports request kinds that carry traffic but have no flow', () => {
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const db = comp('database');
+    const belts = [belt('source', lb), belt(lb, svc), belt(svc, db)];
+    const issues = lintBoard(URL_SHORTENER_FLOWS, [lb, svc, db], belts, {
+      requestTypes: { read: 0.5, create: 0.3, analytics: 0.2, unused: 0 },
+    });
+    expect(issues).toHaveLength(1);
+    expect(issues[0].kind).toBe('analytics');
+    expect(issues[0].message).toContain('"analytics" has no flow');
+  });
+
+  it('phrases tag steps by their label and honours tags on components', () => {
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const db = comp('database');
+    const flow: FlowSpec = {
+      kind: 'create',
+      steps: [
+        { id: 'ingress', require: { capability: 'ingress' } },
+        { id: 'service', require: { tag: 'write-service' } },
+        { id: 'persist', require: { capability: 'durable-store' }, terminal: true },
+      ],
+    };
+    const belts = [belt('source', lb), belt(lb, svc), belt(svc, db)];
+    const tags = [{ id: 'write-service', label: 'Write service' }];
+
+    const untagged = lintBoard([flow], [lb, svc, db], belts, { tags });
+    expect(untagged).toHaveLength(1);
+    expect(untagged[0].message).toContain('tagged "Write service"');
+    expect(untagged[0].message).toMatch(/load.balancer/i);
+
+    svc.tags = ['write-service'];
+    expect(lintBoard([flow], [lb, svc, db], belts, { tags })).toEqual([]);
+  });
+
+  it('the Dropbox and Rate Limiter starters lint clean against their flows', () => {
+    for (const [slug, flows] of [
+      ['dropbox', DROPBOX_FLOWS],
+      ['rate-limiter', RATE_LIMITER_FLOWS],
+    ] as const) {
+      const preset = buildChallengePreset(slug)!;
+      expect(lintBoard(flows, preset.components, preset.belts), slug).toEqual([]);
+    }
+  });
+
+  it('a Dropbox queue with no worker is a dead end for uploads', () => {
+    const preset = buildChallengePreset('dropbox')!;
+    const components = preset.components.filter((c) => c.type !== 'worker-service');
+    const belts = preset.belts.filter((b) => !b.fromPortId.startsWith('db-worker') && !b.toPortId.startsWith('db-worker'));
+    const issues = lintBoard(DROPBOX_FLOWS, components, belts);
+    expect(issues).toHaveLength(1);
+    expect(issues[0].kind).toBe('upload');
+    expect(issues[0].message).toMatch(/message.queue/i);
+  });
+
+  it('a rate-limiter design that bypasses the limiter cannot run the check flow', () => {
+    const preset = buildChallengePreset('rate-limiter')!;
+    const components = preset.components.filter((c) => c.type !== 'rate-limiter');
+    const belts = preset.belts
+      .filter((b) => !b.fromPortId.startsWith('rl-limit') && !b.toPortId.startsWith('rl-limit'))
+      .concat({ id: 'bypass', fromPortId: 'rl-lb:out', toPortId: 'rl-api:in', capacity: 5000 });
+    const issues = lintBoard(RATE_LIMITER_FLOWS, components, belts);
+    expect(issues.some((i) => i.message.includes('traffic filter'))).toBe(true);
   });
 });

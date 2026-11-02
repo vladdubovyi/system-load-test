@@ -1578,6 +1578,120 @@ body.sandbox-mode #app {
   color: #c92a2a;
 }
 
+/* Scenario editor (docs/specs/flow-authoring.md §3.1) */
+.scenario-editor {
+  position: fixed;
+  top: 50%;
+  right: 20px;
+  transform: translateY(-50%);
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  z-index: 600;
+}
+
+.scenario-editor-flag {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.16);
+  vertical-align: middle;
+}
+
+.scenario-editor-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  min-height: 0;
+  overflow: auto;
+}
+
+.scenario-editor-help {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.scenario-json {
+  width: 100%;
+  min-height: 320px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  padding: 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--ink);
+  box-sizing: border-box;
+}
+
+.scenario-editor-errors {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.78rem;
+}
+
+.scenario-editor-errors:empty {
+  display: none;
+}
+
+.scenario-error {
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  color: #c92a2a;
+  background: rgba(224, 49, 49, 0.08);
+  border: 1px solid rgba(224, 49, 49, 0.3);
+}
+
+.scenario-ok {
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  color: #2b8a3e;
+  background: rgba(43, 138, 62, 0.1);
+}
+
+.scenario-save-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--ink-muted);
+}
+
+.scenario-editor-actions {
+  flex-wrap: wrap;
+}
+
+/* Role (tag) chips and badges */
+.config-palette-subtitle {
+  margin: 0.9rem 0 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.config-chip.tag-chip {
+  border-style: dashed;
+}
+
+.component-config-badge.component-tag-badge {
+  background: rgba(245, 158, 11, 0.16);
+  color: #92400e;
+}
+
 /* Objectives checklist (docs/specs/flow-correctness.md §6) */
 .report-objectives-verdict {
   margin-left: 0.5rem;

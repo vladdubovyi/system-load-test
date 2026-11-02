@@ -12,6 +12,8 @@
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:report": "playwright show-report",
+    "test:e2e:real": "bash scripts/e2e-real-api.sh",
+    "test:backend": "bash scripts/test-backend.sh",
     "typecheck:e2e": "tsc -p e2e/tsconfig.json"
   },
   "devDependencies": {

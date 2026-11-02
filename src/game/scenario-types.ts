@@ -1,4 +1,4 @@
-import type { FlowSpec, Objectives } from './flow-types';
+import type { FlowSpec, Objectives, TagDefinition } from './flow-types';
 
 export interface ScenarioDefinition {
   id: string;
@@ -16,6 +16,8 @@ export interface ScenarioDefinition {
   flows?: FlowSpec[];
   /** Data-driven win conditions evaluated at the end of a run. */
   objectives?: Objectives;
+  /** Roles the user can assign to placed components; flow steps may select on them. */
+  tags?: TagDefinition[];
 }
 
 export interface TrafficProfile {

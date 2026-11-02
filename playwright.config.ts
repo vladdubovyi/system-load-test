@@ -7,6 +7,10 @@ import { defineConfig, devices } from '@playwright/test';
  * hooks are available) and mocks the ASP.NET API with `page.route`, so no
  * backend or database is needed. Set E2E_BASE_URL to point at an already
  * running frontend instead of letting Playwright start one.
+ *
+ * `e2e/real-api.spec.ts` is the exception: it talks to a live ASP.NET API and
+ * PostgreSQL, and skips itself unless E2E_REAL_API_URL is set. Run it with
+ * `npm run test:e2e:real`, which provisions the backend first.
  */
 const PORT = Number(process.env.E2E_PORT ?? 4273);
 const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
@@ -49,5 +53,10 @@ export default defineConfig({
         url: baseURL,
         reuseExistingServer: !isCI,
         timeout: 60_000,
+        // Vite inlines import.meta.env at serve time, so the real-backend run
+        // needs the API URL in the dev server's own environment.
+        env: process.env.E2E_REAL_API_URL
+          ? { VITE_API_URL: process.env.E2E_REAL_API_URL }
+          : {},
       },
 });

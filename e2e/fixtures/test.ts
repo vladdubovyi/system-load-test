@@ -63,6 +63,21 @@ export class ApiMock {
         return found ? json(200, found) : json(404, { error: 'Challenge not found' });
       }
 
+      // Authoring: merge the posted keys into the challenge's scenarioConfig.
+      const configMatch = path.match(/^\/api\/challenges\/slug\/([^/]+)\/scenario-config$/);
+      if (method === 'PUT' && configMatch) {
+        const auth = request.headers()['authorization'];
+        if (!validToken || auth !== `Bearer ${validToken}`) return json(401, { error: 'Unauthorized' });
+        const found = challenges.find((c) => c.slug === configMatch[1]);
+        if (!found) return json(404, { error: 'Challenge not found' });
+        const body = safeJson(request.postData());
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          return json(400, { error: 'Expected a JSON object' });
+        }
+        found.scenario.scenarioConfig = { ...found.scenario.scenarioConfig, ...(body as object) };
+        return json(200, found);
+      }
+
       if (method === 'GET' && path === '/api/auth/me') {
         const auth = request.headers()['authorization'];
         if (validToken && auth === `Bearer ${validToken}`) return json(200, TEST_USER);

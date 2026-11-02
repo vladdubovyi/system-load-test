@@ -1,4 +1,7 @@
 import type { ComponentType, PlacedComponent } from './types';
+import type { TagDefinition } from './flow-types';
+import { selectorMatches, tagLabel } from './flows';
+import { getActiveScenario } from './scenario-runtime';
 import type {
   AutoScalingConfig,
   DatabaseConfig,
@@ -277,11 +280,35 @@ export function renderConfigBadgesHtml(
   config: ComponentInstanceConfig | undefined
 ): string {
   const badges = getActiveConfigBadges(component, config);
-  if (badges.length === 0) return '';
-  return `<div class="component-config-badges">${badges
-    .map(
-      (b) =>
-        `<span class="component-config-badge" title="${b.label}"><span class="component-config-badge-emoji">${b.emoji}</span>${b.label}</span>`
-    )
-    .join('')}</div>`;
+  const tagDefs = getActiveScenario().tags;
+  const tagBadges = (component.tags ?? []).map((tagId) => ({
+    emoji: '🏷',
+    label: tagLabel(tagId, tagDefs),
+  }));
+  if (badges.length === 0 && tagBadges.length === 0) return '';
+  const render = (b: ConfigBadge, extraClass = ''): string =>
+    `<span class="component-config-badge${extraClass}" title="${b.label}"><span class="component-config-badge-emoji">${b.emoji}</span>${b.label}</span>`;
+  return `<div class="component-config-badges">${[
+    ...badges.map((b) => render(b)),
+    ...tagBadges.map((b) => render(b, ' component-tag-badge')),
+  ].join('')}</div>`;
+}
+
+/**
+ * Toggle a scenario role on a component, returning the updated copy, or null
+ * when the role's `appliesTo` selector excludes this component type. Pure:
+ * board history keeps references to component objects, so callers must
+ * swap the copy into the board rather than mutate in place.
+ */
+export function toggleComponentTag(
+  component: PlacedComponent,
+  tag: TagDefinition
+): PlacedComponent | null {
+  if (tag.appliesTo && !selectorMatches(tag.appliesTo, component.type)) return null;
+  const current = component.tags ?? [];
+  const tags = current.includes(tag.id)
+    ? current.filter((id) => id !== tag.id)
+    : [...current, tag.id];
+  const { tags: _previous, ...rest } = component;
+  return tags.length > 0 ? { ...rest, tags } : rest;
 }

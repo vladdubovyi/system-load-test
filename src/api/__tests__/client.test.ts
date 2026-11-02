@@ -79,4 +79,33 @@ describe('mapChallengeFromApi', () => {
     expect(challenge.scenario.flows).toBeUndefined();
     expect(challenge.scenario.duration).toBe(45);
   });
+
+  it('strips null members from authored flows, objectives and tags', async () => {
+    const { mapChallengeFromApi } = await import('../client');
+    const challenge = mapChallengeFromApi(
+      makeApiItem({
+        flows: [
+          {
+            kind: 'create',
+            steps: [
+              { id: 'a', require: { capability: 'ingress', componentType: null, tag: null }, optional: null, branch: null },
+            ],
+          },
+        ],
+        objectives: { minCompletionRate: { create: 0.5 }, maxViolationRate: null },
+        tags: [{ id: 'w', label: 'Writer', description: null, appliesTo: null }],
+      })
+    );
+
+    expect(challenge.scenario.flows).toEqual([
+      { kind: 'create', steps: [{ id: 'a', require: { capability: 'ingress' } }] },
+    ]);
+    expect(challenge.scenario.objectives).toEqual({ minCompletionRate: { create: 0.5 } });
+    expect(challenge.scenario.tags).toEqual([{ id: 'w', label: 'Writer' }]);
+  });
+
+  it('leaves tags undefined when the backend sends none', async () => {
+    const { mapChallengeFromApi } = await import('../client');
+    expect(mapChallengeFromApi(makeApiItem({})).scenario.tags).toBeUndefined();
+  });
 });

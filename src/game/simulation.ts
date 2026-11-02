@@ -380,7 +380,7 @@ export class SimulationEngine {
   private violationsByStep = new Map<string, number>();
   /** Drop tallies keyed `${kind}:${reason}`, for the report's dominant cause. */
   private dropReasons = new Map<string, number>();
-  /** Flow spec per request kind; kinds without one use legacy routing. */
+  /** Flow spec per request kind; kinds without one are violated on arrival. */
   private flowsByKind = new Map<string, FlowSpec>();
   private currentRps = getActiveScenario().baseRps;
   private spikeActive = false;
@@ -759,38 +759,29 @@ export class SimulationEngine {
 
   /**
    * Estimated share of total traffic a scale group will receive, used by
-   * predictive pre-scaling. With flows: the summed spawn weight of every
-   * request kind whose flow this component can serve, split evenly across
-   * the scale groups that can serve it (the interpreter picks uniformly
-   * among satisfying belts). Without flows: the legacy readRatio split by
-   * legacy type.
+   * predictive pre-scaling: the summed spawn weight of every request kind
+   * whose flow this component can serve, split evenly across the scale
+   * groups that can serve it (the interpreter picks uniformly among
+   * satisfying belts). Kinds without a flow carry no routable traffic.
    */
   private predictiveTrafficShare(component: PlacedComponent): number {
-    if (this.flowsByKind.size === 0) {
-      return component.type === 'backend'
-        ? this.scenario.readRatio
-        : 1 - this.scenario.readRatio;
-    }
-
     const weights = Object.entries(this.scenario.requestTypes ?? {}).filter(
       ([, weight]) => weight > 0
     );
     const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
     if (total <= 0) return 0;
 
-    const serves = (type: string, kind: string): boolean => {
+    const serves = (candidate: PlacedComponent, kind: string): boolean => {
       const spec = this.flowsByKind.get(kind);
-      // Kinds without a flow route by the legacy heuristics, which spread
-      // traffic across every compute tier.
-      if (!spec) return isComputeType(type);
-      return allSteps(spec).some((step) => selectorMatches(step.require, type));
+      if (!spec) return false;
+      return allSteps(spec).some((step) => selectorMatches(step.require, candidate));
     };
 
     let share = 0;
     for (const [kind, weight] of weights) {
-      if (!serves(component.type, kind)) continue;
+      if (!serves(component, kind)) continue;
       const peerGroups = this.components.filter(
-        (c) => isScalePrimary(c) && isScalableType(c.type) && serves(c.type, kind)
+        (c) => isScalePrimary(c) && isScalableType(c.type) && serves(c, kind)
       ).length;
       share += weight / total / Math.max(1, peerGroups);
     }
@@ -1396,95 +1387,19 @@ export class SimulationEngine {
     if (state.failed) return { ok: false, reason: `${component.label} is down` };
     if (state.startingUp) return { ok: false, reason: `${component.label} is still starting up` };
 
-    if (request.flow) {
-      return this.acceptFlowRequest(request, component, headStart);
+    // Every request is flow-driven (flow-authoring §5). A kind the scenario
+    // defines no flow for is a configuration error, not a routing mode: the
+    // lint reports it before Play, and here each such request dies visibly.
+    if (!request.flow) {
+      this.violateRequest(
+        request,
+        component,
+        null,
+        `Request kind "${request.kind}" has no flow — add one in the scenario editor`
+      );
+      return { ok: true, routed: true };
     }
-
-    if (
-      component.type === 'load-balancer' ||
-      component.type === 'api-gateway' ||
-      isIngressType(component.type)
-    ) {
-      if (request.kind === 'create') {
-        if (this.ingressHasTarget(component, 'shortener')) {
-          return this.routeFromIngress(request, component, (type) => type === 'shortener', headStart);
-        }
-        return this.routeFromIngress(request, component, isIngressForwardTarget, headStart);
-      }
-      if (this.ingressHasTarget(component, 'backend')) {
-        return this.routeFromIngress(request, component, (type) => type === 'backend', headStart);
-      }
-      return this.routeFromIngress(request, component, isIngressForwardTarget, headStart);
-    }
-
-    if (component.type === 'rate-limiter' || component.type === 'cdn') {
-      return this.routeFromIngress(request, component, (type) => isComputeType(type), headStart);
-    }
-
-    if (component.type === 'shortener' && request.kind !== 'create') {
-      return { ok: false, reason: 'Shortener only handles create requests' };
-    }
-    if (component.type === 'backend' && request.kind !== 'read') {
-      return { ok: false, reason: 'Backend only handles read requests' };
-    }
-
-    const limit = this.getEffectiveQueueLimit(component);
-    const queued = this.queuedCount(component.id);
-    if (queued >= limit) {
-      return { ok: false, reason: `queue full (${queued}/${limit})` };
-    }
-    return { ok: true, routed: false };
-  }
-
-  private ingressHasTarget(ingress: PlacedComponent, targetType: ComponentType): boolean {
-    const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
-    if (!outPort) return false;
-    const belts = this.beltByFromPort.get(outPort.id) ?? [];
-    return belts.some((belt) => this.targetComponentOf(belt)?.type === targetType);
-  }
-
-  private routeFromIngress(
-    request: Request,
-    ingress: PlacedComponent,
-    matches: (type: ComponentType) => boolean,
-    headStart: number
-  ): AcceptResult {
-    const outPort = getComponentPorts(ingress).find((p) => p.side === 'out');
-    if (!outPort) return { ok: false, reason: `${ingress.label} has no outgoing port` };
-
-    const belts = this.beltByFromPort.get(outPort.id) ?? [];
-    const validBelts = belts.filter((belt) => {
-      const comp = this.targetComponentOf(belt);
-      if (!comp || !matches(comp.type)) return false;
-      const compSt = this.componentState.get(comp.id);
-      if (!compSt || compSt.failed) return false;
-      if (this.isStartingUp(comp.id)) return false;
-      return true;
-    });
-
-    if (validBelts.length === 0) {
-      return { ok: false, reason: `no healthy ${request.kind} route from ${ingress.label}` };
-    }
-
-    const belt = validBelts[Math.floor(Math.random() * validBelts.length)];
-    const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.9) {
-      return { ok: false, reason: `link out of ${ingress.label} is congested` };
-    }
-
-    const targetComp = this.targetComponentOf(belt)!;
-    const limit = this.getEffectiveQueueLimit(targetComp);
-    const queued = this.queuedCount(targetComp.id);
-    if (queued >= limit) {
-      return { ok: false, reason: `${targetComp.label} queue full (${queued}/${limit})` };
-    }
-
-    this.logEvent(
-      request,
-      this.componentEvent('routed', ingress, { beltId: belt.id, detail: `→ ${targetComp.label}` })
-    );
-    this.placeOnBelt(request, belt, headStart);
-    return { ok: true, routed: true };
+    return this.acceptFlowRequest(request, component, headStart);
   }
 
   private updateComponents(dt: number): void {
@@ -1556,104 +1471,15 @@ export class SimulationEngine {
     return available[Math.floor(Math.random() * available.length)];
   }
 
-  /**
-   * Process one queued request at a component. Flow-driven requests go
-   * through the flow interpreter; requests of kinds without a FlowSpec keep
-   * the legacy type-based heuristics so pre-flow challenges behave exactly
-   * as before.
-   */
+  /** Process one queued request at a component through the flow interpreter. */
   private completeOneRequest(component: PlacedComponent, headStart = 0): boolean {
     const request = this.requests.find(
       (r) => r.state === 'queued' && r.currentComponentId === component.id
     );
     if (!request) return false;
-    if (request.flow) return this.interpretQueuedRequest(component, request, headStart);
-    return this.legacyCompleteOneRequest(component, headStart);
-  }
-
-  private legacyCompleteOneRequest(component: PlacedComponent, headStart = 0): boolean {
-    const outPort = getComponentPorts(component).find((p) => p.side === 'out');
-    if (!outPort) {
-      return this.completeQueuedRequest(component);
-    }
-
-    const belts = this.beltByFromPort.get(outPort.id) ?? [];
-    if (belts.length === 0) {
-      if (
-        isStorageType(component.type) ||
-        component.type === 'database' ||
-        component.type === 'redis'
-      ) {
-        return this.completeQueuedRequest(component);
-      }
-      return false;
-    }
-
-    if (component.type === 'backend') {
-      const redisBelts = belts.filter((b) => this.targetComponentOf(b)?.type === 'redis');
-      const dbBelts = belts.filter((b) => this.targetComponentOf(b)?.type === 'database');
-
-      const preferRedis =
-        redisBelts.length > 0 &&
-        (dbBelts.length === 0 || Math.random() < this.scenario.cacheHitRatio);
-      const candidates = preferRedis ? redisBelts : dbBelts.length > 0 ? dbBelts : belts;
-      const belt = this.pickAvailableBelt(candidates);
-      if (!belt) {
-        if (!preferRedis) return false;
-        const fallback = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
-        if (!fallback) return false;
-        return this.forwardFromComponent(component, fallback, headStart, 'cache link congested, falling back to storage');
-      }
-      return this.forwardFromComponent(
-        component,
-        belt,
-        headStart,
-        preferRedis ? 'cache hit' : 'cache miss'
-      );
-    }
-
-    if (component.type === 'shortener') {
-      const dbBelts = belts.filter((b) => {
-        const targetType = this.targetComponentOf(b)?.type;
-        return isStorageType(targetType ?? '') || targetType === 'database';
-      });
-      const belt = this.pickAvailableBelt(dbBelts.length > 0 ? dbBelts : belts);
-      if (!belt) return false;
-      return this.forwardFromComponent(component, belt, headStart, 'generated short code, persisting mapping');
-    }
-
-    if (isComputeType(component.type)) {
-      const cacheBelts = belts.filter((b) =>
-        isCacheType(this.targetComponentOf(b)?.type ?? '')
-      );
-      const storageBelts = belts.filter((b) => {
-        const targetType = this.targetComponentOf(b)?.type ?? '';
-        return isStorageType(targetType) || targetType === 'database';
-      });
-      const preferCache =
-        cacheBelts.length > 0 &&
-        (storageBelts.length === 0 || Math.random() < this.scenario.cacheHitRatio);
-      const candidates = preferCache
-        ? cacheBelts
-        : storageBelts.length > 0
-          ? storageBelts
-          : belts;
-      const belt = this.pickAvailableBelt(candidates);
-      if (belt) {
-        return this.forwardFromComponent(
-          component,
-          belt,
-          headStart,
-          cacheBelts.length > 0 ? (preferCache ? 'cache hit' : 'cache miss') : undefined
-        );
-      }
-    }
-
-    if (isStorageType(component.type) || component.type === 'database' || component.type === 'redis') {
-      return this.completeQueuedRequest(component);
-    }
-
-    return false;
+    // Queued requests always carry a flow: flow-less kinds are violated on
+    // arrival in acceptRequest and never reach a queue.
+    return this.interpretQueuedRequest(component, request, headStart);
   }
 
   /** Oldest queued request at a component, charged for its queue wait. */
@@ -1666,40 +1492,6 @@ export class SimulationEngine {
       request.waitTime += Math.max(0, this.time - request.arrivedAt);
     }
     return request;
-  }
-
-  private forwardFromComponent(
-    component: PlacedComponent,
-    belt: ConveyorBelt,
-    headStart: number,
-    detail?: string
-  ): boolean {
-    if (!this.canEmitOnBelt(belt)) return false;
-    const request = this.takeQueuedRequest(component);
-    if (!request) return false;
-
-    const target = this.targetComponentOf(belt);
-    this.logEvent(request, this.componentEvent('processed', component, { detail }));
-    this.logEvent(
-      request,
-      this.componentEvent('forwarded', component, {
-        beltId: belt.id,
-        detail: `→ ${target?.label ?? this.labelFor(belt.toPortId)}`,
-      })
-    );
-    this.placeOnBelt(request, belt, headStart);
-    return true;
-  }
-
-  private completeQueuedRequest(component: PlacedComponent): boolean {
-    const request = this.takeQueuedRequest(component);
-    if (!request) return false;
-    this.logEvent(request, this.componentEvent('processed', component));
-    this.logEvent(request, this.componentEvent('completed', component));
-    this.finishRequest(request, 'done');
-    this.totalCompleted += 1;
-    this.bump(this.completedByKind, request.kind);
-    return true;
   }
 
   // ---------------------------------------------------------------------
@@ -1742,7 +1534,7 @@ export class SimulationEngine {
     for (const step of steps) {
       const matching = belts.filter((belt) => {
         const target = this.targetComponentOf(belt);
-        return target !== undefined && selectorMatches(step.require, target.type);
+        return target !== undefined && selectorMatches(step.require, target);
       });
       if (matching.length === 0) {
         if (step.optional) continue;
@@ -1788,7 +1580,7 @@ export class SimulationEngine {
       targets.length === 0
         ? 'nothing is connected'
         : `only ${targets.join(', ')} ${targets.length > 1 ? 'are' : 'is'} connected`;
-    return `${kind} needed ${describeSelector(step.require)} after "${component.label}", but ${connected}`;
+    return `${kind} needed ${describeSelector(step.require, this.scenario.tags)} after "${component.label}", but ${connected}`;
   }
 
   /** Reason for a request landing on a node that satisfies no pending step. */
@@ -1798,7 +1590,7 @@ export class SimulationEngine {
     if (!next) {
       return `${flow.kind} arrived at "${component.label}" after its flow already ended`;
     }
-    return `${flow.kind} needed ${describeSelector(next.require)} but reached "${component.label}"`;
+    return `${flow.kind} needed ${describeSelector(next.require, this.scenario.tags)} but reached "${component.label}"`;
   }
 
   private completeFlowRequest(
@@ -1874,7 +1666,7 @@ export class SimulationEngine {
       return true;
     }
 
-    const idx = matchPendingStep(flow.pending, component.type);
+    const idx = matchPendingStep(flow.pending, component);
     if (idx === -1) {
       this.takeQueuedRequest(component);
       this.logEvent(request, this.componentEvent('processed', component));
@@ -2044,7 +1836,7 @@ export class SimulationEngine {
     const passThrough = caps.has('ingress') || caps.has('traffic-filter');
 
     if (passThrough && !flow.resume) {
-      const idx = matchPendingStep(flow.pending, component.type);
+      const idx = matchPendingStep(flow.pending, component);
       if (idx === -1) {
         const next = flow.pending.find((s) => !s.optional) ?? flow.pending[0] ?? null;
         this.violateRequest(request, component, next, this.unmatchedStepReason(request, component));
