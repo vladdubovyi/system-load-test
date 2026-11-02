@@ -27,6 +27,8 @@ interface TimelineNode {
   lines?: string[];
   liveLine?: string;
   ok?: boolean;
+  /** End node caused by a flow violation rather than a drop. */
+  violated?: boolean;
   reason?: string;
 }
 
@@ -75,6 +77,8 @@ function describeState(request: Request, ctx: RequestInspectorContext): { label:
       return { label: 'Completed', tone: 'done' };
     case 'dropped':
       return { label: 'Dropped', tone: 'dropped' };
+    case 'violated':
+      return { label: 'Flow violation', tone: 'dropped' };
     default:
       return { label: ctx.running ? 'Unknown' : 'Idle', tone: 'flight' };
   }
@@ -127,8 +131,25 @@ function buildTimeline(request: Request, ctx: RequestInspectorContext): Timeline
         current?.lines?.push(`forwarded ${ev.detail ?? ''}`.trim());
         travelStart = ev.at;
         break;
+      case 'returned': {
+        pushTravel(ev.at);
+        const def = ev.componentType ? getComponentDef(ev.componentType) : null;
+        current = {
+          type: 'component',
+          at: ev.at,
+          label: ev.componentLabel ?? ev.componentId ?? 'Component',
+          emoji: def?.emoji ?? '▣',
+          componentType: ev.componentType,
+          lines: ['response returned'],
+        };
+        nodes.push(current);
+        break;
+      }
       case 'completed':
         nodes.push({ type: 'end', ok: true, at: ev.at });
+        break;
+      case 'violated':
+        nodes.push({ type: 'end', ok: false, violated: true, at: ev.at, reason: ev.detail });
         break;
       case 'dropped':
         if (ev.componentLabel && (!current || current.label !== ev.componentLabel)) {
@@ -201,7 +222,7 @@ function renderTimeline(nodes: TimelineNode[]): string {
             <li class="ri-node ri-node-end ${node.ok ? 'is-ok' : 'is-dropped'}">
               <span class="ri-dot"></span>
               <div class="ri-node-body">
-                <div class="ri-node-title">${node.ok ? '✓ Completed' : '✕ Dropped'} <span class="ri-time">${formatClock(node.at ?? 0)}</span></div>
+                <div class="ri-node-title">${node.ok ? '✓ Completed' : node.violated ? '⚠ Flow violation' : '✕ Dropped'} <span class="ri-time">${formatClock(node.at ?? 0)}</span></div>
                 ${node.reason ? `<div class="ri-node-line">${escapeHtml(node.reason)}</div>` : ''}
               </div>
             </li>`;

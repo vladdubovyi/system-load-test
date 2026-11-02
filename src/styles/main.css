@@ -1198,9 +1198,12 @@ body.sandbox-mode #app {
   transition: transform 0.12s, box-shadow 0.12s;
 }
 
+/* Keep the vertical centering from .port-in/.port-out while scaling —
+   without it the port jumps 7px when hovered or targeted by a drag, and the
+   release can miss it. */
 .port:hover,
 .port-active {
-  transform: scale(1.35);
+  transform: translateY(-50%) scale(1.35);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -2393,4 +2396,123 @@ body.sandbox-mode #app {
 
 .canvas-app.sim-paused .belt-fill {
   animation-play-state: paused;
+}
+
+/* ===== Design-check lint panel (flow correctness, Phase 3) ===== */
+
+.lint-panel {
+  position: absolute;
+  top: 100px;
+  left: 12px;
+  width: min(340px, calc(100vw - 24px));
+  max-height: calc(100% - 200px);
+  display: flex;
+  flex-direction: column;
+  z-index: 70;
+  background: var(--surface);
+  border: 1px solid rgba(240, 140, 0, 0.45);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  font-size: 0.8rem;
+  color: var(--ink);
+  overflow: hidden;
+  animation: ri-pop 0.16s ease-out;
+}
+
+.lint-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 0.7rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(240, 140, 0, 0.08);
+}
+
+.lint-title {
+  font-weight: 700;
+  font-size: 0.86rem;
+  flex: 1;
+  color: #b45309;
+}
+
+.lint-count {
+  min-width: 20px;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(240, 140, 0, 0.16);
+  color: #92400e;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.lint-close {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.lint-close:hover {
+  background: #f1f3f4;
+}
+
+.lint-list {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.lint-issue {
+  display: flex;
+  gap: 0.45rem;
+  align-items: baseline;
+  line-height: 1.4;
+}
+
+.lint-kind {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  background: rgba(240, 140, 0, 0.16);
+  color: #92400e;
+  font-size: 0.64rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.lint-footer {
+  padding: 0.5rem 0.7rem;
+  border-top: 1px solid var(--border);
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+}
+
+/* ===== Board toast (rejected connections etc.) ===== */
+
+.board-toast {
+  position: absolute;
+  bottom: 88px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(560px, 90vw);
+  padding: 0.45rem 0.95rem;
+  background: rgba(32, 33, 36, 0.92);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  box-shadow: var(--shadow-lg);
+  pointer-events: none;
+  z-index: 80;
+  animation: ri-pop 0.16s ease-out;
 }

@@ -211,10 +211,13 @@ compute, storage auto-complete) are replaced by one interpreter:
    never fails a `returnTo` leg on reachability, since it reuses the forward
    belt.
 
-Legacy compatibility: today's heuristics are expressed as a **default
-FlowSpec** (used when a challenge defines no flows), so the engine has exactly
-one routing code path. The legacy default keeps redis acceptable as a
-terminal so old behavior is preserved until a challenge opts into real flows.
+Legacy compatibility *(amended during Phase 2)*: request kinds without a
+FlowSpec keep the **legacy heuristic routing** as a separate code path rather
+than a "default FlowSpec". A FlowSpec cannot express the legacy ingress
+fan-out (an LB picking uniformly among heterogeneous forward targets), which
+pre-flow starters depend on — ordered steps either starve or overload them.
+Old behavior is preserved exactly until a challenge opts into real flows; the
+legacy path is deleted in Phase 5 once every challenge carries flows.
 
 Per-flow counters: `totalCompleted`/`totalDropped` become per-kind maps, plus
 `totalViolated`. Telemetry and the report consume these.
@@ -270,16 +273,30 @@ export interface Objectives {
 
 New `src/game/flow-validator.ts`:
 
-- For each FlowSpec, BFS over the product graph *(component, stepIndex)* from
-  the source to check at least one satisfying path exists; report the first
-  unsatisfiable step with the frontier components, e.g.
-  *"Reads can reach Redis, but a cache miss has nowhere to go — connect a
-  compute service to the Database."*
+- For each FlowSpec, BFS over the product graph *(component, remaining
+  steps)* from the source, using the interpreter's own matching helpers.
+  *(Amended during Phase 3:)* the lint reports **every reachable dead end**,
+  not just the first unsatisfiable step — the engine routes uniformly over
+  satisfying belts, so any reachable dead end receives real traffic and
+  violates at run time. Both arms of a probabilistic branch are checked, e.g.
+  *"read requests need a durable store (database) after "Redis Cache", but
+  nothing is connected."* (Miss chaining is physical, §4: the request
+  continues from the cache node, so the remedy is a belt out of the cache.)
+  `returnTo` legs resume at the recorded caller and never fail on
+  reachability, matching §5. The walk starts from **every** component wired
+  to the source: the engine was changed alongside (also Phase 3) to spawn
+  uniformly over all source belts instead of only the first, so a second
+  ingress is real traffic rather than a silently dead wire.
 - Runs on Play (blocking is a UX choice: v1 shows warnings but lets the run
   proceed, since runtime violations now make the failure visible anyway).
-- Surfaced in a lint panel in the sandbox; also reuse it to explain rejected
-  connections (today `canConnect` fails silently). Longer term `canConnect`'s
-  pair table is derived from capabilities.
+  Scenarios without flows are never linted.
+- Surfaced in a dismissible lint panel in the sandbox (`src/ui/lint-panel.ts`).
+  Rejected connections get their own explanation: `canConnect` failures show
+  a toast (`src/ui/toast.ts`) with a reason generated from the pair table
+  (`connectionRejectionReason`). `canConnect` also gained the queue hops the
+  file-storage starter already ships (compute → queue, queue → compute), so
+  every starter belt is drawable by hand. Longer term `canConnect`'s pair
+  table is derived from capabilities.
 
 ## 8. Phasing (one PR each)
 
@@ -288,8 +305,8 @@ New `src/game/flow-validator.ts`:
 | 0a | Spec | This document. |
 | 0b | Tracing foundation | Land the in-flight request-tracing work (request identity, `events[]`, inspector, belt-geometry, pause/resume). Include the `report.ts` `COMPONENT_DEFS` crash fix so the report survives the default starter board. |
 | 1 | Capability model + types | `capabilities.ts`, taxonomy adapter, `flow-types.ts`, URL Shortener FlowSpec as a TS constant, `ScenarioDefinition.flows/objectives` fields, runtime plumbing (`scenario-runtime.ts`, `api/client.ts` mapping consolidation). No engine behavior change. |
-| 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; `returnTo` execution (reverse-belt leg, unrendered); per-flow counters; generalized `RequestKind`; legacy default FlowSpec for challenges without flows; wire URL Shortener challenge to its flows. |
-| 3 | Lint + UX | `flow-validator.ts`, lint panel, violation reasons in request inspector, toast for rejected connections. |
+| 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; `returnTo` execution (reverse-belt leg, unrendered); per-flow counters; generalized `RequestKind`; legacy heuristics retained for challenges without flows (see §5 amendment); wire URL Shortener challenge to its flows. *(Shipped; the Instagram feed opted into flows shortly after.)* |
+| 3 | Lint + UX | `flow-validator.ts`, lint panel, violation reasons in request inspector, toast for rejected connections. *(Shipped; the inspector's violation rendering had already landed with Phase 2 and is now covered by e2e tests.)* |
 | 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks; wire the traffic config panel into the engine (its edits are currently ignored). |
 | 5 | Serialization + authoring | Flows/objectives/capabilities into backend `ScenarioConfig` (jsonb, no migration) and `ChallengeSeeder`; tags (§4.1); challenge-authoring endpoints/UI. Separate mini-spec before implementation. |
 

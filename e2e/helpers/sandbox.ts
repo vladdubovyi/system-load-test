@@ -18,6 +18,10 @@ export class SandboxPage {
   readonly title: Locator;
   readonly reportOverlay: Locator;
   readonly configPalette: Locator;
+  readonly lintPanel: Locator;
+  readonly lintIssues: Locator;
+  readonly boardToast: Locator;
+  readonly requestInspector: Locator;
 
   constructor(readonly page: Page) {
     this.board = page.locator('#board');
@@ -29,6 +33,10 @@ export class SandboxPage {
     this.title = page.locator('.chrome-brand-name');
     this.reportOverlay = page.locator('#report-overlay');
     this.configPalette = page.locator('#config-palette');
+    this.lintPanel = page.locator('#lint-panel');
+    this.lintIssues = page.locator('#lint-panel .lint-issue');
+    this.boardToast = page.locator('#board-toast');
+    this.requestInspector = page.locator('#request-inspector');
   }
 
   async goto(slug?: string): Promise<void> {
@@ -110,6 +118,108 @@ export class SandboxPage {
   /** Connect the "Incoming Requests" source to a component's input port. */
   async connectFromSource(inPort: Locator): Promise<void> {
     await this.connect(this.sourcePort(), inPort);
+  }
+
+  /** Select a component by its visible label and delete it with the keyboard. */
+  async deleteComponent(label: string): Promise<void> {
+    const node = this.component(label);
+    await node.click();
+    await expect(node).toHaveClass(/selected/);
+    await this.page.keyboard.press('Delete');
+    await expect(node).toHaveCount(0);
+  }
+
+  /**
+   * Flow-level request totals from the engine. `totalViolated` and the
+   * per-kind completion map have no visible UI yet (that ships with the lint
+   * panel), so they are read from the debug hook. Missing counters map to -1
+   * so assertions fail loudly instead of passing on `undefined`.
+   */
+  async flowTotals(): Promise<{
+    spawned: number;
+    completed: number;
+    violated: number;
+    completedByKind: Record<string, number>;
+  }> {
+    return this.page.evaluate(() => {
+      const dbg = (
+        window as unknown as {
+          __breakitDebug?: {
+            state: {
+              engine: {
+                getSnapshot(): {
+                  totalSpawned?: number;
+                  totalCompleted?: number;
+                  totalViolated?: number;
+                  completedByKind?: Record<string, number>;
+                };
+              } | null;
+            };
+          };
+        }
+      ).__breakitDebug;
+      const snap = dbg?.state.engine?.getSnapshot();
+      return {
+        spawned: snap?.totalSpawned ?? -1,
+        completed: snap?.totalCompleted ?? -1,
+        violated: snap?.totalViolated ?? -1,
+        completedByKind: snap?.completedByKind ?? {},
+      };
+    });
+  }
+
+  /**
+   * Trace the oldest live request in the running simulation. Clicking a
+   * moving canvas dot is not reliably automatable, so this drives the same
+   * `traceRequest` entry point the click handler uses via the dev hook; all
+   * assertions still run against the visible inspector panel.
+   */
+  async traceAnyActiveRequest(): Promise<void> {
+    await this.page.waitForFunction(() => {
+      const dbg = (
+        window as unknown as {
+          __breakitDebug?: {
+            state: { engine: { getSnapshot(): { activeRequests: { id: number }[] } } | null };
+          };
+        }
+      ).__breakitDebug;
+      return (dbg?.state.engine?.getSnapshot().activeRequests.length ?? 0) > 0;
+    });
+    await this.page.evaluate(() => {
+      const dbg = (
+        window as unknown as {
+          __breakitDebug?: {
+            state: { engine: { getSnapshot(): { activeRequests: { id: number }[] } } | null };
+            traceRequest(id: number): void;
+          };
+        }
+      ).__breakitDebug;
+      const first = dbg?.state.engine?.getSnapshot().activeRequests[0];
+      if (first) dbg?.traceRequest(first.id);
+    });
+  }
+
+  /**
+   * Requests processed so far by the component with this label. Processed
+   * counts have no visible representation (the HUD only shows totals), so
+   * this reads the engine snapshot through the dev hook.
+   */
+  async processedCount(label: string): Promise<number> {
+    return this.page.evaluate((wanted) => {
+      const dbg = (
+        window as unknown as {
+          __breakitDebug?: {
+            state: {
+              components: { id: string; label: string }[];
+              engine: { getSnapshot(): { components: Map<string, { processed: number }> } } | null;
+            };
+          };
+        }
+      ).__breakitDebug;
+      const comp = dbg?.state.components.find((c) => c.label === wanted);
+      if (!comp) return -1;
+      return dbg?.state.engine?.getSnapshot().components.get(comp.id)?.processed ?? -1;
+    }, label);
   }
 
   async engineStatus(): Promise<SimulationStatus> {

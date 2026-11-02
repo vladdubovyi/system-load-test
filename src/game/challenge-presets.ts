@@ -32,6 +32,8 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: 'ch-writes:out', to: 'ch-redis:in' },
       { from: 'ch-reads:out', to: 'ch-redis:in' },
       { from: 'ch-reads:out', to: 'ch-db:in' },
+      // Cache misses chain onward from Redis to the database (flow-correctness).
+      { from: 'ch-redis:out', to: 'ch-db:in' },
     ],
   },
   dropbox: {
@@ -73,9 +75,13 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: `${SOURCE_ID}:out`, to: 'ig-lb:in' },
       { from: 'ig-lb:out', to: 'ig-cdn:in' },
       { from: 'ig-lb:out', to: 'ig-api:in' },
+      // Edge-cache misses continue from the CDN to the feed service.
+      { from: 'ig-cdn:out', to: 'ig-api:in' },
       { from: 'ig-api:out', to: 'ig-redis:in' },
       { from: 'ig-api:out', to: 'ig-feed:in' },
       { from: 'ig-api:out', to: 'ig-media:in' },
+      // Cache misses chain onward from Redis to the feed store.
+      { from: 'ig-redis:out', to: 'ig-feed:in' },
     ],
   },
   'rate-limiter': {

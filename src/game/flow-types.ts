@@ -35,9 +35,11 @@ export interface FlowStep {
   /** Reaching (and being processed by) this step completes the request. */
   terminal?: boolean;
   /**
-   * RESERVED (not interpreted yet): after this step, control returns to the
-   * step with this id (round-trip / response-path modeling). Declared now so
-   * adding return legs later is a non-breaking schema change.
+   * RPC semantics: after this step's node processes the request, the request
+   * travels back to the component that satisfied the step with this id and
+   * the flow resumes there. The return legs reuse the same belts in reverse —
+   * no extra connection is required — with travel time charged normally and a
+   * 'returned' event logged. The return journey is not rendered in v1.
    */
   returnTo?: string;
   /** Human label used in lint and violation messages. */
@@ -48,6 +50,28 @@ export interface FlowSpec {
   /** Request kind this flow governs; spawn share comes from TrafficProfile.requestTypes. */
   kind: string;
   steps: FlowStep[];
+}
+
+/**
+ * The engine's per-request flow cursor: where in its FlowSpec a live request
+ * currently is. Attached to Request when the active scenario defines a flow
+ * for the request's kind; requests without one use the legacy routing
+ * heuristics.
+ */
+export interface RequestFlowState {
+  kind: string;
+  /** Number of steps satisfied so far (telemetry/debugging only). */
+  stepIndex: number;
+  /** Steps still ahead of the request, including branch-injected ones. */
+  pending: FlowStep[];
+  /** Component that satisfied each step id — lookup target for returnTo. */
+  satisfiedBy: Record<string, string>;
+  /** Forward hops taken, so return legs can retrace the same belts. */
+  trail: { beltId: string; fromComponentId: string }[];
+  /** Active reverse journey back to a returnTo caller (never rendered). */
+  returnLeg: { belts: string[]; index: number; callerId: string } | null;
+  /** True right after a return leg lands: route onward without re-matching. */
+  resume: boolean;
 }
 
 /** Data-driven win conditions, evaluated at the end of a run (Phase 4). */

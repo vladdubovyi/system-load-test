@@ -41,8 +41,12 @@ import {
   isCacheType,
   isComputeType,
   isIngressType,
+  isQueueType,
   isStorageType,
 } from './component-taxonomy';
+import { getCapabilities } from './capabilities';
+import { allSteps, describeSelector, matchPendingStep, selectorMatches } from './flows';
+import type { FlowSpec, FlowStep, RequestFlowState } from './flow-types';
 import { getComponentDef } from './component-catalog';
 import { getActiveScenario, type RuntimeScenario } from './scenario-runtime';
 import { beltLength, beltTravelSeconds } from './belt-geometry';
@@ -263,14 +267,71 @@ export function canConnect(
   }
 
   if (fromType === 'backend' || isComputeType(fromType ?? '')) {
-    return isStorageType(toType) || toType === 'redis' || toType === 'database';
+    // Compute may also hand work to a queue (the file-storage starter's
+    // API → Message Queue belt).
+    return (
+      isStorageType(toType) || isQueueType(toType) || toType === 'redis' || toType === 'database'
+    );
+  }
+
+  if (isQueueType(fromType ?? '')) {
+    // A queue feeds workers: Message Queue → Worker Service.
+    return isComputeType(toType);
   }
 
   if (isStorageType(fromType ?? '') || fromType === 'redis' || fromType === 'database') {
+    // A cache may chain to a durable store: that belt carries cache misses
+    // onward to the database (flow-correctness miss chaining).
+    if (isCacheType(fromType ?? '') && isStorageType(toType)) return true;
     return isComputeType(toType) || toType === 'backend' || toType === 'shortener';
   }
 
   return false;
+}
+
+/**
+ * Human explanation for a wire `canConnect` refuses, shown as a toast where
+ * the rejection used to be silent. Must stay in sync with the pair table in
+ * `canConnect` above (longer term both derive from capabilities).
+ */
+export function connectionRejectionReason(
+  fromPort: Port,
+  toPort: Port,
+  componentMap: Map<string, PlacedComponent>
+): string {
+  if (fromPort.componentId === toPort.componentId) {
+    return 'A component cannot connect to itself.';
+  }
+
+  const to = componentMap.get(toPort.componentId);
+  const toLabel = to?.label ?? 'that component';
+
+  if (fromPort.componentId === SOURCE_ID) {
+    return `Incoming requests can only go to an ingress — a load balancer or API gateway — not ${toLabel}.`;
+  }
+
+  const from = componentMap.get(fromPort.componentId);
+  if (!from || !to) return 'That connection is not possible.';
+
+  if (isIngressType(from.type)) {
+    return `${from.label} can forward to compute services, rate limiters, CDNs, or another ingress — not ${toLabel}.`;
+  }
+  if (from.type === 'rate-limiter' || from.type === 'cdn') {
+    return `${from.label} can only forward to a compute service — not ${toLabel}.`;
+  }
+  if (isComputeType(from.type)) {
+    return `${from.label} can send work to a durable store (database), a cache, or a message queue — not ${toLabel}.`;
+  }
+  if (isQueueType(from.type)) {
+    return `${from.label} can only feed a compute service such as a worker — not ${toLabel}.`;
+  }
+  if (isCacheType(from.type)) {
+    return `${from.label} can pass cache misses to a durable store or serve a compute service — not ${toLabel}.`;
+  }
+  if (isStorageType(from.type)) {
+    return `${from.label} can only serve a compute service — not ${toLabel}.`;
+  }
+  return `${from.label} cannot connect to ${toLabel}.`;
 }
 
 export type TopologyChangeListener = () => void;
@@ -296,6 +357,15 @@ export class SimulationEngine {
   private totalSpawned = 0;
   private totalCompleted = 0;
   private totalDropped = 0;
+  private totalViolated = 0;
+  private spawnedByKind = new Map<string, number>();
+  private completedByKind = new Map<string, number>();
+  private droppedByKind = new Map<string, number>();
+  private violatedByKind = new Map<string, number>();
+  /** Violation tallies keyed `${kind}:${stepId}` for the end-of-run report. */
+  private violationsByStep = new Map<string, number>();
+  /** Flow spec per request kind; kinds without one use legacy routing. */
+  private flowsByKind = new Map<string, FlowSpec>();
   private currentRps = getActiveScenario().baseRps;
   private spikeActive = false;
   private spikeTimer = 0;
@@ -326,6 +396,9 @@ export class SimulationEngine {
     scenario: RuntimeScenario = getActiveScenario()
   ) {
     this.scenario = scenario;
+    for (const spec of scenario.flows ?? []) {
+      this.flowsByKind.set(spec.kind, spec);
+    }
     this.componentConfigs = componentConfigs;
     this.components = components;
     this.belts = belts;
@@ -668,6 +741,46 @@ export class SimulationEngine {
     return component.queueLimit;
   }
 
+  /**
+   * Estimated share of total traffic a scale group will receive, used by
+   * predictive pre-scaling. With flows: the summed spawn weight of every
+   * request kind whose flow this component can serve, split evenly across
+   * the scale groups that can serve it (the interpreter picks uniformly
+   * among satisfying belts). Without flows: the legacy readRatio split by
+   * legacy type.
+   */
+  private predictiveTrafficShare(component: PlacedComponent): number {
+    if (this.flowsByKind.size === 0) {
+      return component.type === 'backend'
+        ? this.scenario.readRatio
+        : 1 - this.scenario.readRatio;
+    }
+
+    const weights = Object.entries(this.scenario.requestTypes ?? {}).filter(
+      ([, weight]) => weight > 0
+    );
+    const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
+    if (total <= 0) return 0;
+
+    const serves = (type: string, kind: string): boolean => {
+      const spec = this.flowsByKind.get(kind);
+      // Kinds without a flow route by the legacy heuristics, which spread
+      // traffic across every compute tier.
+      if (!spec) return isComputeType(type);
+      return allSteps(spec).some((step) => selectorMatches(step.require, type));
+    };
+
+    let share = 0;
+    for (const [kind, weight] of weights) {
+      if (!serves(component.type, kind)) continue;
+      const peerGroups = this.components.filter(
+        (c) => isScalePrimary(c) && isScalableType(c.type) && serves(c.type, kind)
+      ).length;
+      share += weight / total / Math.max(1, peerGroups);
+    }
+    return share;
+  }
+
   private applyPredictiveScaling(): void {
     if (!this.spikeActive) return;
 
@@ -678,10 +791,7 @@ export class SimulationEngine {
       const scaling = this.scalingState.get(component.id)!;
       if (!cfg?.predictive.enabled || !cfg.horizontal.enabled) continue;
 
-      const trafficShare =
-        component.type === 'backend'
-          ? this.scenario.readRatio
-          : 1 - this.scenario.readRatio;
+      const trafficShare = this.predictiveTrafficShare(component);
       const needed = Math.ceil(
         (this.currentRps * trafficShare) / component.capacity
       );
@@ -824,13 +934,27 @@ export class SimulationEngine {
     }
   }
 
+  private resetRequestCounters(): void {
+    this.totalSpawned = 0;
+    this.totalCompleted = 0;
+    this.totalDropped = 0;
+    this.totalViolated = 0;
+    this.spawnedByKind.clear();
+    this.completedByKind.clear();
+    this.droppedByKind.clear();
+    this.violatedByKind.clear();
+    this.violationsByStep.clear();
+  }
+
+  private bump(map: Map<string, number>, key: string): void {
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+
   start(): void {
     this.time = 0;
     this.status = 'running';
     this.spawnAccumulator = 0;
-    this.totalSpawned = 0;
-    this.totalCompleted = 0;
-    this.totalDropped = 0;
+    this.resetRequestCounters();
     this.requests = [];
     this.finishedRequests = [];
     this.pendingRecoveries = [];
@@ -860,9 +984,7 @@ export class SimulationEngine {
     this.restoreInitialTopology();
     this.resetStates();
     this.onTopologyChange?.();
-    this.totalSpawned = 0;
-    this.totalCompleted = 0;
-    this.totalDropped = 0;
+    this.resetRequestCounters();
     this.message = 'Wire up your system, then press Play.';
   }
 
@@ -1032,6 +1154,13 @@ export class SimulationEngine {
    */
   private placeOnBelt(request: Request, belt: ConveyorBelt, headStart = 0): void {
     const beltSt = this.beltState.get(belt.id)!;
+    if (request.flow) {
+      const fromPort = this.portMap.get(belt.fromPortId);
+      request.flow.trail.push({
+        beltId: belt.id,
+        fromComponentId: fromPort?.componentId ?? SOURCE_ID,
+      });
+    }
     request.beltId = belt.id;
     request.targetPortId = belt.toPortId;
     request.currentComponentId = null;
@@ -1049,7 +1178,7 @@ export class SimulationEngine {
     }
   }
 
-  private finishRequest(request: Request, state: 'done' | 'dropped'): void {
+  private finishRequest(request: Request, state: 'done' | 'dropped' | 'violated'): void {
     request.state = state;
     request.finishedAt = this.time;
     request.beltId = null;
@@ -1067,6 +1196,23 @@ export class SimulationEngine {
     });
     this.finishRequest(request, 'dropped');
     this.totalDropped += 1;
+    this.bump(this.droppedByKind, request.kind);
+  }
+
+  /** Terminate a request that cannot take its next required flow step. */
+  private violateRequest(
+    request: Request,
+    component: PlacedComponent,
+    step: FlowStep | null,
+    reason: string
+  ): void {
+    this.logEvent(request, this.componentEvent('violated', component, { detail: reason }));
+    this.finishRequest(request, 'violated');
+    this.totalViolated += 1;
+    this.bump(this.violatedByKind, request.kind);
+    if (step) {
+      this.bump(this.violationsByStep, `${request.kind}:${step.id}`);
+    }
   }
 
   private spawnRequest(headStart = 0): void {
@@ -1077,17 +1223,19 @@ export class SimulationEngine {
       return;
     }
 
-    const belt = outgoing[0];
-    const beltSt = this.beltState.get(belt.id)!;
-    if (beltSt.traveling >= belt.capacity * 0.9) {
-      beltSt.dropped += 1;
+    // Every wire out of the source carries traffic: pick uniformly among the
+    // belts with headroom, and only drop when all of them are congested.
+    const belt = this.pickAvailableBelt(outgoing);
+    if (!belt) {
+      this.beltState.get(outgoing[0].id)!.dropped += 1;
       this.totalDropped += 1;
       return;
     }
 
-    const kind: RequestKind = Math.random() < this.scenario.readRatio ? 'read' : 'create';
+    const kind = this.pickRequestKind();
     const { colorIndex, celebrity } = pickRequestColor(this.scenario);
     const id = nextRequestId++;
+    const spec = this.flowsByKind.get(kind);
 
     const request: Request = {
       id,
@@ -1107,6 +1255,17 @@ export class SimulationEngine {
       visualKey: visualKeyFor(id),
       arrivedAt: null,
       events: [],
+      flow: spec
+        ? {
+            kind,
+            stepIndex: 0,
+            pending: [...spec.steps],
+            satisfiedBy: {},
+            trail: [],
+            returnLeg: null,
+            resume: false,
+          }
+        : null,
     };
 
     const target = this.targetComponentOf(belt);
@@ -1119,6 +1278,22 @@ export class SimulationEngine {
     this.placeOnBelt(request, belt, headStart);
     this.requests.push(request);
     this.totalSpawned += 1;
+    this.bump(this.spawnedByKind, kind);
+  }
+
+  /** Weighted pick over the scenario's request kinds. */
+  private pickRequestKind(): RequestKind {
+    const entries = Object.entries(this.scenario.requestTypes ?? {}).filter(([, w]) => w > 0);
+    if (entries.length === 0) {
+      return Math.random() < this.scenario.readRatio ? 'read' : 'create';
+    }
+    const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+    let roll = Math.random() * total;
+    for (const [kind, weight] of entries) {
+      roll -= weight;
+      if (roll <= 0) return kind;
+    }
+    return entries[entries.length - 1][0];
   }
 
   private updateBelts(dt: number): void {
@@ -1127,6 +1302,11 @@ export class SimulationEngine {
 
       request.progress += request.travelSpeed * dt;
       if (request.progress < 1) continue;
+
+      if (request.flow?.returnLeg) {
+        this.advanceReturnLeg(request);
+        continue;
+      }
 
       // Carry the overshoot into the next hop so streams stay evenly spaced.
       const overshootSeconds = (request.progress - 1) / request.travelSpeed;
@@ -1181,6 +1361,10 @@ export class SimulationEngine {
   ): AcceptResult {
     if (state.failed) return { ok: false, reason: `${component.label} is down` };
     if (state.startingUp) return { ok: false, reason: `${component.label} is still starting up` };
+
+    if (request.flow) {
+      return this.acceptFlowRequest(request, component, headStart);
+    }
 
     if (
       component.type === 'load-balancer' ||
@@ -1322,7 +1506,9 @@ export class SimulationEngine {
       }
     }
 
-    this.requests = this.requests.filter((r) => r.state !== 'done' && r.state !== 'dropped');
+    this.requests = this.requests.filter(
+      (r) => r.state !== 'done' && r.state !== 'dropped' && r.state !== 'violated'
+    );
   }
 
   private canEmitOnBelt(belt: ConveyorBelt): boolean {
@@ -1336,7 +1522,22 @@ export class SimulationEngine {
     return available[Math.floor(Math.random() * available.length)];
   }
 
+  /**
+   * Process one queued request at a component. Flow-driven requests go
+   * through the flow interpreter; requests of kinds without a FlowSpec keep
+   * the legacy type-based heuristics so pre-flow challenges behave exactly
+   * as before.
+   */
   private completeOneRequest(component: PlacedComponent, headStart = 0): boolean {
+    const request = this.requests.find(
+      (r) => r.state === 'queued' && r.currentComponentId === component.id
+    );
+    if (!request) return false;
+    if (request.flow) return this.interpretQueuedRequest(component, request, headStart);
+    return this.legacyCompleteOneRequest(component, headStart);
+  }
+
+  private legacyCompleteOneRequest(component: PlacedComponent, headStart = 0): boolean {
     const outPort = getComponentPorts(component).find((p) => p.side === 'out');
     if (!outPort) {
       return this.completeQueuedRequest(component);
@@ -1463,7 +1664,399 @@ export class SimulationEngine {
     this.logEvent(request, this.componentEvent('completed', component));
     this.finishRequest(request, 'done');
     this.totalCompleted += 1;
+    this.bump(this.completedByKind, request.kind);
     return true;
+  }
+
+  // ---------------------------------------------------------------------
+  // Flow interpreter (docs/specs/flow-correctness.md §5)
+  // ---------------------------------------------------------------------
+
+  /** Advance the cursor past (and including) the step at `index`. */
+  private consumeStep(
+    flow: RequestFlowState,
+    index: number,
+    component: PlacedComponent
+  ): FlowStep {
+    const step = flow.pending[index];
+    flow.pending = flow.pending.slice(index + 1);
+    flow.stepIndex += index + 1;
+    flow.satisfiedBy[step.id] = component.id;
+    return step;
+  }
+
+  private resolveBranchProbability(probability: number | 'cacheHitRatio'): number {
+    return probability === 'cacheHitRatio' ? this.scenario.cacheHitRatio : probability;
+  }
+
+  /**
+   * Choose the outgoing belt for the next flow step. Optional steps are
+   * taken when a satisfying belt exists (and skipped when it is merely
+   * congested); a required step with no satisfying belt at all is a flow
+   * violation, while a temporarily unusable one asks the caller to retry.
+   */
+  private pickFlowRoute(
+    component: PlacedComponent,
+    steps: FlowStep[]
+  ):
+    | { kind: 'belt'; belt: ConveyorBelt }
+    | { kind: 'wait' }
+    | { kind: 'violated'; step: FlowStep | null } {
+    const outPort = getComponentPorts(component).find((p) => p.side === 'out');
+    const belts = outPort ? this.beltByFromPort.get(outPort.id) ?? [] : [];
+
+    for (const step of steps) {
+      const matching = belts.filter((belt) => {
+        const target = this.targetComponentOf(belt);
+        return target !== undefined && selectorMatches(step.require, target.type);
+      });
+      if (matching.length === 0) {
+        if (step.optional) continue;
+        return { kind: 'violated', step };
+      }
+      const usable = matching.filter((belt) => {
+        const target = this.targetComponentOf(belt)!;
+        const targetState = this.componentState.get(target.id);
+        if (!targetState || targetState.failed || this.isStartingUp(target.id)) return false;
+        return this.canEmitOnBelt(belt);
+      });
+      if (usable.length === 0) {
+        if (step.optional) continue;
+        return { kind: 'wait' };
+      }
+      return { kind: 'belt', belt: usable[Math.floor(Math.random() * usable.length)] };
+    }
+
+    // Ran out of steps without a terminal: a malformed spec
+    // (validateFlowSpec flags these) — fail the request visibly.
+    return { kind: 'violated', step: null };
+  }
+
+  private flowViolationReason(
+    request: Request,
+    component: PlacedComponent,
+    step: FlowStep | null
+  ): string {
+    const kind = request.flow?.kind ?? request.kind;
+    if (!step) {
+      return `${kind} ran out of flow steps at "${component.label}" without completing`;
+    }
+    const outPort = getComponentPorts(component).find((p) => p.side === 'out');
+    const belts = outPort ? this.beltByFromPort.get(outPort.id) ?? [] : [];
+    const targets = [
+      ...new Set(
+        belts
+          .map((belt) => this.targetComponentOf(belt)?.label)
+          .filter((label): label is string => label !== undefined)
+      ),
+    ];
+    const connected =
+      targets.length === 0
+        ? 'nothing is connected'
+        : `only ${targets.join(', ')} ${targets.length > 1 ? 'are' : 'is'} connected`;
+    return `${kind} needed ${describeSelector(step.require)} after "${component.label}", but ${connected}`;
+  }
+
+  /** Reason for a request landing on a node that satisfies no pending step. */
+  private unmatchedStepReason(request: Request, component: PlacedComponent): string {
+    const flow = request.flow!;
+    const next = flow.pending.find((s) => !s.optional) ?? flow.pending[0];
+    if (!next) {
+      return `${flow.kind} arrived at "${component.label}" after its flow already ended`;
+    }
+    return `${flow.kind} needed ${describeSelector(next.require)} but reached "${component.label}"`;
+  }
+
+  private completeFlowRequest(
+    request: Request,
+    component: PlacedComponent,
+    detail?: string
+  ): void {
+    this.logEvent(request, this.componentEvent('processed', component, detail ? { detail } : {}));
+    this.logEvent(request, this.componentEvent('completed', component));
+    this.finishRequest(request, 'done');
+    this.totalCompleted += 1;
+    this.bump(this.completedByKind, request.kind);
+  }
+
+  private forwardFlowRequest(
+    request: Request,
+    component: PlacedComponent,
+    belt: ConveyorBelt,
+    headStart: number,
+    detail?: string
+  ): void {
+    const target = this.targetComponentOf(belt);
+    this.logEvent(request, this.componentEvent('processed', component, detail ? { detail } : {}));
+    this.logEvent(
+      request,
+      this.componentEvent('forwarded', component, {
+        beltId: belt.id,
+        detail: `→ ${target?.label ?? this.labelFor(belt.toPortId)}`,
+      })
+    );
+    this.placeOnBelt(request, belt, headStart);
+  }
+
+  /**
+   * Flow interpreter core: advance the oldest queued request's cursor at
+   * this component. Returns true when a processing slot was consumed; false
+   * leaves the request queued for a retry (congested outgoing paths), just
+   * like the legacy routing.
+   */
+  private interpretQueuedRequest(
+    component: PlacedComponent,
+    request: Request,
+    headStart: number
+  ): boolean {
+    const flow = request.flow!;
+
+    if (flow.resume) {
+      // Just landed from a returnTo leg: this node already satisfied its
+      // step earlier — only route the next one.
+      const route = this.pickFlowRoute(component, flow.pending);
+      if (route.kind === 'wait') return false;
+      this.takeQueuedRequest(component);
+      flow.resume = false;
+      this.logEvent(request, this.componentEvent('processed', component));
+      if (route.kind === 'violated') {
+        this.violateRequest(
+          request,
+          component,
+          route.step,
+          this.flowViolationReason(request, component, route.step)
+        );
+        return true;
+      }
+      const target = this.targetComponentOf(route.belt);
+      this.logEvent(
+        request,
+        this.componentEvent('forwarded', component, {
+          beltId: route.belt.id,
+          detail: `→ ${target?.label ?? this.labelFor(route.belt.toPortId)}`,
+        })
+      );
+      this.placeOnBelt(request, route.belt, headStart);
+      return true;
+    }
+
+    const idx = matchPendingStep(flow.pending, component.type);
+    if (idx === -1) {
+      this.takeQueuedRequest(component);
+      this.logEvent(request, this.componentEvent('processed', component));
+      const next = flow.pending.find((s) => !s.optional) ?? flow.pending[0] ?? null;
+      this.violateRequest(request, component, next, this.unmatchedStepReason(request, component));
+      return true;
+    }
+
+    const step = flow.pending[idx];
+    let remainder = flow.pending.slice(idx + 1);
+    let branchDetail: string | undefined;
+
+    if (step.branch) {
+      const probability = this.resolveBranchProbability(step.branch.probability);
+      const hit = Math.random() < probability;
+      const isCacheBranch = step.branch.probability === 'cacheHitRatio';
+      const continuation = hit ? step.branch.onHit : step.branch.onMiss;
+      if (continuation === 'complete') {
+        this.takeQueuedRequest(component);
+        this.consumeStep(flow, idx, component);
+        this.completeFlowRequest(request, component, isCacheBranch ? 'cache hit' : undefined);
+        return true;
+      }
+      branchDetail = isCacheBranch ? (hit ? 'cache hit' : 'cache miss') : undefined;
+      remainder = [...continuation, ...remainder];
+    } else if (step.terminal) {
+      this.takeQueuedRequest(component);
+      this.consumeStep(flow, idx, component);
+      this.completeFlowRequest(request, component);
+      return true;
+    }
+
+    if (step.returnTo) {
+      this.takeQueuedRequest(component);
+      this.consumeStep(flow, idx, component);
+      flow.pending = remainder;
+      this.logEvent(
+        request,
+        this.componentEvent('processed', component, branchDetail ? { detail: branchDetail } : {})
+      );
+      this.startReturnLeg(request, component, step);
+      return true;
+    }
+
+    const route = this.pickFlowRoute(component, remainder);
+    // Leave the request queued without mutating its cursor; a discarded
+    // branch roll is simply re-rolled on the retry.
+    if (route.kind === 'wait') return false;
+
+    this.takeQueuedRequest(component);
+    this.consumeStep(flow, idx, component);
+    flow.pending = remainder;
+
+    if (route.kind === 'violated') {
+      this.logEvent(
+        request,
+        this.componentEvent('processed', component, branchDetail ? { detail: branchDetail } : {})
+      );
+      this.violateRequest(
+        request,
+        component,
+        route.step,
+        this.flowViolationReason(request, component, route.step)
+      );
+      return true;
+    }
+
+    this.forwardFlowRequest(request, component, route.belt, headStart, branchDetail);
+    return true;
+  }
+
+  /**
+   * Begin the reverse journey of a returnTo step: retrace the forward belts
+   * back to the component that satisfied the named step.
+   */
+  private startReturnLeg(request: Request, component: PlacedComponent, step: FlowStep): void {
+    const flow = request.flow!;
+    const callerId = flow.satisfiedBy[step.returnTo!];
+    const belts: string[] = [];
+    let found = false;
+    for (let i = flow.trail.length - 1; i >= 0; i--) {
+      belts.push(flow.trail[i].beltId);
+      if (flow.trail[i].fromComponentId === callerId) {
+        flow.trail = flow.trail.slice(0, i);
+        found = true;
+        break;
+      }
+    }
+    if (!callerId || !found) {
+      this.violateRequest(
+        request,
+        component,
+        step,
+        `${flow.kind} could not return to step "${step.returnTo}" from "${component.label}"`
+      );
+      return;
+    }
+    flow.returnLeg = { belts, index: 0, callerId };
+    this.placeOnReturnBelt(request, belts[0]);
+  }
+
+  /**
+   * Reverse traversal of a belt (returnTo leg): travel time is charged at
+   * the normal belt speed, but the leg is not rendered and does not count
+   * toward the belt's occupancy.
+   */
+  private placeOnReturnBelt(request: Request, beltId: string): void {
+    const belt = this.beltById.get(beltId);
+    if (!belt) {
+      this.dropRequest(request, 'return path no longer exists');
+      return;
+    }
+    request.beltId = belt.id;
+    request.targetPortId = belt.fromPortId;
+    request.currentComponentId = null;
+    request.arrivedAt = null;
+    request.state = 'traveling';
+    request.travelSpeed = this.beltTravelSpeed(belt);
+    request.progress = 0;
+  }
+
+  /** A return-leg belt finished: hop to the next one or land at the caller. */
+  private advanceReturnLeg(request: Request): void {
+    const flow = request.flow!;
+    const leg = flow.returnLeg!;
+    leg.index += 1;
+    if (leg.index < leg.belts.length) {
+      this.placeOnReturnBelt(request, leg.belts[leg.index]);
+      return;
+    }
+
+    const caller = this.componentMap.get(leg.callerId);
+    const callerState = caller ? this.componentState.get(caller.id) : undefined;
+    flow.returnLeg = null;
+    request.beltId = null;
+    request.progress = 0;
+    if (!caller || !callerState || callerState.failed) {
+      this.dropRequest(request, 'the calling component is no longer available', caller);
+      return;
+    }
+    this.logEvent(request, this.componentEvent('returned', caller));
+    const limit = this.getEffectiveQueueLimit(caller);
+    const queued = this.queuedCount(caller.id);
+    if (queued >= limit) {
+      callerState.dropped += 1;
+      this.dropRequest(request, `queue full (${queued}/${limit})`, caller);
+      return;
+    }
+    flow.resume = true;
+    request.currentComponentId = caller.id;
+    request.arrivedAt = this.time;
+    request.state = 'queued';
+  }
+
+  /**
+   * Arrival handling for flow-driven requests. Ingress and traffic-filter
+   * nodes stay pass-through — they route on arrival without queueing, as the
+   * legacy engine did — while every other node queues the request.
+   */
+  private acceptFlowRequest(
+    request: Request,
+    component: PlacedComponent,
+    headStart: number
+  ): AcceptResult {
+    const flow = request.flow!;
+    const caps = getCapabilities(component.type);
+    const passThrough = caps.has('ingress') || caps.has('traffic-filter');
+
+    if (passThrough && !flow.resume) {
+      const idx = matchPendingStep(flow.pending, component.type);
+      if (idx === -1) {
+        const next = flow.pending.find((s) => !s.optional) ?? flow.pending[0] ?? null;
+        this.violateRequest(request, component, next, this.unmatchedStepReason(request, component));
+        return { ok: true, routed: true };
+      }
+      const step = flow.pending[idx];
+      if (!step.terminal && !step.branch && !step.returnTo) {
+        const route = this.pickFlowRoute(component, flow.pending.slice(idx + 1));
+        if (route.kind === 'violated') {
+          this.consumeStep(flow, idx, component);
+          this.violateRequest(
+            request,
+            component,
+            route.step,
+            this.flowViolationReason(request, component, route.step)
+          );
+          return { ok: true, routed: true };
+        }
+        if (route.kind === 'wait') {
+          return { ok: false, reason: `link out of ${component.label} is congested` };
+        }
+        const targetComp = this.targetComponentOf(route.belt)!;
+        const limit = this.getEffectiveQueueLimit(targetComp);
+        const queued = this.queuedCount(targetComp.id);
+        if (queued >= limit) {
+          return { ok: false, reason: `${targetComp.label} queue full (${queued}/${limit})` };
+        }
+        this.consumeStep(flow, idx, component);
+        this.logEvent(
+          request,
+          this.componentEvent('routed', component, {
+            beltId: route.belt.id,
+            detail: `→ ${targetComp.label}`,
+          })
+        );
+        this.placeOnBelt(request, route.belt, headStart);
+        return { ok: true, routed: true };
+      }
+    }
+
+    const limit = this.getEffectiveQueueLimit(component);
+    const queued = this.queuedCount(component.id);
+    if (queued >= limit) {
+      return { ok: false, reason: `queue full (${queued}/${limit})` };
+    }
+    return { ok: true, routed: false };
   }
 
   private updateLoads(): void {
@@ -1542,6 +2135,12 @@ export class SimulationEngine {
       totalSpawned: this.totalSpawned,
       totalCompleted: this.totalCompleted,
       totalDropped: this.totalDropped,
+      totalViolated: this.totalViolated,
+      spawnedByKind: Object.fromEntries(this.spawnedByKind),
+      completedByKind: Object.fromEntries(this.completedByKind),
+      droppedByKind: Object.fromEntries(this.droppedByKind),
+      violatedByKind: Object.fromEntries(this.violatedByKind),
+      violationsByStep: Object.fromEntries(this.violationsByStep),
       currentRps: this.currentRps,
       spikeActive: this.spikeActive,
       message: this.message,

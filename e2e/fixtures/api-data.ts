@@ -231,7 +231,8 @@ export const CHALLENGES: ApiChallenge[] = [
 export const STARTER_PRESETS: Record<string, { components: number; belts: number; labels: string[] }> = {
   'url-shortener': {
     components: 5,
-    belts: 7,
+    // Includes the Redis → SQL Database belt that carries cache misses.
+    belts: 8,
     labels: ['Load Balancer', 'Microservice', 'Backend Service', 'Redis Cache', 'SQL Database'],
   },
   dropbox: {
@@ -241,7 +242,9 @@ export const STARTER_PRESETS: Record<string, { components: number; belts: number
   },
   'instagram-feed': {
     components: 6,
-    belts: 6,
+    // Includes the CDN → service (edge-cache miss) and Redis → NoSQL
+    // (cache miss) belts.
+    belts: 8,
     labels: ['Load Balancer', 'CDN', 'Backend Service', 'Redis Cache', 'NoSQL Database', 'Object Storage'],
   },
   'rate-limiter': {

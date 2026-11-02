@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { componentRegistry } from '../component-registry';
 import { allSteps, selectorMatches, validateFlowSpec, validateFlows } from '../flows';
-import { URL_SHORTENER_FLOWS, URL_SHORTENER_OBJECTIVES } from '../flow-presets';
+import {
+  INSTAGRAM_FEED_FLOWS,
+  URL_SHORTENER_FLOWS,
+  URL_SHORTENER_OBJECTIVES,
+} from '../flow-presets';
 import type { FlowSpec } from '../flow-types';
 
 describe('selectorMatches', () => {
@@ -191,5 +195,35 @@ describe('URL Shortener preset', () => {
     expect(URL_SHORTENER_OBJECTIVES.minCompletionRate).toEqual({ create: 0.95, read: 0.95 });
     expect(URL_SHORTENER_OBJECTIVES.maxViolationRate).toBe(0);
     expect(URL_SHORTENER_OBJECTIVES.noComponentFailures).toBe(true);
+  });
+});
+
+describe('Instagram feed preset', () => {
+  it('is structurally valid', () => {
+    expect(validateFlows(INSTAGRAM_FEED_FLOWS)).toEqual([]);
+  });
+
+  it('covers the challenge request kinds', () => {
+    expect(INSTAGRAM_FEED_FLOWS.map((f) => f.kind).sort()).toEqual(['feedLoad', 'like', 'post']);
+  });
+
+  it('serves feed loads from the CDN edge, with misses continuing to the service', () => {
+    const feed = INSTAGRAM_FEED_FLOWS.find((f) => f.kind === 'feedLoad')!;
+    const edge = feed.steps.find((s) => s.id === 'edge')!;
+    expect(edge.require.componentType).toBe('cdn');
+    expect(edge.optional).toBe(true);
+    expect(edge.branch?.onHit).toBe('complete');
+    // An edge miss injects nothing: the flow falls through to the service.
+    expect(edge.branch?.onMiss).toEqual([]);
+  });
+
+  it('requires writes to end in a durable store with no cache shortcut', () => {
+    for (const kind of ['post', 'like']) {
+      const spec = INSTAGRAM_FEED_FLOWS.find((f) => f.kind === kind)!;
+      const terminals = allSteps(spec).filter((s) => s.terminal);
+      expect(terminals).toHaveLength(1);
+      expect(terminals[0].require.capability).toBe('durable-store');
+      expect(allSteps(spec).some((s) => s.require.capability === 'cache')).toBe(false);
+    }
   });
 });

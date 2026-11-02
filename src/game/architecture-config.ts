@@ -136,7 +136,10 @@ export function createReferenceArchitectureConfig(): ArchitectureConfig {
         },
         predictive: {
           enabled: true,
-          preScaleFactor: 1.4,
+          // Tuned for the flow-era traffic split: the ingress spreads all
+          // request kinds evenly across compute tiers, so the shortener
+          // pre-scales as aggressively as the backend.
+          preScaleFactor: 1.75,
         },
       },
       backend: {

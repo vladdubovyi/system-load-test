@@ -462,6 +462,8 @@ export class BoardRenderer {
     const queuedByComponent = new Map<string, Request[]>();
     for (const req of snapshot.activeRequests) {
       if (req.state === 'traveling' && req.beltId) {
+        // returnTo legs travel belts in reverse and are not rendered in v1.
+        if (req.flow?.returnLeg) continue;
         traveling.push(req);
       } else if ((req.state === 'queued' || req.state === 'processing') && req.currentComponentId) {
         const list = queuedByComponent.get(req.currentComponentId);

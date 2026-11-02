@@ -1,10 +1,29 @@
 import { getCapabilities } from './capabilities';
+import type { Capability } from './capabilities';
+import { getComponentDef } from './component-catalog';
 import type { FlowSpec, FlowStep, NodeSelector } from './flow-types';
 
 /**
  * Runtime helpers over flow specs: selector matching (used by the Phase 2
  * interpreter and the Phase 3 lint) and structural validation of specs.
  */
+
+/** Human phrasing for flow-violation and lint messages. */
+export const CAPABILITY_PHRASES: Record<Capability, string> = {
+  ingress: 'an ingress (load balancer or gateway)',
+  'traffic-filter': 'a traffic filter',
+  compute: 'a compute service',
+  'durable-store': 'a durable store (database)',
+  cache: 'a cache',
+  queue: 'a message queue',
+};
+
+export function describeSelector(selector: NodeSelector): string {
+  if (selector.componentType) return `a ${getComponentDef(selector.componentType).label}`;
+  if (selector.capability) return CAPABILITY_PHRASES[selector.capability];
+  if (selector.tag) return `a component tagged "${selector.tag}"`;
+  return 'a matching component';
+}
 
 /** True when a component type satisfies a selector. All given criteria must match. */
 export function selectorMatches(selector: NodeSelector, componentType: string): boolean {
@@ -26,6 +45,20 @@ export function selectorMatches(selector: NodeSelector, componentType: string): 
     return false;
   }
   return true;
+}
+
+/**
+ * Index of the pending step a component satisfies, mirroring the engine's
+ * cursor semantics: leading optional steps that do not match are skippable,
+ * while a non-matching required step stops the scan.
+ */
+export function matchPendingStep(pending: readonly FlowStep[], componentType: string): number {
+  for (let i = 0; i < pending.length; i++) {
+    const step = pending[i];
+    if (selectorMatches(step.require, componentType)) return i;
+    if (!step.optional) return -1;
+  }
+  return -1;
 }
 
 function collectSteps(steps: FlowStep[], out: FlowStep[]): void {

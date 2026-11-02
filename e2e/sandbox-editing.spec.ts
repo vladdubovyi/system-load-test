@@ -324,4 +324,52 @@ test.describe('Sandbox board editing (continued)', () => {
     await expect(sandbox.components).toHaveCount(0);
     await expect(sandbox.configPalette).not.toHaveClass(/open/);
   });
+
+  test('compute services can hand work to a queue, and a queue can feed a worker', async ({ page }) => {
+    // The file-storage starter ships exactly these two belts; a user who
+    // deletes one must be able to draw it again.
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('dropbox');
+    await sandbox.reset();
+
+    const api = await sandbox.placeComponent('backend-service', 620, 336);
+    const queue = await sandbox.placeComponent('message-queue', 880, 336);
+    const worker = await sandbox.placeComponent('worker-service', 1140, 336);
+
+    await sandbox.connect(sandbox.port(api, 'out'), sandbox.port(queue, 'in'));
+    await expect(sandbox.belts).toHaveCount(1);
+    await expect(sandbox.boardToast).toHaveCount(0);
+
+    await sandbox.connect(sandbox.port(queue, 'out'), sandbox.port(worker, 'in'));
+    await expect(sandbox.belts).toHaveCount(2);
+    await expect(sandbox.boardToast).toHaveCount(0);
+  });
+
+  test('every ingress wired to the source receives traffic', async ({ page }) => {
+    // Two independent chains hanging off the source: both must see requests,
+    // not just whichever wire happened to be drawn first.
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    await sandbox.reset();
+
+    const lbTop = await sandbox.placeComponent('load-balancer', 620, 200);
+    const lbBottom = await sandbox.placeComponent('load-balancer', 620, 470);
+    const svcTop = await sandbox.placeComponent('microservice', 880, 200);
+    const svcBottom = await sandbox.placeComponent('backend-service', 880, 470);
+    const db = await sandbox.placeComponent('database', 1140, 336);
+
+    await sandbox.connectFromSource(sandbox.port(lbTop, 'in'));
+    await sandbox.connectFromSource(sandbox.port(lbBottom, 'in'));
+    await sandbox.connect(sandbox.port(lbTop, 'out'), sandbox.port(svcTop, 'in'));
+    await sandbox.connect(sandbox.port(lbBottom, 'out'), sandbox.port(svcBottom, 'in'));
+    await sandbox.connect(sandbox.port(svcTop, 'out'), sandbox.port(db, 'in'));
+    await sandbox.connect(sandbox.port(svcBottom, 'out'), sandbox.port(db, 'in'));
+    await expect(sandbox.belts).toHaveCount(6);
+
+    await sandbox.setSpeed(5);
+    await sandbox.playButton.click();
+    await expect(sandbox.lintPanel).toHaveCount(0);
+    await expect.poll(() => sandbox.processedCount('Microservice'), { timeout: 15_000 }).toBeGreaterThan(0);
+    await expect.poll(() => sandbox.processedCount('Backend Service'), { timeout: 15_000 }).toBeGreaterThan(0);
+  });
 });

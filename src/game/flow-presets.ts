@@ -62,8 +62,87 @@ export const URL_SHORTENER_OBJECTIVES: Objectives = {
   noComponentFailures: true,
 };
 
+/**
+ * Instagram feed: the CDN is an edge cache that serves hot feed loads
+ * outright and forwards misses to the service tier; service-level misses
+ * chain through Redis into a durable feed store. Writes (posts, likes)
+ * bypass the caches and must land in a durable store.
+ */
+export const INSTAGRAM_FEED_FLOWS: FlowSpec[] = [
+  {
+    kind: 'feedLoad',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      {
+        id: 'edge',
+        require: { componentType: 'cdn' },
+        optional: true,
+        label: 'Edge cache (CDN)',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          // A miss simply continues with the remaining steps at the service.
+          onMiss: [],
+        },
+      },
+      { id: 'service', require: { capability: 'compute' }, label: 'Feed service' },
+      {
+        id: 'cache',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Feed cache lookup',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            {
+              id: 'feed-db-read',
+              require: { capability: 'durable-store' },
+              terminal: true,
+              label: 'Feed store lookup (cache miss)',
+            },
+          ],
+        },
+      },
+      {
+        id: 'feed-db',
+        require: { capability: 'durable-store' },
+        terminal: true,
+        label: 'Feed store lookup',
+      },
+    ],
+  },
+  {
+    kind: 'post',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Feed service' },
+      {
+        id: 'store',
+        require: { capability: 'durable-store' },
+        terminal: true,
+        label: 'Persist post',
+      },
+    ],
+  },
+  {
+    kind: 'like',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Feed service' },
+      {
+        id: 'count',
+        require: { capability: 'durable-store' },
+        terminal: true,
+        label: 'Persist like',
+      },
+    ],
+  },
+];
+
 const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
   'url-shortener': URL_SHORTENER_FLOWS,
+  'instagram-feed': INSTAGRAM_FEED_FLOWS,
 };
 
 const OBJECTIVES_BY_SLUG: Record<string, Objectives> = {

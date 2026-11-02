@@ -41,6 +41,8 @@ export const URL_SHORTENER_PRESET: PresetBlueprint = {
     { from: 'preset-shortener:out', to: 'preset-redis:in' },
     { from: 'preset-backend:out', to: 'preset-redis:in' },
     { from: 'preset-backend:out', to: 'preset-db:in' },
+    // Cache misses chain onward from Redis to the database (flow-correctness).
+    { from: 'preset-redis:out', to: 'preset-db:in' },
   ],
 };
 

@@ -1,3 +1,5 @@
+import type { RequestFlowState } from './flow-types';
+
 // ComponentType is now a string to support dynamic components from backend
 // Legacy types for backward compatibility
 export type ComponentType = string;
@@ -9,7 +11,12 @@ export type LegacyComponentType =
   | 'database'
   | 'redis';
 
-export type RequestKind = 'create' | 'read';
+/**
+ * Request kinds are scenario-defined (spawn weights come from
+ * TrafficProfile.requestTypes): 'create' | 'read' for the URL shortener,
+ * 'check' for the rate limiter, 'feedLoad' for the feed, and so on.
+ */
+export type RequestKind = string;
 
 export type PortSide = 'in' | 'out';
 
@@ -46,12 +53,19 @@ export interface ConveyorBelt {
   capacity: number;
 }
 
-export type RequestState = 'traveling' | 'queued' | 'processing' | 'done' | 'dropped';
+export type RequestState =
+  | 'traveling'
+  | 'queued'
+  | 'processing'
+  | 'done'
+  | 'dropped'
+  /** Terminal: the request could not take its next required flow step. */
+  | 'violated';
 
 /**
  * One entry in a request's journey log. The sequence of events for a single
- * request reads like a trace: spawned → arrived → (routed | processed → forwarded)
- * → … → completed | dropped.
+ * request reads like a trace: spawned → arrived → (routed | processed → forwarded
+ * | returned) → … → completed | dropped | violated.
  */
 export type RequestEventKind =
   | 'spawned'
@@ -59,8 +73,12 @@ export type RequestEventKind =
   | 'routed'
   | 'processed'
   | 'forwarded'
+  /** Travelled back to the caller of a returnTo flow step. */
+  | 'returned'
   | 'completed'
-  | 'dropped';
+  | 'dropped'
+  /** Terminated because the next required flow step was unsatisfiable. */
+  | 'violated';
 
 export interface RequestEvent {
   kind: RequestEventKind;
@@ -100,6 +118,11 @@ export interface Request {
   /** Simulation time the request arrived at its current component (if queued). */
   arrivedAt: number | null;
   events: RequestEvent[];
+  /**
+   * Flow cursor when the active scenario defines a flow for this request's
+   * kind; null means the request is routed by the legacy heuristics.
+   */
+  flow: RequestFlowState | null;
 }
 
 export interface ComponentState {
@@ -131,6 +154,14 @@ export interface SimulationSnapshot {
   totalSpawned: number;
   totalCompleted: number;
   totalDropped: number;
+  /** Requests terminated by a flow violation (distinct from drops). */
+  totalViolated: number;
+  spawnedByKind: Record<string, number>;
+  completedByKind: Record<string, number>;
+  droppedByKind: Record<string, number>;
+  violatedByKind: Record<string, number>;
+  /** Violation tallies keyed `${kind}:${stepId}`, for the end-of-run report. */
+  violationsByStep: Record<string, number>;
   currentRps: number;
   spikeActive: boolean;
   message: string;

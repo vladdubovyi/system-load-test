@@ -13,8 +13,12 @@ import {
   getSourcePort,
   getComponentPorts,
   canConnect,
+  connectionRejectionReason,
   SOURCE_ID,
 } from '../game/simulation';
+import { lintBoard } from '../game/flow-validator';
+import { showLintPanel, hideLintPanel } from '../ui/lint-panel';
+import { showBoardToast, dismissBoardToast } from '../ui/toast';
 import { buildPreset, URL_SHORTENER_PRESET } from '../game/presets';
 import { buildChallengePreset } from '../game/challenge-presets';
 import { getComponentDef } from '../game/component-catalog';
@@ -1074,14 +1078,21 @@ function finishConnection(screenX: number, screenY: number): void {
   const fromPort = from.side === 'out' ? from : to;
   const toPort = to.side === 'in' ? to : from;
 
-  if (fromPort.side !== 'out' || toPort.side !== 'in') return;
-  if (!canConnect(fromPort, toPort, componentMap)) return;
+  if (fromPort.side !== 'out' || toPort.side !== 'in') {
+    showBoardToast('Connect an output port to an input port.');
+    return;
+  }
+  if (!canConnect(fromPort, toPort, componentMap)) {
+    showBoardToast(connectionRejectionReason(fromPort, toPort, componentMap));
+    return;
+  }
 
   const exists = state.belts.some(
     (b) => b.fromPortId === fromPort.id && b.toPortId === toPort.id
   );
   if (!exists) {
     state.belts.push(createBelt(fromPort.id, toPort.id));
+    dismissBoardToast();
     mountBoard();
     invalidateBoardSnapshot();
     pushHistory();
@@ -1115,6 +1126,7 @@ function zoomAt(screenX: number, screenY: number, factor: number): void {
 function resetBoard(): void {
   stopSimulation();
   closeRequestTrace();
+  hideLintPanel();
   invalidateBoardSnapshot();
   state.components = [];
   state.belts = [];
@@ -1130,6 +1142,7 @@ function resetBoard(): void {
 function loadChallengeStarter(): void {
   if (isSimRunning()) stopSimulation();
   closeRequestTrace();
+  hideLintPanel();
   invalidateBoardSnapshot();
 
   const slug = state.currentChallenge?.slug;
@@ -1167,6 +1180,20 @@ function startSimulation(): void {
   state.componentConfigs = cloneComponentConfigMap(boardSnapshotBeforeSim!.componentConfigs);
   state.selection = null;
   mountBoard();
+
+  // Design-time flow lint (spec §7): warnings only — the run proceeds, and
+  // requests that cannot take a required step fail as flow violations.
+  const lintIssues = lintBoard(
+    getActiveScenario().flows ?? [],
+    state.components,
+    state.belts
+  );
+  const workspace = document.querySelector('.canvas-workspace') as HTMLElement | null;
+  if (workspace && lintIssues.length > 0) {
+    showLintPanel(workspace, lintIssues);
+  } else {
+    hideLintPanel();
+  }
 
   state.engine = new SimulationEngine(
     state.components,
@@ -1522,6 +1549,8 @@ export function destroySandboxApp(): void {
   state.paused = false;
   state.tracedRequestId = null;
   unmountRequestInspector();
+  hideLintPanel();
+  dismissBoardToast();
   closeChallengeSelector();
   closeTrafficConfig();
   closeFailureInjection();

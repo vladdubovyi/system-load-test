@@ -33,6 +33,27 @@ for (let run = 0; run < runs; run++) {
       process.exit(1);
     }
   }
+
+  // Flow assertions: the reference preset satisfies the URL shortener flows,
+  // so no request may terminate as a flow violation and both kinds complete.
+  const snap = engine.getSnapshot();
+  if (snap.totalViolated !== 0) {
+    console.error(
+      `FAIL: reference preset produced ${snap.totalViolated} flow violations:`,
+      snap.violationsByStep
+    );
+    process.exit(1);
+  }
+  for (const kind of ['create', 'read']) {
+    const spawned = snap.spawnedByKind[kind] ?? 0;
+    const completed = snap.completedByKind[kind] ?? 0;
+    if (spawned === 0 || completed / spawned < 0.95) {
+      console.error(
+        `FAIL: kind "${kind}" completed ${completed}/${spawned} (< 95%)`
+      );
+      process.exit(1);
+    }
+  }
 }
 
 console.log(`Preset runs: ${runs}, score 100: ${hundreds}/${runs}, duration: ${SCENARIO.duration}s`);
