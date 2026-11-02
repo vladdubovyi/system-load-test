@@ -90,6 +90,7 @@ export function downloadReportPdf(report: SimulationReport): void {
     ['Requests spawned', report.totalSpawned.toLocaleString()],
     ['Requests completed', report.totalCompleted.toLocaleString()],
     ['Requests dropped', report.totalDropped.toLocaleString()],
+    ['Flow violations', report.totalViolated.toLocaleString()],
   ];
 
   autoTable(doc, {
@@ -171,18 +172,50 @@ export function downloadReportPdf(report: SimulationReport): void {
     'No obviously idle or duplicate resources detected.'
   );
 
-  if (report.missingComponents.length > 0) {
-    y = ensureSpace(doc, y, 20);
+  if (report.objectives.length > 0) {
+    y = ensureSpace(doc, y, 30);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(11);
-    doc.setTextColor(185, 28, 28);
-    doc.text('Missing required components', 14, y);
-    y += 6;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-    doc.text(report.missingComponents.join(', '), 14, y);
-    doc.setTextColor(0, 0, 0);
-    y += 10;
+    doc.setFontSize(12);
+    doc.text('Objectives', 14, y);
+    y += 4;
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Objective', 'Target', 'Measured', 'Result']],
+      body: report.objectives.map((objective) => [
+        objective.label,
+        objective.target,
+        objective.actual,
+        objective.met ? 'Met' : 'Missed',
+      ]),
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 2.5 },
+    });
+    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
+  }
+
+  if (report.flowStats.length > 0) {
+    y = ensureSpace(doc, y, 30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.text('Request flows', 14, y);
+    y += 4;
+
+    autoTable(doc, {
+      startY: y,
+      head: [['Kind', 'Spawned', 'Completed', 'Dropped', 'Violated', 'Completion']],
+      body: report.flowStats.map((stat) => [
+        stat.kind,
+        stat.spawned.toLocaleString(),
+        stat.completed.toLocaleString(),
+        stat.dropped.toLocaleString(),
+        stat.violated.toLocaleString(),
+        `${stat.completionRate}%`,
+      ]),
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 2.5 },
+    });
+    y = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 10;
   }
 
   // Load profile

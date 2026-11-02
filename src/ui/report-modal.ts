@@ -13,6 +13,76 @@ function loadBar(pct: number): string {
   `;
 }
 
+function objectivesSection(report: SimulationReport): string {
+  if (report.objectives.length === 0) return '';
+
+  const missed = report.objectives.filter((objective) => !objective.met).length;
+  const heading = missed === 0
+    ? 'Objectives met'
+    : `${missed} objective${missed === 1 ? '' : 's'} missed`;
+
+  return `
+    <section class="report-section" id="report-objectives">
+      <h3>Objectives <span class="report-objectives-verdict ${missed === 0 ? 'ok' : 'bad'}">${heading}</span></h3>
+      <ul class="report-objective-list">
+        ${report.objectives
+          .map(
+            (objective) => `
+          <li class="report-objective ${objective.met ? 'met' : 'unmet'}" data-objective="${objective.id}">
+            <span class="objective-icon">${objective.met ? '✓' : '✕'}</span>
+            <span class="objective-label">${objective.label}</span>
+            <span class="objective-target">${objective.target}</span>
+            <span class="objective-actual">${objective.actual}</span>
+            <span class="objective-cause">${objective.cause ?? ''}</span>
+          </li>
+        `
+          )
+          .join('')}
+      </ul>
+    </section>
+  `;
+}
+
+function flowStatsSection(report: SimulationReport): string {
+  if (report.flowStats.length === 0) return '';
+
+  return `
+    <section class="report-section">
+      <h3>Request flows</h3>
+      <div class="report-table-wrap">
+        <table class="report-table" id="report-flow-stats">
+          <thead>
+            <tr>
+              <th>Request kind</th>
+              <th>Spawned</th>
+              <th>Completed</th>
+              <th>Dropped</th>
+              <th>Violated</th>
+              <th>Completion</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${report.flowStats
+              .map(
+                (stat) => `
+              <tr class="report-flow-row" data-kind="${stat.kind}">
+                <td>${stat.kind}</td>
+                <td>${stat.spawned.toLocaleString()}</td>
+                <td>${stat.completed.toLocaleString()}</td>
+                <td class="${stat.dropped > 0 ? 'bad' : ''}">${stat.dropped.toLocaleString()}</td>
+                <td class="${stat.violated > 0 ? 'bad' : ''}">${stat.violated.toLocaleString()}</td>
+                <td>${stat.completionRate}%</td>
+              </tr>
+            `
+              )
+              .join('')}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
 function componentRow(report: SimulationReport['components'][0]): string {
   return `
     <tr>
@@ -97,7 +167,14 @@ export function renderReportModal(report: SimulationReport): string {
               <span class="report-stat-label">Dropped</span>
               <span class="report-stat-value ${report.totalDropped > 0 ? 'bad' : ''}">${report.totalDropped.toLocaleString()}</span>
             </div>
+            <div class="report-stat-card">
+              <span class="report-stat-label">Flow violations</span>
+              <span class="report-stat-value ${report.totalViolated > 0 ? 'bad' : ''}">${report.totalViolated.toLocaleString()}</span>
+            </div>
           </section>
+
+          ${objectivesSection(report)}
+          ${flowStatsSection(report)}
 
           <section class="report-section">
             <h3>Component breakdown</h3>
@@ -137,17 +214,6 @@ export function renderReportModal(report: SimulationReport): string {
               ${tagList(report.wastedResources, 'idle', 'No obviously idle or duplicate resources detected.')}
             </section>
           </div>
-
-          ${
-            report.missingComponents.length > 0
-              ? `
-            <section class="report-section report-alert">
-              <h3>Missing components</h3>
-              <p>Required for this scenario: ${report.missingComponents.map((t) => t.replace('-', ' ')).join(', ')}</p>
-            </section>
-          `
-              : ''
-          }
 
           <section class="report-section">
             <h3>Utilization profile</h3>

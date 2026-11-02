@@ -270,3 +270,61 @@ export async function readReport(overlay: Locator): Promise<ReportSummary> {
   const brokenServices = (await brokenSection.locator('.report-tags li').allTextContents()).map((t) => t.trim());
   return { title, score, grade, successRate, componentRows, brokenServices };
 }
+
+export interface ObjectiveRow {
+  /** Stable objective id, e.g. 'violations' or 'completion:create'. */
+  id: string;
+  label: string;
+  met: boolean;
+  actual: string;
+  cause: string;
+}
+
+/**
+ * The end-of-run objective checklist (spec §6). Each row is one win
+ * condition with its measured value, and a dominant cause when it failed.
+ */
+export async function readObjectives(overlay: Locator): Promise<ObjectiveRow[]> {
+  const rows = overlay.locator('#report-objectives .report-objective');
+  const count = await rows.count();
+  const out: ObjectiveRow[] = [];
+  for (let i = 0; i < count; i++) {
+    const row = rows.nth(i);
+    out.push({
+      id: (await row.getAttribute('data-objective')) ?? '',
+      label: ((await row.locator('.objective-label').textContent()) ?? '').trim(),
+      // Exact class match: 'unmet' also contains 'met'.
+      met: ((await row.getAttribute('class')) ?? '').split(/\s+/).includes('met'),
+      actual: ((await row.locator('.objective-actual').textContent()) ?? '').trim(),
+      cause: ((await row.locator('.objective-cause').textContent()) ?? '').trim(),
+    });
+  }
+  return out;
+}
+
+export interface FlowStatRow {
+  kind: string;
+  spawned: number;
+  completed: number;
+  dropped: number;
+  violated: number;
+}
+
+/** Per-request-kind totals from the report's "Request flows" table. */
+export async function readFlowStats(overlay: Locator): Promise<FlowStatRow[]> {
+  const rows = overlay.locator('#report-flow-stats .report-flow-row');
+  const count = await rows.count();
+  const out: FlowStatRow[] = [];
+  for (let i = 0; i < count; i++) {
+    const cells = await rows.nth(i).locator('td').allTextContents();
+    const num = (index: number) => Number(cells[index].replace(/[^0-9]/g, ''));
+    out.push({
+      kind: cells[0].trim(),
+      spawned: num(1),
+      completed: num(2),
+      dropped: num(3),
+      violated: num(4),
+    });
+  }
+  return out;
+}

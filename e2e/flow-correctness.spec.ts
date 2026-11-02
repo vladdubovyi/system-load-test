@@ -47,7 +47,11 @@ test.describe('Flow correctness: Instagram feed', () => {
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
 
-    expect(report.title).toBe('Architecture survived');
+    // Since Phase 4 the violation ceiling is an objective, so a design that
+    // cannot persist writes loses the run — but on correctness, not on
+    // survival: nothing overloaded or broke.
+    expect(report.title).toBe('Architecture failed');
+    expect(report.brokenServices).toEqual([]);
 
     const totals = await sandbox.flowTotals();
     expect(totals.violated).toBeGreaterThan(0);
@@ -92,9 +96,12 @@ test.describe('Flow correctness: URL shortener', () => {
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
 
-    // Violations fail requests, not the run: nothing overloads here.
-    expect(report.title).toBe('Architecture survived');
-    expect(await sandbox.engineStatus()).toBe('won');
+    // Violations fail requests outright; since Phase 4 they also fail the
+    // run's violation objective. Nothing overloads, so the loss is a
+    // correctness verdict rather than a crash.
+    expect(report.title).toBe('Architecture failed');
+    expect(await sandbox.engineStatus()).toBe('lost');
+    expect(report.brokenServices).toEqual([]);
 
     const totals = await sandbox.flowTotals();
     expect(totals.violated).toBeGreaterThan(0);

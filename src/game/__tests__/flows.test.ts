@@ -5,6 +5,7 @@ import {
   INSTAGRAM_FEED_FLOWS,
   URL_SHORTENER_FLOWS,
   URL_SHORTENER_OBJECTIVES,
+  getPresetObjectives,
 } from '../flow-presets';
 import type { FlowSpec } from '../flow-types';
 
@@ -192,7 +193,9 @@ describe('URL Shortener preset', () => {
   });
 
   it('ships objectives that gate on completion and violations', () => {
-    expect(URL_SHORTENER_OBJECTIVES.minCompletionRate).toEqual({ create: 0.95, read: 0.95 });
+    // Completion floors are a minimum bar the shipped starter clears while
+    // shedding spike traffic; correctness is the strict one.
+    expect(URL_SHORTENER_OBJECTIVES.minCompletionRate).toEqual({ create: 0.6, read: 0.6 });
     expect(URL_SHORTENER_OBJECTIVES.maxViolationRate).toBe(0);
     expect(URL_SHORTENER_OBJECTIVES.noComponentFailures).toBe(true);
   });
@@ -201,6 +204,14 @@ describe('URL Shortener preset', () => {
 describe('Instagram feed preset', () => {
   it('is structurally valid', () => {
     expect(validateFlows(INSTAGRAM_FEED_FLOWS)).toEqual([]);
+  });
+
+  it('holds edge-served reads to a higher floor than contended writes', () => {
+    const objectives = getPresetObjectives('instagram-feed')!;
+    expect(objectives.minCompletionRate!.feedLoad).toBeGreaterThan(
+      objectives.minCompletionRate!.post
+    );
+    expect(objectives.maxViolationRate).toBe(0);
   });
 
   it('covers the challenge request kinds', () => {

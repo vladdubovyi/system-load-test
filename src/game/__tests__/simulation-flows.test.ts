@@ -421,3 +421,71 @@ describe('predictive scaling traffic share', () => {
     expect(instancesDuringSpike(undefined)).toBe(2);
   });
 });
+
+describe('objective-driven win and lose', () => {
+  it('wins when the design survives and meets its objectives', () => {
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const db = comp('database');
+    const { snapshot, engine } = runToEnd(
+      [lb, svc, db],
+      [belt('source', lb), belt(lb, svc), belt(svc, db)],
+      scenario({
+        // A longer run so the tail of requests still in flight at the
+        // cut-off stays a small share of the completion rate.
+        duration: 15,
+        drainDuration: 4,
+        requestTypes: { create: 1 },
+        flows: [CREATE_FLOW],
+        objectives: { minCompletionRate: { create: 0.9 }, maxViolationRate: 0 },
+      })
+    );
+
+    expect(snapshot.status).toBe('won');
+    const report = engine.getReport();
+    expect(report.objectivesMet).toBe(true);
+    expect(report.objectives.every((objective) => objective.met)).toBe(true);
+  });
+
+  it('loses a surviving run that misses its completion floor', () => {
+    // No durable store: every create is violated, so completion is 0%.
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const redis = comp('redis');
+    const { snapshot, engine } = runToEnd(
+      [lb, svc, redis],
+      [belt('source', lb), belt(lb, svc), belt(svc, redis)],
+      scenario({
+        requestTypes: { create: 1 },
+        flows: [CREATE_FLOW],
+        objectives: { minCompletionRate: { create: 0.9 }, maxViolationRate: 0 },
+      })
+    );
+
+    expect(snapshot.status).toBe('lost');
+    // Lost on objectives, not on survival: nothing overloaded.
+    expect([...snapshot.components.values()].every((state) => !state.failed)).toBe(true);
+    expect(snapshot.message).toContain('objective');
+
+    const report = engine.getReport();
+    expect(report.objectivesMet).toBe(false);
+    expect(report.objectives.find((o) => o.id === 'completion:create')!.met).toBe(false);
+    expect(report.objectives.find((o) => o.id === 'failures')!.met).toBe(true);
+    expect(report.flowStats.find((s) => s.kind === 'create')!.violated).toBeGreaterThan(0);
+  });
+
+  it('still wins a flow-violating run when the scenario sets no objectives', () => {
+    // Back-compat: without objectives the only win condition is survival.
+    const lb = comp('load-balancer');
+    const svc = comp('microservice');
+    const redis = comp('redis');
+    const { snapshot } = runToEnd(
+      [lb, svc, redis],
+      [belt('source', lb), belt(lb, svc), belt(svc, redis)],
+      scenario({ requestTypes: { create: 1 }, flows: [CREATE_FLOW] })
+    );
+
+    expect(snapshot.totalViolated).toBeGreaterThan(0);
+    expect(snapshot.status).toBe('won');
+  });
+});

@@ -1,9 +1,14 @@
 import type {
   ComponentReport,
   ComponentType,
+  FlowKindStat,
+  ObjectiveResult,
   PlacedComponent,
   SimulationReport,
 } from './types';
+import type { Objectives } from './flow-types';
+import type { ScoringPriorities } from './scenario-types';
+import { allObjectivesMet, evaluateObjectives, type RunCounts } from './objectives';
 import { getActiveScenario } from './scenario-runtime';
 import type { ComponentTelemetry } from './types';
 import type {
@@ -11,19 +16,9 @@ import type {
   ComponentScalingState,
 } from './architecture-config';
 import type { ComponentInstanceConfig } from './component-config';
-import {
-  getAutoScalingForComponent,
-  getDatabaseConfigForComponent,
-} from './component-config';
+import { getDatabaseConfigForComponent } from './component-config';
 import { getScaleGroupMembers } from './scale-instances';
 import { getComponentDef } from './component-catalog';
-
-const REQUIRED_COMPONENTS: ComponentType[] = [
-  'load-balancer',
-  'shortener',
-  'backend',
-  'database',
-];
 
 const SCALED_MAX_THRESHOLD = 75;
 const SCALED_AVG_THRESHOLD = 58;
@@ -39,6 +34,48 @@ const EXCELLENCE = {
   maxAvgUtil: 72,
 };
 
+/**
+ * Score dimensions. The weighted average of these (each 0..1) is the score;
+ * a scenario's `scoringPriorities` bias the weights toward what that
+ * challenge is actually teaching.
+ */
+type Dimension =
+  | 'reliability'
+  | 'correctness'
+  | 'availability'
+  | 'headroom'
+  | 'latency'
+  | 'efficiency'
+  | 'faultTolerance';
+
+/** Applied when a scenario declares no priorities. */
+const BASE_WEIGHTS: Record<Dimension, number> = {
+  reliability: 25,
+  correctness: 15,
+  availability: 15,
+  headroom: 15,
+  latency: 10,
+  efficiency: 10,
+  faultTolerance: 10,
+};
+
+/** Which dimension each scenario scoring priority reinforces. */
+const PRIORITY_DIMENSION: Record<keyof ScoringPriorities, Dimension> = {
+  availability: 'availability',
+  latency: 'latency',
+  throughput: 'reliability',
+  durability: 'correctness',
+  storageEfficiency: 'efficiency',
+  bandwidth: 'reliability',
+  cost: 'efficiency',
+  scalability: 'headroom',
+  faultTolerance: 'faultTolerance',
+};
+
+/** Score ceilings for runs that did not fully succeed. */
+const CAP_OBJECTIVES_MISSED = 72;
+const CAP_BROKEN_SERVICES = 55;
+
 export interface ReportInput {
   components: PlacedComponent[];
   telemetry: Map<string, ComponentTelemetry>;
@@ -51,6 +88,12 @@ export interface ReportInput {
   totalSpawned: number;
   totalCompleted: number;
   totalDropped: number;
+  /** Per-kind tallies, violation steps and drop reasons from the engine. */
+  counts: RunCounts;
+  /** Win conditions for the active scenario; undefined means survival only. */
+  objectives?: Objectives;
+  /** Scenario scoring priorities, used to weight the score dimensions. */
+  scoringPriorities?: ScoringPriorities;
   peakRps: number;
   spikeEvents: number;
   architectureConfig: ArchitectureConfig;
@@ -138,11 +181,6 @@ function buildComponentReports(input: ReportInput): ComponentReport[] {
   });
 }
 
-function findMissingComponents(components: PlacedComponent[]): ComponentType[] {
-  const placed = new Set(components.map((c) => c.type));
-  return REQUIRED_COMPONENTS.filter((type) => !placed.has(type));
-}
-
 function findScaledServices(
   reports: ComponentReport[],
   duration: number
@@ -202,13 +240,18 @@ function findWastedResources(reports: ComponentReport[]): ComponentReport[] {
   return wasted;
 }
 
+/**
+ * A perfect 100 is reserved for designs that win on every objective and
+ * still have real headroom. The legacy per-type configuration checks are
+ * gone: what matters is the measured result, not which chips were applied.
+ */
 function meetsExcellence(
   input: ReportInput,
   reports: ComponentReport[],
   broken: ComponentReport[],
-  missing: ComponentType[]
+  objectivesMet: boolean
 ): boolean {
-  if (input.outcome !== 'won' || broken.length > 0 || missing.length > 0) {
+  if (input.outcome !== 'won' || !objectivesMet || broken.length > 0) {
     return false;
   }
 
@@ -221,6 +264,7 @@ function meetsExcellence(
 
   if (successRate < EXCELLENCE.minSuccessRate) return false;
   if (dropRate > EXCELLENCE.maxDropRate) return false;
+  if (input.counts.totalViolated > 0) return false;
 
   for (const report of reports) {
     const overloadFraction = report.overloadSeconds / Math.max(input.duration, 0.001);
@@ -229,36 +273,75 @@ function meetsExcellence(
     if (report.avgLoad > EXCELLENCE.maxAvgUtil) return false;
   }
 
-  const redis = reports.find((r) => r.type === 'redis');
-  const db = reports.find((r) => r.type === 'database');
-
-  const shortener = input.components.find((c) => c.type === 'shortener');
-  const backend = input.components.find((c) => c.type === 'backend');
-  const database = input.components.find((c) => c.type === 'database');
-
-  const shortenerCfg = shortener
-    ? getAutoScalingForComponent(shortener, input.componentConfigs)
-    : null;
-  const backendCfg = backend
-    ? getAutoScalingForComponent(backend, input.componentConfigs)
-    : null;
-  const dbCfg = database
-    ? getDatabaseConfigForComponent(database, input.componentConfigs)
-    : null;
-
-  if (!shortenerCfg?.horizontal.enabled || !backendCfg?.horizontal.enabled) {
-    return false;
-  }
-  if (!dbCfg?.sharding.enabled || dbCfg.sharding.shardCount < 2) {
-    return false;
-  }
-  if (!dbCfg.replication.enabled || dbCfg.replication.readReplicas < 1) {
-    return false;
-  }
-  if (!redis || redis.avgLoad < 10) return false;
-  if (db && db.avgLoad > 55) return false;
-
   return true;
+}
+
+/** Blend the scenario's priorities into the base dimension weights. */
+function resolveWeights(priorities?: ScoringPriorities): Record<Dimension, number> {
+  const weights = { ...BASE_WEIGHTS };
+  if (!priorities) return weights;
+
+  const entries = Object.entries(priorities).filter(
+    ([key, value]) => typeof value === 'number' && value > 0 && key in PRIORITY_DIMENSION
+  ) as [keyof ScoringPriorities, number][];
+  if (entries.length === 0) return weights;
+
+  // Priorities are relative, so normalize before adding: a challenge that
+  // weights latency 40/100 shifts the same amount whether the scenario used
+  // percentages or raw points.
+  const total = entries.reduce((sum, [, value]) => sum + value, 0);
+  for (const [key, value] of entries) {
+    weights[PRIORITY_DIMENSION[key]] += (value / total) * 100;
+  }
+
+  return weights;
+}
+
+/** Each dimension scored 0..1 from the run's measurements. */
+function scoreDimensions(
+  input: ReportInput,
+  reports: ComponentReport[],
+  broken: ComponentReport[],
+  wasted: ComponentReport[]
+): Record<Dimension, number> {
+  const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+  const successRate =
+    input.totalSpawned > 0 ? input.totalCompleted / input.totalSpawned : 0;
+  const violationRate =
+    input.totalSpawned > 0 ? input.counts.totalViolated / input.totalSpawned : 0;
+
+  const avgPeakLoad =
+    reports.reduce((sum, r) => sum + r.maxLoad, 0) / Math.max(reports.length, 1);
+  const overloadBurden =
+    reports.reduce(
+      (sum, r) => sum + r.overloadSeconds / Math.max(input.duration, 0.001),
+      0
+    ) / Math.max(reports.length, 1);
+
+  const totalDowntime = reports.reduce((sum, r) => sum + r.downtimeSeconds, 0);
+  const downtimeRatio =
+    totalDowntime / Math.max(reports.length * input.duration, 0.001);
+
+  const queueBurden =
+    reports.reduce(
+      (sum, r) => sum + Math.min(r.queuePressureSeconds / Math.max(input.duration, 0.001), 1),
+      0
+    ) / Math.max(reports.length, 1);
+
+  const totalCost = reports.reduce((sum, r) => sum + r.monthlyCost, 0);
+  const wastedCost = wasted.reduce((sum, r) => sum + r.monthlyCost, 0);
+  const wasteRatio = totalCost > 0 ? wastedCost / totalCost : 0;
+
+  return {
+    reliability: clamp01(successRate),
+    correctness: clamp01(1 - violationRate * 2),
+    availability: clamp01(1 - downtimeRatio * 4),
+    headroom: clamp01(1 - Math.max(0, avgPeakLoad - 50) / 50) * clamp01(1 - overloadBurden * 3),
+    latency: clamp01(1 - queueBurden * 2),
+    efficiency: clamp01(1 - wasteRatio),
+    faultTolerance: clamp01(1 - broken.length / Math.max(reports.length, 1) * 2),
+  };
 }
 
 function computeScore(
@@ -266,72 +349,35 @@ function computeScore(
   reports: ComponentReport[],
   broken: ComponentReport[],
   wasted: ComponentReport[],
-  missing: ComponentType[]
+  objectivesMet: boolean
 ): number {
-  let score = 0;
+  const weights = resolveWeights(input.scoringPriorities);
+  const dimensions = scoreDimensions(input, reports, broken, wasted);
 
-  // Survival (30 pts)
-  if (input.outcome === 'won') {
-    score += 30;
-  } else {
-    const survivalRatio = input.duration / getActiveScenario().duration;
-    score += Math.round(30 * survivalRatio * 0.5);
+  const totalWeight = Object.values(weights).reduce((sum, w) => sum + w, 0);
+  const weighted = (Object.keys(weights) as Dimension[]).reduce(
+    (sum, key) => sum + weights[key] * dimensions[key],
+    0
+  );
+
+  // Survival is a gate rather than a dimension: a run that ended early only
+  // earns credit for the share of the scenario it actually lasted.
+  const survivalRatio =
+    input.outcome === 'won'
+      ? 1
+      : Math.min(1, input.duration / Math.max(getActiveScenario().duration, 0.001));
+
+  let score = (weighted / Math.max(totalWeight, 0.001)) * 94;
+  if (input.outcome !== 'won') {
+    score *= 0.5 + survivalRatio * 0.3;
   }
 
-  // Reliability (25 pts) — completion & drop rate
-  const successRate =
-    input.totalSpawned > 0 ? input.totalCompleted / input.totalSpawned : 0;
-  score += Math.round(Math.min(successRate, 1) * 18);
-  const dropRate =
-    input.totalSpawned + input.totalDropped > 0
-      ? input.totalDropped / (input.totalSpawned + input.totalDropped)
-      : 1;
-  score += Math.round(Math.max(0, 7 - dropRate * 35));
-
-  // Capacity headroom (20 pts) — penalize sustained saturation
-  const avgPeakLoad =
-    reports.reduce((s, r) => s + r.maxLoad, 0) / Math.max(reports.length, 1);
-  const headroomScore = Math.max(0, 1 - Math.max(0, avgPeakLoad - 50) / 50);
-  score += Math.round(headroomScore * 12);
-
-  const overloadBurden = reports.reduce(
-    (s, r) => s + r.overloadSeconds / Math.max(input.duration, 0.001),
-    0
-  ) / Math.max(reports.length, 1);
-  score += Math.round(Math.max(0, 8 * (1 - overloadBurden * 3)));
-
-  // Availability (10 pts)
-  const totalDowntime = reports.reduce((s, r) => s + r.downtimeSeconds, 0);
-  const downtimeRatio = totalDowntime / Math.max(reports.length * input.duration, 1);
-  score += Math.round(Math.max(0, 10 * (1 - downtimeRatio * 4)));
-
-  // Efficiency (10 pts)
-  const totalCost = reports.reduce((s, r) => s + r.monthlyCost, 0);
-  const wastedCost = wasted.reduce((s, r) => s + r.monthlyCost, 0);
-  const wasteRatio = totalCost > 0 ? wastedCost / totalCost : 0;
-  score += Math.round(Math.max(0, 10 * (1 - wasteRatio)));
-
-  // Architecture completeness (5 pts)
-  score += Math.round(
-    ((REQUIRED_COMPONENTS.length - missing.length) / REQUIRED_COMPONENTS.length) * 5
-  );
-
-  // Penalties
-  score -= broken.length * 10;
-  score -= missing.length * 8;
-
-  const queuePenalty = reports.reduce(
-    (s, r) => s + Math.min(r.queuePressureSeconds / input.duration, 1),
-    0
-  );
-  score -= Math.round(queuePenalty * 4);
-
-  const scaledCount = findScaledServices(reports, input.duration).length;
-  score -= scaledCount * 3;
+  if (!objectivesMet) score = Math.min(score, CAP_OBJECTIVES_MISSED);
+  if (broken.length > 0) score = Math.min(score, CAP_BROKEN_SERVICES);
 
   score = Math.max(0, Math.min(94, Math.round(score)));
 
-  if (meetsExcellence(input, reports, broken, missing)) {
+  if (meetsExcellence(input, reports, broken, objectivesMet)) {
     return 100;
   }
 
@@ -345,14 +391,16 @@ function buildRecommendations(
   scaled: ComponentReport[],
   overloaded: ComponentReport[],
   wasted: ComponentReport[],
-  missing: ComponentType[]
+  objectives: ObjectiveResult[]
 ): string[] {
   const tips: string[] = [];
 
-  if (missing.length > 0) {
-    tips.push(
-      `Add missing components: ${missing.map((t) => getComponentDef(t).label).join(', ')}.`
-    );
+  // Failed objectives are the most actionable feedback there is: they say
+  // exactly which requirement the design missed and why.
+  for (const objective of objectives) {
+    if (!objective.met && objective.cause) {
+      tips.push(`${objective.label} (${objective.target}): ${objective.cause}`);
+    }
   }
 
   if (broken.length > 0) {
@@ -420,13 +468,40 @@ function buildRecommendations(
   return tips.slice(0, 6);
 }
 
+/** One row per request kind the run actually spawned. */
+function buildFlowStats(counts: RunCounts): FlowKindStat[] {
+  const kinds = new Set([
+    ...Object.keys(counts.spawnedByKind),
+    ...Object.keys(counts.completedByKind),
+    ...Object.keys(counts.violatedByKind),
+  ]);
+
+  return [...kinds]
+    .sort()
+    .map((kind) => {
+      const spawned = counts.spawnedByKind[kind] ?? 0;
+      const completed = counts.completedByKind[kind] ?? 0;
+      return {
+        kind,
+        spawned,
+        completed,
+        dropped: counts.droppedByKind[kind] ?? 0,
+        violated: counts.violatedByKind[kind] ?? 0,
+        completionRate:
+          spawned > 0 ? Math.round((completed / spawned) * 1000) / 10 : 0,
+      };
+    });
+}
+
 export function buildSimulationReport(input: ReportInput): SimulationReport {
   const components = buildComponentReports(input);
   const brokenServices = components.filter((r) => r.failed);
   const scaledServices = findScaledServices(components, input.duration);
   const overloadedServices = findOverloadedServices(components, input.duration);
   const wastedResources = findWastedResources(components);
-  const missingComponents = findMissingComponents(input.components);
+  const objectives = evaluateObjectives(input.objectives, input.counts);
+  const objectivesMet = allObjectivesMet(objectives);
+  const flowStats = buildFlowStats(input.counts);
   const totalCost = components.reduce((s, r) => s + r.monthlyCost, 0);
   const wastedCost = wastedResources.reduce((s, r) => s + r.monthlyCost, 0);
   const successRate =
@@ -449,7 +524,7 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     components,
     brokenServices,
     wastedResources,
-    missingComponents
+    objectivesMet
   );
 
   const recommendations = buildRecommendations(
@@ -459,7 +534,7 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     scaledServices,
     overloadedServices,
     wastedResources,
-    missingComponents
+    objectives
   );
 
   return {
@@ -473,11 +548,14 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     brokenServices,
     scaledServices,
     wastedResources,
-    missingComponents,
     totalSpawned: input.totalSpawned,
     totalCompleted: input.totalCompleted,
     totalDropped: input.totalDropped,
+    totalViolated: input.counts.totalViolated,
     successRate,
+    objectives,
+    objectivesMet,
+    flowStats,
     peakRps: Math.round(input.peakRps),
     spikeEvents: input.spikeEvents,
     availabilityPct,

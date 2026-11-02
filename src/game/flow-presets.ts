@@ -56,8 +56,26 @@ export const URL_SHORTENER_FLOWS: FlowSpec[] = [
   },
 ];
 
+/**
+ * Completion floors are deliberately a *minimum bar*, not the excellence bar
+ * (that lives in report.ts): the shipped starter sheds some spike traffic by
+ * design, and the lesson it teaches is improvement, not instant failure. The
+ * sharp objective here is the violation ceiling — a cache standing in for the
+ * database fails outright no matter how much load it absorbs.
+ */
 export const URL_SHORTENER_OBJECTIVES: Objectives = {
-  minCompletionRate: { create: 0.95, read: 0.95 },
+  minCompletionRate: { create: 0.6, read: 0.6 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
+/**
+ * Feed loads are expected to be served overwhelmingly from the edge, so the
+ * read floor is high; writes contend for the service tier and get a lower
+ * one. Dropping the CDN or a durable store misses these immediately.
+ */
+export const INSTAGRAM_FEED_OBJECTIVES: Objectives = {
+  minCompletionRate: { feedLoad: 0.85, post: 0.5, like: 0.5 },
   maxViolationRate: 0,
   noComponentFailures: true,
 };
@@ -147,6 +165,7 @@ const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
 
 const OBJECTIVES_BY_SLUG: Record<string, Objectives> = {
   'url-shortener': URL_SHORTENER_OBJECTIVES,
+  'instagram-feed': INSTAGRAM_FEED_OBJECTIVES,
 };
 
 export function getPresetFlows(slug: string): FlowSpec[] | undefined {

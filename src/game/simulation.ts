@@ -14,6 +14,7 @@ import type {
   SimulationStatus,
 } from './types';
 import { buildSimulationReport } from './report';
+import { allObjectivesMet, evaluateObjectives, type RunCounts } from './objectives';
 import type { ComponentInstanceConfig } from './component-config';
 import {
   aggregateArchitectureConfig,
@@ -78,6 +79,19 @@ function visualKeyFor(id: number): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+/**
+ * Collapse a drop reason into something worth aggregating: the live counts
+ * inside a reason ("queue full (83/80)") differ on every drop and would
+ * scatter the tally across hundreds of near-identical keys.
+ */
+function normalizeDropReason(reason: string, component?: PlacedComponent): string {
+  const generalized = reason.replace(/\s*\([^)]*\)/g, '').trim();
+  if (!component) return generalized;
+  return generalized.includes(component.label)
+    ? generalized
+    : `${component.label}: ${generalized}`;
 }
 
 function pickRequestColor(scenario: RuntimeScenario): { colorIndex: number; celebrity: boolean } {
@@ -364,6 +378,8 @@ export class SimulationEngine {
   private violatedByKind = new Map<string, number>();
   /** Violation tallies keyed `${kind}:${stepId}` for the end-of-run report. */
   private violationsByStep = new Map<string, number>();
+  /** Drop tallies keyed `${kind}:${reason}`, for the report's dominant cause. */
+  private dropReasons = new Map<string, number>();
   /** Flow spec per request kind; kinds without one use legacy routing. */
   private flowsByKind = new Map<string, FlowSpec>();
   private currentRps = getActiveScenario().baseRps;
@@ -944,6 +960,7 @@ export class SimulationEngine {
     this.droppedByKind.clear();
     this.violatedByKind.clear();
     this.violationsByStep.clear();
+    this.dropReasons.clear();
   }
 
   private bump(map: Map<string, number>, key: string): void {
@@ -1033,11 +1050,24 @@ export class SimulationEngine {
       this.draining &&
       this.time >= this.scenario.duration + this.scenario.drainDuration
     ) {
+      // A run is won by surviving *and* meeting the scenario's objectives
+      // (spec §6): completion floors per request kind and a violation
+      // ceiling. Scenarios without objectives are judged on survival alone.
       const anyFailed = [...this.componentState.values()].some((s) => s.failed);
-      this.status = anyFailed ? 'lost' : 'won';
-      this.message = anyFailed
-        ? 'Time\'s up — some components failed under load.'
-        : 'Success! Your architecture survived the traffic storm.';
+      const objectives = evaluateObjectives(this.scenario.objectives, this.runCounts());
+      const met = allObjectivesMet(objectives);
+
+      this.status = met ? 'won' : 'lost';
+      if (anyFailed) {
+        this.message = 'Time\'s up — some components failed under load.';
+      } else if (!met) {
+        const missed = objectives.filter((objective) => !objective.met);
+        this.message = `Your architecture survived, but missed ${missed.length} objective${missed.length === 1 ? '' : 's'}: ${missed
+          .map((objective) => objective.label)
+          .join(', ')}.`;
+      } else {
+        this.message = 'Success! Your architecture survived the traffic storm.';
+      }
     }
 
     return this.getSnapshot();
@@ -1197,6 +1227,10 @@ export class SimulationEngine {
     this.finishRequest(request, 'dropped');
     this.totalDropped += 1;
     this.bump(this.droppedByKind, request.kind);
+    this.bump(
+      this.dropReasons,
+      `${request.kind}:${normalizeDropReason(reason, component)}`
+    );
   }
 
   /** Terminate a request that cannot take its next required flow step. */
@@ -2090,6 +2124,25 @@ export class SimulationEngine {
     return this.time;
   }
 
+  /** Everything the objective evaluator and the report need from this run. */
+  private runCounts(): RunCounts {
+    const brokenServices = this.components
+      .filter((component) => this.componentState.get(component.id)?.failed)
+      .map((component) => component.label);
+
+    return {
+      totalSpawned: this.totalSpawned,
+      totalViolated: this.totalViolated,
+      spawnedByKind: Object.fromEntries(this.spawnedByKind),
+      completedByKind: Object.fromEntries(this.completedByKind),
+      violatedByKind: Object.fromEntries(this.violatedByKind),
+      droppedByKind: Object.fromEntries(this.droppedByKind),
+      violationsByStep: Object.fromEntries(this.violationsByStep),
+      dropReasons: Object.fromEntries(this.dropReasons),
+      brokenServices,
+    };
+  }
+
   getReport(): SimulationReport {
     const outcome = this.status === 'won' ? 'won' : 'lost';
     const componentState = new Map(
@@ -2108,6 +2161,9 @@ export class SimulationEngine {
       totalSpawned: this.totalSpawned,
       totalCompleted: this.totalCompleted,
       totalDropped: this.totalDropped,
+      counts: this.runCounts(),
+      objectives: this.scenario.objectives,
+      scoringPriorities: this.scenario.scoringPriorities,
       peakRps: this.peakRps,
       spikeEvents: this.spikeEvents,
       architectureConfig: aggregateArchitectureConfig(this.components, this.componentConfigs),

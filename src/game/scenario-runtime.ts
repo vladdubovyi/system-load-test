@@ -1,4 +1,4 @@
-import type { Challenge, TrafficProfile } from './scenario-types';
+import type { Challenge, ScoringPriorities, TrafficProfile } from './scenario-types';
 import type { FlowSpec, Objectives } from './flow-types';
 import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import { SCENARIO } from './types';
@@ -23,6 +23,8 @@ export interface RuntimeScenario {
   flows?: FlowSpec[];
   /** Data-driven win conditions evaluated at the end of a run (Phase 4). */
   objectives?: Objectives;
+  /** Challenge scoring weights; bias the report's score dimensions. */
+  scoringPriorities?: ScoringPriorities;
 }
 
 const DEFAULT_SCENARIO: RuntimeScenario = {
@@ -42,6 +44,7 @@ const DEFAULT_SCENARIO: RuntimeScenario = {
   requestTypes: { read: SCENARIO.readRatio, create: 1 - SCENARIO.readRatio },
   flows: getPresetFlows('url-shortener'),
   objectives: getPresetObjectives('url-shortener'),
+  scoringPriorities: { availability: 40, latency: 30, scalability: 20, cost: 10 },
 };
 
 let activeScenario: RuntimeScenario = { ...DEFAULT_SCENARIO };
@@ -130,6 +133,7 @@ function buildScenarioFromChallenge(challenge: Challenge): RuntimeScenario {
         : { read: readRatio, create: 1 - readRatio },
     flows: challenge.scenario.flows ?? getPresetFlows(challenge.slug),
     objectives: challenge.scenario.objectives ?? getPresetObjectives(challenge.slug),
+    scoringPriorities: challenge.scenario.scoringPriorities,
     celebrityShare:
       typeof characteristics.celebrityShare === 'number'
         ? characteristics.celebrityShare

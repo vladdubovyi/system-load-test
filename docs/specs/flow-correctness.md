@@ -269,6 +269,33 @@ export interface Objectives {
   `report.ts` indexes `COMPONENT_DEFS` with non-legacy types
   (`microservice`, `backend-service` — the default starter board).
 
+*(Amended during Phase 4:)*
+
+- **Completion floors are a minimum bar, not the excellence bar.** The
+  shipped starters deliberately shed some spike traffic, and measured
+  per-kind completion swings run to run (URL shortener 0.71–0.94). Thresholds
+  are therefore set below that band (URL shortener 0.6; Instagram feedLoad
+  0.85 / writes 0.5) so they catch genuinely broken designs without making
+  every starter lose or the suite flaky. The sharp objective is
+  `maxViolationRate: 0`. Tightening these is scenario tuning for the
+  authoring phase.
+- **Completion rate counts requests still in flight at the cut-off** against
+  the design, which is why a short run never reaches 100%. When a completion
+  objective fails with no violations and no drops, the reported cause says so
+  explicitly rather than claiming a routing fault.
+- **Scoring is a weighted average of seven dimensions** (reliability,
+  correctness, availability, headroom, latency, efficiency, faultTolerance),
+  each 0..1. `scoringPriorities` are normalized and added onto base weights,
+  so a challenge scored on `latency` punishes queue pressure harder. Missed
+  objectives cap the score at 72 and broken services at 55; 100 still
+  requires a clean, objective-meeting run with real headroom.
+- **`noComponentFailures` defaults to true and is the only objective for
+  scenarios that declare none**, preserving survival-only judging for
+  challenges without flows (Dropbox, Rate Limiter).
+- The traffic config panel was already wired into the engine during the
+  Phase 2/3 work (`setActiveTrafficOverride` in `scenario-runtime.ts`), so
+  that item needed no work here.
+
 ## 7. Design-time lint
 
 New `src/game/flow-validator.ts`:
@@ -307,7 +334,7 @@ New `src/game/flow-validator.ts`:
 | 1 | Capability model + types | `capabilities.ts`, taxonomy adapter, `flow-types.ts`, URL Shortener FlowSpec as a TS constant, `ScenarioDefinition.flows/objectives` fields, runtime plumbing (`scenario-runtime.ts`, `api/client.ts` mapping consolidation). No engine behavior change. |
 | 2 | Flow interpreter | Replace `completeOneRequest` heuristics with the interpreter; `violated` state/event; `returnTo` execution (reverse-belt leg, unrendered); per-flow counters; generalized `RequestKind`; legacy heuristics retained for challenges without flows (see §5 amendment); wire URL Shortener challenge to its flows. *(Shipped; the Instagram feed opted into flows shortly after.)* |
 | 3 | Lint + UX | `flow-validator.ts`, lint panel, violation reasons in request inspector, toast for rejected connections. *(Shipped; the inspector's violation rendering had already landed with Phase 2 and is now covered by e2e tests.)* |
-| 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks; wire the traffic config panel into the engine (its edits are currently ignored). |
+| 4 | Objectives + report | `Objectives` in win/lose, report rework (per-flow stats, objective lines, `scoringPriorities`), remove `REQUIRED_COMPONENTS` / `meetsExcellence` legacy checks; wire the traffic config panel into the engine (its edits are currently ignored). *(Shipped; see the §6 amendments. The traffic panel turned out to be wired already. A design that violates its flows now **loses** the run, which changed two Phase 2/3 e2e expectations.)* |
 | 5 | Serialization + authoring | Flows/objectives/capabilities into backend `ScenarioConfig` (jsonb, no migration) and `ChallengeSeeder`; tags (§4.1); challenge-authoring endpoints/UI. Separate mini-spec before implementation. |
 
 Each phase keeps the build green (`tsc && vite build`) and the existing

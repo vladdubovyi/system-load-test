@@ -272,6 +272,31 @@ export interface ComponentReport {
   utilizationPct: number;
 }
 
+/** One end-of-run win condition and how the run measured against it. */
+export interface ObjectiveResult {
+  /** Stable id: 'failures', 'violations' or `completion:${kind}`. */
+  id: string;
+  label: string;
+  /** Human-readable threshold, e.g. '≥ 95.0%'. */
+  target: string;
+  /** Human-readable measurement, e.g. '81.2% (812 of 1,000)'. */
+  actual: string;
+  met: boolean;
+  /** Dominant cause, present only when the objective failed. */
+  cause?: string;
+}
+
+/** Per-request-kind totals for the report's flow breakdown. */
+export interface FlowKindStat {
+  kind: string;
+  spawned: number;
+  completed: number;
+  dropped: number;
+  violated: number;
+  /** Completed share of spawned, 0..100. */
+  completionRate: number;
+}
+
 export interface SimulationReport {
   outcome: 'won' | 'lost';
   duration: number;
@@ -283,11 +308,18 @@ export interface SimulationReport {
   brokenServices: ComponentReport[];
   scaledServices: ComponentReport[];
   wastedResources: ComponentReport[];
-  missingComponents: ComponentType[];
   totalSpawned: number;
   totalCompleted: number;
   totalDropped: number;
+  /** Requests terminated by a flow violation. */
+  totalViolated: number;
   successRate: number;
+  /** Win conditions evaluated at the end of the run (spec §6). */
+  objectives: ObjectiveResult[];
+  /** True when every objective was met; with survival this decides the outcome. */
+  objectivesMet: boolean;
+  /** Per-request-kind breakdown; empty for scenarios without flows. */
+  flowStats: FlowKindStat[];
   peakRps: number;
   spikeEvents: number;
   availabilityPct: number;
