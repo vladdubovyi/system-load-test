@@ -275,6 +275,14 @@ export function getActiveConfigBadges(
   return badges;
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 export function renderConfigBadgesHtml(
   component: PlacedComponent,
   config: ComponentInstanceConfig | undefined
@@ -286,8 +294,9 @@ export function renderConfigBadgesHtml(
     label: tagLabel(tagId, tagDefs),
   }));
   if (badges.length === 0 && tagBadges.length === 0) return '';
+  // Tag labels are authored data served to every player: escape them.
   const render = (b: ConfigBadge, extraClass = ''): string =>
-    `<span class="component-config-badge${extraClass}" title="${b.label}"><span class="component-config-badge-emoji">${b.emoji}</span>${b.label}</span>`;
+    `<span class="component-config-badge${extraClass}" title="${escapeHtml(b.label)}"><span class="component-config-badge-emoji">${b.emoji}</span>${escapeHtml(b.label)}</span>`;
   return `<div class="component-config-badges">${[
     ...badges.map((b) => render(b)),
     ...tagBadges.map((b) => render(b, ' component-tag-badge')),

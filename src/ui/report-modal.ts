@@ -3,6 +3,15 @@ import { formatCost, formatSeconds } from '../game/report';
 import { downloadReportPdf } from '../game/report-pdf';
 import { getActiveScenario } from '../game/scenario-runtime';
 
+/** Request kinds, flow step ids and tag labels are authored data: never trust them as HTML. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function loadBar(pct: number): string {
   const width = Math.min(100, Math.max(0, pct));
   const hue = width >= 85 ? 0 : width >= 60 ? 35 : 142;
@@ -28,12 +37,12 @@ function objectivesSection(report: SimulationReport): string {
         ${report.objectives
           .map(
             (objective) => `
-          <li class="report-objective ${objective.met ? 'met' : 'unmet'}" data-objective="${objective.id}">
+          <li class="report-objective ${objective.met ? 'met' : 'unmet'}" data-objective="${escapeHtml(objective.id)}">
             <span class="objective-icon">${objective.met ? '✓' : '✕'}</span>
-            <span class="objective-label">${objective.label}</span>
-            <span class="objective-target">${objective.target}</span>
-            <span class="objective-actual">${objective.actual}</span>
-            <span class="objective-cause">${objective.cause ?? ''}</span>
+            <span class="objective-label">${escapeHtml(objective.label)}</span>
+            <span class="objective-target">${escapeHtml(objective.target)}</span>
+            <span class="objective-actual">${escapeHtml(objective.actual)}</span>
+            <span class="objective-cause">${escapeHtml(objective.cause ?? '')}</span>
           </li>
         `
           )
@@ -65,8 +74,8 @@ function flowStatsSection(report: SimulationReport): string {
             ${report.flowStats
               .map(
                 (stat) => `
-              <tr class="report-flow-row" data-kind="${stat.kind}">
-                <td>${stat.kind}</td>
+              <tr class="report-flow-row" data-kind="${escapeHtml(stat.kind)}">
+                <td>${escapeHtml(stat.kind)}</td>
                 <td>${stat.spawned.toLocaleString()}</td>
                 <td>${stat.completed.toLocaleString()}</td>
                 <td class="${stat.dropped > 0 ? 'bad' : ''}">${stat.dropped.toLocaleString()}</td>
@@ -235,7 +244,7 @@ export function renderReportModal(report: SimulationReport): string {
           <section class="report-section">
             <h3>Recommendations</h3>
             <ul class="report-recommendations">
-              ${report.recommendations.map((tip) => `<li>${tip}</li>`).join('')}
+              ${report.recommendations.map((tip) => `<li>${escapeHtml(tip)}</li>`).join('')}
             </ul>
           </section>
         </div>
