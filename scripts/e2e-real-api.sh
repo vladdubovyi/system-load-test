@@ -8,6 +8,10 @@
 # The database is created fresh, migrated and seeded by the API itself, then
 # dropped on exit — the developer's own `systemdesignsim` database is never
 # touched. Override the server with TEST_POSTGRES / PGHOST etc.
+#
+# Do NOT run this at the same time as `npm run test:e2e`: both drive a Vite
+# dev server on E2E_PORT, and only this one points it at the live API, so a
+# concurrent run makes both suites fail. Set E2E_PORT to separate them.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

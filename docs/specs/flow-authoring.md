@@ -169,9 +169,16 @@ Rate Limiter 0.26–0.47 (it sheds most of its 5× spikes) → floor **0.2**.
 
 Removed from `simulation.ts`: `legacyCompleteOneRequest`, the ingress
 heuristics for `shortener`/`backend`, the "Shortener only handles create"
-accept rules, the storage-node auto-complete, and the `readRatio` fallbacks
-in request-kind picking and predictive scaling. `readRatio` itself stays
-(read-replica sizing still uses it).
+accept rules, the storage-node auto-complete, and the `readRatio` split in
+predictive scaling (a kind with no flow now carries no routable traffic, so
+it gets no predictive share).
+
+`readRatio` itself stays. Besides read-replica sizing, `pickRequestKind`
+still falls back to a `readRatio` read/create split when a scenario defines
+no `requestTypes` at all — the derived fallback for legacy data that the
+parent spec §4.2 calls for. Such kinds are only routable if the scenario
+also defines flows for them; otherwise they are violated on arrival like any
+other flow-less kind.
 
 A request kind with no FlowSpec is now a **configuration error** rather than
 a routing mode: the lint reports *"Request kind "x" has no flow"* and the
@@ -224,6 +231,9 @@ All three layers are covered and green:
 - `dotnet run` applies `launchSettings.json`, which pins the URL to `:5000`
   and overrides `ASPNETCORE_URLS`; the script passes `--no-launch-profile`
   and `--urls`, and picks a free port rather than a fixed one.
+- The mocked and live suites both drive a Vite dev server on `E2E_PORT`, and
+  only the live one points it at the API — running them concurrently fails
+  both. Run them sequentially, or give them different ports.
 - Readiness means "the API returned the seeded challenges as JSON", not
   "something accepted a connection": an unrelated server on the port would
   otherwise look healthy while the frontend quietly used its offline
