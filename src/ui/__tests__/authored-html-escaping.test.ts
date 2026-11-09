@@ -36,6 +36,7 @@ function report(overrides: Partial<SimulationReport>): SimulationReport {
     spikeEvents: 0,
     availabilityPct: 100,
     recommendations: [],
+    seed: 1,
     ...overrides,
   };
 }

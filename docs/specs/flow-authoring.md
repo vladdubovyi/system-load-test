@@ -131,6 +131,13 @@ of emails compared against the JWT `email` claim. **If the list is unset the
 endpoint returns 403 for everyone** — secure by default; deployments opt in.
 A proper author role can replace this later without changing the client.
 
+> **Removed (2026-11-06).** The anonymous, database-free MVP
+> ([interview-platform.md](./interview-platform.md) §2.3) has no accounts
+> and no write endpoint. This PUT, `CHALLENGE_AUTHORS` and the editor's
+> Save button are gone; the Apply path remains and is the basis for
+> on-the-spot scenario editing in rooms (§4.1 there). Seeded scenarios are
+> authored in `FlowDefinitions.cs` / `ChallengeSeeder.cs` and redeployed.
+
 ## 4. Flows for the remaining challenges
 
 With these two the four seeded challenges all carry flows, which is the

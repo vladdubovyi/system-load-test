@@ -1,4 +1,4 @@
-export type RouteName = 'landing' | 'challenges' | 'sandbox' | 'login';
+export type RouteName = 'landing' | 'challenges' | 'sandbox';
 
 export interface RouteMatch {
   name: RouteName;
@@ -13,11 +13,10 @@ let currentRoute: RouteMatch = matchRoute(window.location.pathname);
 const listeners = new Set<RouteListener>();
 
 export function matchRoute(pathname: string): RouteMatch {
-  const path = pathname.replace(/\/+$/, '') || '/';
-
-  if (path === '/login') {
-    return { name: 'login', params: {}, path };
-  }
+  // Room credentials travel in the fragment (`#join=`, `#host=`); routing
+  // looks only at the path and leaves the fragment for the page to read.
+  const bare = pathname.split('#')[0].split('?')[0];
+  const path = bare.replace(/\/+$/, '') || '/';
 
   if (path === '/challenges') {
     return { name: 'challenges', params: {}, path };

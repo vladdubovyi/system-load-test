@@ -1,6 +1,6 @@
 import type { SimulationReport } from '../game/types';
 import { formatCost, formatSeconds } from '../game/report';
-import { downloadReportPdf } from '../game/report-pdf';
+import { downloadReportPdf, type ReportPdfExtras } from '../game/report-pdf';
 import { getActiveScenario } from '../game/scenario-runtime';
 
 /** Request kinds, flow step ids and tag labels are authored data: never trust them as HTML. */
@@ -123,6 +123,22 @@ function tagList(
   `;
 }
 
+/**
+ * A lost run is not always a broken one. A design that overloaded a
+ * component, or whose requests died on a flow violation, failed. A design
+ * whose components all stayed healthy and whose requests all took their
+ * required path, but which missed its completion floors, "survived" in the
+ * engine's words (interview-platform.md §8) — it is correct but under
+ * capacity, and the headline says so.
+ */
+function reportTitle(report: SimulationReport): string {
+  if (report.outcome === 'won') return 'Architecture survived';
+  if (report.brokenServices.length > 0) return 'Architecture failed';
+  const violations = report.objectives.find((objective) => objective.id === 'violations');
+  if (violations && !violations.met) return 'Architecture failed';
+  return 'Survived, objectives missed';
+}
+
 export function renderReportModal(report: SimulationReport): string {
   const won = report.outcome === 'won';
 
@@ -132,8 +148,8 @@ export function renderReportModal(report: SimulationReport): string {
         <header class="report-header ${won ? 'won' : 'lost'}">
           <div>
             <p class="report-kicker">Simulation complete</p>
-            <h2 id="report-title">${won ? 'Architecture survived' : 'Architecture failed'}</h2>
-            <p class="report-subtitle">${getActiveScenario().title} · ${report.duration.toFixed(1)}s run</p>
+            <h2 id="report-title">${reportTitle(report)}</h2>
+            <p class="report-subtitle">${getActiveScenario().title} · ${report.duration.toFixed(1)}s run · <span id="report-seed" title="Traffic seed — replay it to reproduce this exact run">seed ${report.seed}</span></p>
           </div>
           <div class="report-score-block">
             <div class="report-score">${report.score}</div>
@@ -252,6 +268,7 @@ export function renderReportModal(report: SimulationReport): string {
         <footer class="report-footer">
           <button class="btn btn-secondary" id="report-dismiss" type="button">Close</button>
           <button class="btn btn-secondary" id="report-download" type="button">⬇ Download PDF</button>
+          <button class="btn btn-secondary" id="report-replay-seed" type="button" title="Run the same board against the same traffic">↺ Replay same traffic</button>
           <button class="btn btn-primary" id="report-replay" type="button">▶ Run again</button>
         </footer>
       </div>
@@ -259,10 +276,19 @@ export function renderReportModal(report: SimulationReport): string {
   `;
 }
 
+export interface ReportModalOptions {
+  /** Extra record sections for the PDF (interview-platform.md §4.5). */
+  pdfExtras?: () => ReportPdfExtras;
+  /** Shown as a button when set: the host can release a held report. */
+  onRelease?: () => void;
+}
+
 export function mountReportModal(
   report: SimulationReport,
   onClose: () => void,
-  onReplay: () => void
+  onReplay: () => void,
+  onReplaySameSeed: () => void = onReplay,
+  options: ReportModalOptions = {}
 ): void {
   const existing = document.getElementById('report-overlay');
   existing?.remove();
@@ -277,11 +303,29 @@ export function mountReportModal(
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
   document.getElementById('report-download')?.addEventListener('click', () => {
-    downloadReportPdf(report);
+    downloadReportPdf(report, options.pdfExtras?.() ?? {});
   });
+  if (options.onRelease) {
+    const actions = document.querySelector('#report-overlay .report-footer');
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-secondary';
+    btn.id = 'report-release';
+    btn.type = 'button';
+    btn.textContent = '👁 Release to participants';
+    btn.addEventListener('click', () => {
+      options.onRelease?.();
+      btn.disabled = true;
+      btn.textContent = 'Released';
+    });
+    actions?.insertBefore(btn, actions.firstChild);
+  }
   document.getElementById('report-replay')?.addEventListener('click', () => {
     close();
     onReplay();
+  });
+  document.getElementById('report-replay-seed')?.addEventListener('click', () => {
+    close();
+    onReplaySameSeed();
   });
 
   document.getElementById('report-overlay')?.addEventListener('click', (e) => {

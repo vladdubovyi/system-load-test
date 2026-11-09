@@ -15,9 +15,43 @@ test.describe.configure({ timeout: 120_000 });
  * or the component dropping them.
  */
 test.describe('Objectives: URL shortener', () => {
-  test('the starter design meets every objective and the report lists them', async ({ page }) => {
+  test('the starter design lists every objective, passes correctness and misses completion', async ({ page }) => {
+    // Calibrated so the starter is where the exercise begins
+    // (interview-platform.md §8): correct, but under capacity.
     const sandbox = new SandboxPage(page);
-    await sandbox.goto('url-shortener');
+    await sandbox.goto('url-shortener', { seed: 1 });
+
+    const overlay = await sandbox.runToReport();
+    const report = await readReport(overlay);
+    expect(report.title).toBe('Survived, objectives missed');
+    expect(await sandbox.engineStatus()).toBe('lost');
+
+    const objectives = await readObjectives(overlay);
+    // Four objectives for this scenario: completion per kind, violations, failures.
+    expect(objectives.map((o) => o.id)).toEqual(
+      expect.arrayContaining(['completion:create', 'completion:read', 'violations', 'failures'])
+    );
+    // A met objective states its measured value and offers no cause.
+    const violations = objectives.find((o) => o.id === 'violations')!;
+    expect(violations.met).toBe(true);
+    expect(violations.actual).toContain('0');
+    expect(violations.cause).toBe('');
+    expect(objectives.find((o) => o.id === 'failures')!.met).toBe(true);
+    // A missed completion floor explains itself: the path is right but too slow.
+    const missed = objectives.filter((o) => o.id.startsWith('completion:') && !o.met);
+    expect(missed.length).toBeGreaterThan(0);
+    for (const objective of missed) {
+      expect(objective.actual).toMatch(/%/);
+      expect(objective.cause).not.toBe('');
+    }
+
+    await expect(overlay.locator('#report-objectives')).not.toContainText('Objectives met');
+  });
+
+  test('the reference design meets every objective and the report says so', async ({ page }) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener', { seed: 1 });
+    await sandbox.loadReference();
 
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
@@ -25,17 +59,8 @@ test.describe('Objectives: URL shortener', () => {
     expect(await sandbox.engineStatus()).toBe('won');
 
     const objectives = await readObjectives(overlay);
-    // Three objectives for this scenario: completion per kind, violations, failures.
     expect(objectives.length).toBeGreaterThanOrEqual(3);
     expect(objectives.every((o) => o.met)).toBe(true);
-    expect(objectives.map((o) => o.id)).toEqual(
-      expect.arrayContaining(['completion:create', 'completion:read', 'violations', 'failures'])
-    );
-    // A met objective states its measured value and offers no cause.
-    const violations = objectives.find((o) => o.id === 'violations')!;
-    expect(violations.actual).toContain('0');
-    expect(violations.cause).toBe('');
-
     await expect(overlay.locator('#report-objectives')).toContainText('Objectives met');
   });
 

@@ -1,7 +1,4 @@
-import { getAuthToken } from '../auth/auth-store';
-import type { AuthResponse, UserResponse } from '../auth/types';
 import type { Challenge, ComponentDefinition } from '../game/scenario-types';
-import type { ScenarioDocument } from '../game/flow-types';
 import { stripNulls } from '../game/flows';
 
 /**
@@ -46,22 +43,22 @@ export function mapChallengeFromApi(item: any): Challenge {
   };
 }
 
+/** Where the ASP.NET API lives; the room hub (`/hubs/room`) is on the same host. */
+export function apiBaseUrl(): string {
+  return import.meta.env.VITE_API_URL || 'http://localhost:5000';
+}
+
 export class ApiClient {
   private baseUrl: string;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    this.baseUrl = baseUrl || apiBaseUrl();
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers || {});
     if (!headers.has('Content-Type') && init.body) {
       headers.set('Content-Type', 'application/json');
-    }
-
-    const token = getAuthToken();
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
     }
 
     const response = await fetch(`${this.baseUrl}${path}`, {
@@ -85,31 +82,6 @@ export class ApiClient {
     }
 
     return response.json();
-  }
-
-  async register(email: string, password: string, displayName?: string): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/api/auth/register', {
-      method: 'POST',
-      body: JSON.stringify({ email, password, displayName }),
-    });
-  }
-
-  async login(email: string, password: string): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
-  }
-
-  async googleLogin(idToken: string): Promise<AuthResponse> {
-    return this.request<AuthResponse>('/api/auth/google', {
-      method: 'POST',
-      body: JSON.stringify({ idToken }),
-    });
-  }
-
-  async getCurrentUser(): Promise<UserResponse> {
-    return this.request<UserResponse>('/api/auth/me');
   }
 
   async getChallenges(): Promise<Challenge[]> {
@@ -144,18 +116,6 @@ export class ApiClient {
       console.error('Error fetching challenge by slug:', error);
       throw error;
     }
-  }
-
-  /**
-   * Authoring (docs/specs/flow-authoring.md §3.2): replace the given keys of
-   * the challenge's scenario config. Requires a signed-in author.
-   */
-  async saveScenarioConfig(slug: string, doc: ScenarioDocument): Promise<Challenge> {
-    const item = await this.request<any>(`/api/challenges/slug/${encodeURIComponent(slug)}/scenario-config`, {
-      method: 'PUT',
-      body: JSON.stringify(doc),
-    });
-    return mapChallengeFromApi(item);
   }
 
   async getComponentDefinitions(): Promise<ComponentDefinition[]> {

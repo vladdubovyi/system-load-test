@@ -9,21 +9,6 @@ on:
 jobs:
   test-backend:
     runs-on: ubuntu-latest
-    
-    services:
-      postgres:
-        image: postgres:14
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: systemdesignsim_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
       - uses: actions/checkout@v3
@@ -34,21 +19,15 @@ jobs:
           dotnet-version: '8.0.x'
 
       - name: Restore dependencies
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet restore
+        run: dotnet restore backend/SystemDesignSimulator.Api.Tests
 
       - name: Build
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet build --configuration Release --no-restore
+        run: dotnet build backend/SystemDesignSimulator.Api.Tests --configuration Release --no-restore
 
+      # The API is database-free (docs/specs/interview-platform.md §2.3), so
+      # the integration tests need no service container.
       - name: Test
-        run: |
-          cd backend/SystemDesignSimulator.Api
-          dotnet test --no-restore --verbosity normal
-        env:
-          ConnectionStrings__DefaultConnection: "Host=localhost;Database=systemdesignsim_test;Username=postgres;Password=postgres"
+        run: dotnet test backend/SystemDesignSimulator.Api.Tests --configuration Release --no-build --verbosity normal
 
   test-frontend:
     runs-on: ubuntu-latest

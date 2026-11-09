@@ -14,6 +14,12 @@ export interface RequestInspectorContext {
   paused: boolean;
   /** Whether the simulation is still running (as opposed to finished/idle). */
   running: boolean;
+  /**
+   * Interview mode, participant side (docs/specs/interview-platform.md §6.2):
+   * violation wording and step-level event detail would render flow
+   * internals, so a violated request just reads "Failed" with no reason.
+   */
+  hideFlowDetails?: boolean;
 }
 
 interface TimelineNode {
@@ -78,7 +84,7 @@ function describeState(request: Request, ctx: RequestInspectorContext): { label:
     case 'dropped':
       return { label: 'Dropped', tone: 'dropped' };
     case 'violated':
-      return { label: 'Flow violation', tone: 'dropped' };
+      return { label: ctx.hideFlowDetails ? 'Failed' : 'Flow violation', tone: 'dropped' };
     default:
       return { label: ctx.running ? 'Unknown' : 'Idle', tone: 'flight' };
   }
@@ -124,7 +130,7 @@ function buildTimeline(request: Request, ctx: RequestInspectorContext): Timeline
         current?.lines?.push(
           waited > 0.0005 ? `queued ${formatDuration(waited)} · processed` : 'processed immediately'
         );
-        if (ev.detail) current?.lines?.push(ev.detail);
+        if (ev.detail && !ctx.hideFlowDetails) current?.lines?.push(ev.detail);
         break;
       }
       case 'forwarded':
@@ -149,7 +155,13 @@ function buildTimeline(request: Request, ctx: RequestInspectorContext): Timeline
         nodes.push({ type: 'end', ok: true, at: ev.at });
         break;
       case 'violated':
-        nodes.push({ type: 'end', ok: false, violated: true, at: ev.at, reason: ev.detail });
+        nodes.push({
+          type: 'end',
+          ok: false,
+          violated: true,
+          at: ev.at,
+          reason: ctx.hideFlowDetails ? undefined : ev.detail,
+        });
         break;
       case 'dropped':
         if (ev.componentLabel && (!current || current.label !== ev.componentLabel)) {
@@ -181,7 +193,7 @@ function buildTimeline(request: Request, ctx: RequestInspectorContext): Timeline
   return nodes;
 }
 
-function renderTimeline(nodes: TimelineNode[]): string {
+function renderTimeline(nodes: TimelineNode[], ctx: RequestInspectorContext): string {
   return nodes
     .map((node) => {
       switch (node.type) {
@@ -222,7 +234,7 @@ function renderTimeline(nodes: TimelineNode[]): string {
             <li class="ri-node ri-node-end ${node.ok ? 'is-ok' : 'is-dropped'}">
               <span class="ri-dot"></span>
               <div class="ri-node-body">
-                <div class="ri-node-title">${node.ok ? '✓ Completed' : node.violated ? '⚠ Flow violation' : '✕ Dropped'} <span class="ri-time">${formatClock(node.at ?? 0)}</span></div>
+                <div class="ri-node-title">${node.ok ? '✓ Completed' : node.violated ? (ctx.hideFlowDetails ? '✕ Failed' : '⚠ Flow violation') : '✕ Dropped'} <span class="ri-time">${formatClock(node.at ?? 0)}</span></div>
                 ${node.reason ? `<div class="ri-node-line">${escapeHtml(node.reason)}</div>` : ''}
               </div>
             </li>`;
@@ -319,7 +331,7 @@ export function updateRequestInspector(request: Request | null, ctx: RequestInsp
         <div><span class="ri-metric-label">Queued</span><span class="ri-metric-value">${formatDuration(request.waitTime)}</span></div>
       </div>
     </div>
-    <ol class="ri-timeline">${renderTimeline(nodes)}</ol>
+    <ol class="ri-timeline">${renderTimeline(nodes, ctx)}</ol>
     <footer class="ri-footer">
       ${
         ctx.paused && request.finishedAt === null

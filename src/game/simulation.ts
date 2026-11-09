@@ -13,6 +13,7 @@ import type {
   SimulationSnapshot,
   SimulationStatus,
 } from './types';
+import { createRng, randomSeed, type Rng } from './rng';
 import { buildSimulationReport } from './report';
 import { allObjectivesMet, evaluateObjectives, type RunCounts } from './objectives';
 import type { ComponentInstanceConfig } from './component-config';
@@ -94,22 +95,18 @@ function normalizeDropReason(reason: string, component?: PlacedComponent): strin
     : `${component.label}: ${generalized}`;
 }
 
-function pickRequestColor(scenario: RuntimeScenario): { colorIndex: number; celebrity: boolean } {
-  const celebrity = Math.random() < scenario.celebrityShare;
+function pickRequestColor(
+  scenario: RuntimeScenario,
+  rng: Rng
+): { colorIndex: number; celebrity: boolean } {
+  const celebrity = rng.chance(scenario.celebrityShare);
   if (celebrity) {
-    const idx =
-      CELEBRITY_COLOR_INDICES[
-        Math.floor(Math.random() * CELEBRITY_COLOR_INDICES.length)
-      ];
-    return { colorIndex: idx, celebrity: true };
+    return { colorIndex: rng.pick(CELEBRITY_COLOR_INDICES), celebrity: true };
   }
   const normalColors = REQUEST_COLORS.map((_, i) => i).filter(
     (i) => !CELEBRITY_COLOR_INDICES.includes(i as (typeof CELEBRITY_COLOR_INDICES)[number])
   );
-  return {
-    colorIndex: normalColors[Math.floor(Math.random() * normalColors.length)],
-    celebrity: false,
-  };
+  return { colorIndex: rng.pick(normalColors), celebrity: false };
 }
 
 const SOURCE_X = 400;
@@ -403,15 +400,25 @@ export class SimulationEngine {
   private beltTravelTime = new Map<string, number>();
   private finishedRequests: Request[] = [];
   private pendingRecoveries: { componentId: string; at: number }[] = [];
+  /**
+   * Every random draw in a run comes from this generator (spec §8). It is
+   * re-created from `seed` on each `start()`, so the same board and seed
+   * replay the same run, on this client or any other.
+   */
+  private rng: Rng;
+  private readonly seed: number;
 
   constructor(
     components: PlacedComponent[],
     belts: ConveyorBelt[],
     componentConfigs: Map<string, ComponentInstanceConfig> = new Map(),
     onTopologyChange: TopologyChangeListener | null = null,
-    scenario: RuntimeScenario = getActiveScenario()
+    scenario: RuntimeScenario = getActiveScenario(),
+    seed: number = randomSeed()
   ) {
     this.scenario = scenario;
+    this.seed = seed;
+    this.rng = createRng(seed);
     for (const spec of scenario.flows ?? []) {
       this.flowsByKind.set(spec.kind, spec);
     }
@@ -566,10 +573,9 @@ export class SimulationEngine {
         .map((belt) => belt.id)
     );
 
-    this.components.splice(
-      this.components.findIndex((component) => component.id === instance.id),
-      1
-    );
+    const index = this.components.findIndex((component) => component.id === instance.id);
+    if (index < 0) return;
+    this.components.splice(index, 1);
     this.componentMap.delete(instance.id);
     this.componentState.delete(instance.id);
     this.completionDebt.delete(instance.id);
@@ -958,7 +964,13 @@ export class SimulationEngine {
     map.set(key, (map.get(key) ?? 0) + 1);
   }
 
+  /** The traffic seed this engine replays (spec §8). */
+  getSeed(): number {
+    return this.seed;
+  }
+
   start(): void {
+    this.rng = createRng(this.seed);
     this.time = 0;
     this.status = 'running';
     this.spawnAccumulator = 0;
@@ -1071,13 +1083,13 @@ export class SimulationEngine {
         this.spikeActive = false;
         this.currentRps = this.scenario.baseRps;
       }
-    } else if (Math.random() < this.scenario.spikeChance * dt) {
+    } else if (this.rng.chance(this.scenario.spikeChance * dt)) {
       this.spikeActive = true;
-      this.spikeTimer = 2.5 + Math.random() * 3;
+      this.spikeTimer = 2.5 + this.rng.next() * 3;
       this.currentRps = this.scenario.baseRps * this.scenario.spikeMultiplier;
       this.applyPredictiveScaling();
     } else {
-      const jitter = 1 + (Math.random() - 0.5) * 0.15;
+      const jitter = 1 + (this.rng.next() - 0.5) * 0.15;
       this.currentRps = this.scenario.baseRps * jitter;
     }
 
@@ -1258,7 +1270,7 @@ export class SimulationEngine {
     }
 
     const kind = this.pickRequestKind();
-    const { colorIndex, celebrity } = pickRequestColor(this.scenario);
+    const { colorIndex, celebrity } = pickRequestColor(this.scenario, this.rng);
     const id = nextRequestId++;
     const spec = this.flowsByKind.get(kind);
 
@@ -1310,10 +1322,10 @@ export class SimulationEngine {
   private pickRequestKind(): RequestKind {
     const entries = Object.entries(this.scenario.requestTypes ?? {}).filter(([, w]) => w > 0);
     if (entries.length === 0) {
-      return Math.random() < this.scenario.readRatio ? 'read' : 'create';
+      return this.rng.chance(this.scenario.readRatio) ? 'read' : 'create';
     }
     const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
-    let roll = Math.random() * total;
+    let roll = this.rng.next() * total;
     for (const [kind, weight] of entries) {
       roll -= weight;
       if (roll <= 0) return kind;
@@ -1468,7 +1480,7 @@ export class SimulationEngine {
   private pickAvailableBelt(belts: ConveyorBelt[]): ConveyorBelt | undefined {
     const available = belts.filter((belt) => this.canEmitOnBelt(belt));
     if (available.length === 0) return undefined;
-    return available[Math.floor(Math.random() * available.length)];
+    return this.rng.pick(available);
   }
 
   /** Process one queued request at a component through the flow interpreter. */
@@ -1550,7 +1562,7 @@ export class SimulationEngine {
         if (step.optional) continue;
         return { kind: 'wait' };
       }
-      return { kind: 'belt', belt: usable[Math.floor(Math.random() * usable.length)] };
+      return { kind: 'belt', belt: this.rng.pick(usable) };
     }
 
     // Ran out of steps without a terminal: a malformed spec
@@ -1681,7 +1693,7 @@ export class SimulationEngine {
 
     if (step.branch) {
       const probability = this.resolveBranchProbability(step.branch.probability);
-      const hit = Math.random() < probability;
+      const hit = this.rng.chance(probability);
       const isCacheBranch = step.branch.probability === 'cacheHitRatio';
       const continuation = hit ? step.branch.onHit : step.branch.onMiss;
       if (continuation === 'complete') {
@@ -1956,6 +1968,7 @@ export class SimulationEngine {
       counts: this.runCounts(),
       objectives: this.scenario.objectives,
       scoringPriorities: this.scenario.scoringPriorities,
+      seed: this.seed,
       peakRps: this.peakRps,
       spikeEvents: this.spikeEvents,
       architectureConfig: aggregateArchitectureConfig(this.components, this.componentConfigs),
@@ -1992,6 +2005,7 @@ export class SimulationEngine {
       currentRps: this.currentRps,
       spikeActive: this.spikeActive,
       message: this.message,
+      seed: this.seed,
     };
   }
 
@@ -2075,7 +2089,7 @@ export function loadColor(load: number): string {
 export function createComponent(type: ComponentType, x: number, y: number): PlacedComponent {
   const def = getComponentDef(type);
   return {
-    id: `${type}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `${type}-${crypto.randomUUID()}`,
     type,
     x,
     y,
@@ -2090,7 +2104,7 @@ export function createComponent(type: ComponentType, x: number, y: number): Plac
 export function createBelt(fromPortId: string, toPortId: string): ConveyorBelt {
   const isIngress = fromPortId.startsWith(SOURCE_ID);
   return {
-    id: `belt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `belt-${crypto.randomUUID()}`,
     fromPortId,
     toPortId,
     capacity: isIngress ? 2000 : 1000,

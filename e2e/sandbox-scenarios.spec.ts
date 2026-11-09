@@ -64,26 +64,31 @@ for (const challenge of CHALLENGES) {
       }
     });
 
-    test('starter architecture survives the full traffic run', async ({ page }) => {
+    test('starter architecture survives the full traffic run but misses its objectives', async ({ page }) => {
       const sandbox = new SandboxPage(page);
       await sandbox.goto(challenge.slug);
 
       const overlay = await sandbox.runToReport();
       const report = await readReport(overlay);
 
-      expect(report.title).toBe('Architecture survived');
+      // Every component stays healthy, but the starter is not a passing
+      // answer (docs/specs/interview-platform.md §8): the run is judged lost
+      // on its completion objectives, and the report says so without
+      // calling the architecture "failed".
+      expect(report.title).toBe('Survived, objectives missed');
       expect(report.brokenServices).toEqual([]);
       expect(report.score).toBeGreaterThan(0);
       expect(report.score).toBeLessThanOrEqual(100);
       expect(report.grade).toMatch(/^[A-F][+-]?$/);
       expect(report.componentRows).toBeGreaterThanOrEqual(starter.components);
-      await expect(overlay.locator('.report-header')).toHaveClass(/won/);
+      await expect(overlay.locator('.report-header')).toHaveClass(/lost/);
       await expect(completedStat(overlay)).not.toHaveText('0');
       expect(report.successRate).toBeGreaterThan(0);
 
-      expect(await sandbox.engineStatus()).toBe('won');
-      await expect(sandbox.statusBar).toHaveClass(/won/);
+      expect(await sandbox.engineStatus()).toBe('lost');
+      await expect(sandbox.statusBar).toHaveClass(/lost/);
       await expect(sandbox.statusBar).toContainText('survived');
+      await expect(sandbox.statusBar).toContainText('missed');
 
       await overlay.locator('#report-dismiss').click();
       await expect(sandbox.reportOverlay).toHaveCount(0);
@@ -158,7 +163,10 @@ test.describe('Scenario: backend unavailable', () => {
 
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
-    expect(report.title).toBe('Architecture survived');
+    // The offline board is the legacy reference preset, outside the §8
+    // calibration; what this test guards is that it loads and runs clean.
+    expect(['Architecture survived', 'Survived, objectives missed']).toContain(report.title);
+    expect(report.brokenServices).toEqual([]);
   });
 
   test('/sandbox without a slug defaults to the URL shortener', async ({ page }) => {

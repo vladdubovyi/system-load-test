@@ -25,6 +25,10 @@ export class SandboxPage {
   readonly scenarioEditor: Locator;
   readonly scenarioJson: Locator;
   readonly scenarioErrors: Locator;
+  readonly shareButton: Locator;
+  readonly roomDialog: Locator;
+  readonly roomPresence: Locator;
+  readonly roomBanner: Locator;
 
   constructor(readonly page: Page) {
     this.board = page.locator('#board');
@@ -43,6 +47,48 @@ export class SandboxPage {
     this.scenarioEditor = page.locator('#scenario-editor');
     this.scenarioJson = page.locator('#scenario-json');
     this.scenarioErrors = page.locator('#scenario-editor .scenario-error');
+    this.shareButton = page.locator('#btn-share');
+    this.roomDialog = page.locator('#room-dialog');
+    this.roomPresence = page.locator('#room-presence');
+    this.roomBanner = page.locator('#room-banner');
+  }
+
+  /** Open a room around the current board (docs/specs/interview-platform.md §3.1). */
+  async shareRoom(): Promise<{ code: string; participantLink: string; hostLink: string }> {
+    await this.shareButton.click();
+    await expect(this.roomDialog).toBeVisible();
+    await this.roomDialog.locator('#room-share').click();
+    const codeEl = this.roomDialog.locator('#room-code');
+    await expect(codeEl).toHaveText(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
+    const code = (await codeEl.textContent())!.trim();
+    const participantLink = await this.roomDialog.locator('#room-participant-link').inputValue();
+    const hostLink = await this.roomDialog.locator('#room-host-link').inputValue();
+    await this.roomDialog.locator('#room-close').click();
+    await expect(this.roomDialog).toHaveCount(0);
+    return { code, participantLink, hostLink };
+  }
+
+  /** Open a room link (`#join=` or `#host=`) and wait for the board. */
+  async gotoRoomLink(link: string): Promise<void> {
+    await this.page.goto(link);
+    await expect(this.board).toBeVisible();
+    await expect(this.roomPresence).toBeVisible();
+  }
+
+  /** Participant rows in the presence panel. */
+  presenceNames(): Locator {
+    return this.roomPresence.locator('.room-participant-name');
+  }
+
+  /** Drag a component by its label by a page-space offset. */
+  async dragComponent(label: string, dx: number, dy: number): Promise<void> {
+    const node = this.component(label);
+    const box = await node.boundingBox();
+    if (!box) throw new Error(`component ${label} not visible`);
+    await this.page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await this.page.mouse.down();
+    await this.page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2 + dy, { steps: 8 });
+    await this.page.mouse.up();
   }
 
   /** Open the scenario (flow authoring) editor from the chrome actions. */
@@ -66,11 +112,23 @@ export class SandboxPage {
     return this.configPalette.locator(`[data-tag-chip="${tagId}"]`);
   }
 
-  async goto(slug?: string): Promise<void> {
-    await this.page.goto(slug ? `/sandbox/${slug}` : '/sandbox');
+  /**
+   * Open a challenge sandbox. `seed` pins the traffic seed for every run in
+   * the tab (docs/specs/interview-platform.md §8), via the `?seed=` query.
+   */
+  async goto(slug?: string, options: { seed?: number } = {}): Promise<void> {
+    const path = slug ? `/sandbox/${slug}` : '/sandbox';
+    const query = options.seed === undefined ? '' : `?seed=${options.seed}`;
+    await this.page.goto(`${path}${query}`);
     await expect(this.board).toBeVisible();
     // The starter preset is placed synchronously after the API resolves.
     await expect(this.playButton).toBeVisible();
+  }
+
+  /** Replace the board with the challenge's reference solution (§8). */
+  async loadReference(): Promise<void> {
+    await this.page.locator('#btn-reference').click();
+    await expect(this.components.first()).toBeVisible();
   }
 
   panelItem(type: string): Locator {
@@ -296,10 +354,13 @@ export interface ReportSummary {
   successRate: number;
   componentRows: number;
   brokenServices: string[];
+  /** The traffic seed this run was generated from (§8). */
+  seed: number;
 }
 
 export async function readReport(overlay: Locator): Promise<ReportSummary> {
   const title = (await overlay.locator('#report-title').textContent())?.trim() ?? '';
+  const seed = Number(((await overlay.locator('#report-seed').textContent()) ?? '').replace(/[^0-9]/g, ''));
   const score = Number((await overlay.locator('.report-score').textContent())?.trim());
   const grade = ((await overlay.locator('.report-grade').textContent()) ?? '').replace('Grade', '').trim();
   const successRate = Number(
@@ -311,7 +372,7 @@ export async function readReport(overlay: Locator): Promise<ReportSummary> {
   const componentRows = await overlay.locator('.report-table tbody tr').count();
   const brokenSection = overlay.locator('.report-section', { hasText: 'Broken services' });
   const brokenServices = (await brokenSection.locator('.report-tags li').allTextContents()).map((t) => t.trim());
-  return { title, score, grade, successRate, componentRows, brokenServices };
+  return { title, score, grade, successRate, componentRows, brokenServices, seed };
 }
 
 export interface ObjectiveRow {
@@ -372,17 +433,21 @@ export async function readFlowStats(overlay: Locator): Promise<FlowStatRow[]> {
   return out;
 }
 
+/** localStorage keys an older, account-based build of BreakIT wrote. */
+export const LEGACY_TOKEN_KEY = 'sds_auth_token';
+export const LEGACY_USER_KEY = 'sds_auth_user';
+
 /**
- * Start the page already signed in as the canned test user. Mirrors what the
- * login form stores (see src/auth/auth-store.ts); the API mock accepts the
- * same token for `/api/auth/me` and the authoring endpoint.
+ * Simulate a browser that signed in under an older build: plant the session
+ * keys that build stored, before any page script runs. The anonymous MVP
+ * must neither adopt nor keep them (docs/specs/interview-platform.md §11 Q7).
  */
-export async function signInBeforeLoad(page: Page, token: string, user: object): Promise<void> {
+export async function plantLegacyAuthStorage(page: Page, token: string, user: object): Promise<void> {
   await page.addInitScript(
-    ([t, u]) => {
-      localStorage.setItem('sds_auth_token', t);
-      localStorage.setItem('sds_auth_user', u);
+    ([t, u, tk, uk]) => {
+      localStorage.setItem(tk, t);
+      localStorage.setItem(uk, u);
     },
-    [token, JSON.stringify(user)] as const
+    [token, JSON.stringify(user), LEGACY_TOKEN_KEY, LEGACY_USER_KEY] as const
   );
 }

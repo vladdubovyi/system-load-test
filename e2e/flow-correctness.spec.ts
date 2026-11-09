@@ -25,7 +25,10 @@ test.describe('Flow correctness: Instagram feed', () => {
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
 
-    expect(report.title).toBe('Architecture survived');
+    // Correct (nothing violated, nothing broke) but, like every starter,
+    // short of its completion floors (interview-platform.md §8).
+    expect(report.title).toBe('Survived, objectives missed');
+    expect(report.brokenServices).toEqual([]);
     expect(report.successRate).toBeGreaterThan(80);
 
     const totals = await sandbox.flowTotals();
@@ -69,10 +72,12 @@ test.describe('Flow correctness: URL shortener', () => {
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
 
-    expect(report.title).toBe('Architecture survived');
-    // The unconfigured starter sheds some spike traffic as drops (it did so
-    // before flow correctness too); what matters here is that nothing is
-    // *violated* — every surviving request takes its required path.
+    // The unconfigured starter sheds some spike traffic as drops, so it
+    // misses its completion floors (interview-platform.md §8); what matters
+    // here is that nothing is *violated* — every surviving request takes
+    // its required path — and nothing breaks.
+    expect(report.title).toBe('Survived, objectives missed');
+    expect(report.brokenServices).toEqual([]);
     expect(report.successRate).toBeGreaterThan(50);
 
     const totals = await sandbox.flowTotals();
@@ -124,9 +129,11 @@ test.describe('Flow correctness: URL shortener', () => {
     const overlay = await sandbox.runToReport();
     const report = await readReport(overlay);
 
-    expect(report.title).toBe('Architecture survived');
     // Without the cache the compute tier sheds some spike traffic as drops
-    // (that is the point of the cache) — but nothing may be *violated*.
+    // (that is the point of the cache), so the floors are missed — but
+    // nothing may be *violated* and nothing breaks.
+    expect(report.title).toBe('Survived, objectives missed');
+    expect(report.brokenServices).toEqual([]);
     expect(report.successRate).toBeGreaterThan(50);
 
     const totals = await sandbox.flowTotals();

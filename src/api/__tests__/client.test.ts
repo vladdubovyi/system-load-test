@@ -1,13 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-
-// auth-store reads localStorage at module load; stub it before importing.
-beforeAll(() => {
-  vi.stubGlobal('localStorage', {
-    getItem: () => null,
-    setItem: () => undefined,
-    removeItem: () => undefined,
-  });
-});
+import { describe, expect, it } from 'vitest';
 
 function makeApiItem(scenarioConfig: Record<string, unknown>) {
   return {

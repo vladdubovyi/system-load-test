@@ -106,10 +106,15 @@ export function layoutScaleGroupMembers(members: PlacedComponent[]): void {
   const cellW = def.width;
   const cellH = def.height;
 
+  // Primary first, then board order. Never the id: instance ids are random,
+  // positions set belt lengths and so travel times, and a seeded run must
+  // lay its instances out identically on every client
+  // (interview-platform.md §8).
+  const order = new Map(members.map((member, index) => [member.id, index]));
   const sorted = [...members].sort((a, b) => {
     if (a.id === primary.id) return -1;
     if (b.id === primary.id) return 1;
-    return a.id.localeCompare(b.id);
+    return order.get(a.id)! - order.get(b.id)!;
   });
 
   const cols = sorted.length <= 2 ? sorted.length : sorted.length <= 4 ? 2 : 3;

@@ -64,7 +64,7 @@ export const URL_SHORTENER_FLOWS: FlowSpec[] = [
  * database fails outright no matter how much load it absorbs.
  */
 export const URL_SHORTENER_OBJECTIVES: Objectives = {
-  minCompletionRate: { create: 0.6, read: 0.6 },
+  minCompletionRate: { create: 0.99, read: 0.99 },
   maxViolationRate: 0,
   noComponentFailures: true,
 };
@@ -75,7 +75,7 @@ export const URL_SHORTENER_OBJECTIVES: Objectives = {
  * one. Dropping the CDN or a durable store misses these immediately.
  */
 export const INSTAGRAM_FEED_OBJECTIVES: Objectives = {
-  minCompletionRate: { feedLoad: 0.85, post: 0.5, like: 0.5 },
+  minCompletionRate: { feedLoad: 0.95, post: 0.95, like: 0.95 },
   maxViolationRate: 0,
   noComponentFailures: true,
 };
@@ -231,7 +231,7 @@ export const DROPBOX_FLOWS: FlowSpec[] = [
 
 /** Starter measures 0.53–0.65 per kind; floors follow the Phase 4 minimum-bar rule. */
 export const DROPBOX_OBJECTIVES: Objectives = {
-  minCompletionRate: { upload: 0.4, download: 0.4, metadata: 0.4 },
+  minCompletionRate: { upload: 0.95, download: 0.95, metadata: 0.95 },
   maxViolationRate: 0,
   noComponentFailures: true,
 };
@@ -277,12 +277,21 @@ export const RATE_LIMITER_FLOWS: FlowSpec[] = [
 ];
 
 /**
- * The starter sheds most of its 5x spikes (measured 0.26–0.47), so the floor
- * is low; the real objective here is zero violations — every check must pass
- * through the limiter.
+ * Floors are calibrated so that the starter does not pass and the reference
+ * solution (challenge-presets.ts) does, on every seed
+ * (interview-platform.md §8; measured 2026-11-06 with seeded runs):
+ *
+ * | scenario       | starter completes | reference completes | floor |
+ * | url-shortener  | 0.78 – 0.98       | 1.00                | 0.99  |
+ * | instagram-feed | like/post 0.60–0.79, feedLoad ≈ 1.0 | ≥ 0.99 | 0.95 |
+ * | dropbox        | 0.51 – 0.69       | 1.00                | 0.95  |
+ * | rate-limiter   | 0.20 – 0.40       | 1.00                | 0.95  |
+ *
+ * The same numbers live in backend/.../FlowDefinitions.cs; change both.
+ * `calibration.test.ts` fails if either side of the line moves.
  */
 export const RATE_LIMITER_OBJECTIVES: Objectives = {
-  minCompletionRate: { check: 0.2 },
+  minCompletionRate: { check: 0.95 },
   maxViolationRate: 0,
   noComponentFailures: true,
 };

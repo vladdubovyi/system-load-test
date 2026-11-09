@@ -92,6 +92,29 @@ public class FlowDefinitionsTests
         }
     }
 
+    /// <summary>
+    /// The floors mirror <c>src/game/flow-presets.ts</c>, which the frontend's
+    /// calibration test holds against the starters and reference solutions
+    /// (interview-platform.md §8). A change on one side must be made on both.
+    /// </summary>
+    [Theory]
+    [InlineData("url-shortener", "create", 0.99)]
+    [InlineData("url-shortener", "read", 0.99)]
+    [InlineData("instagram-feed", "feedLoad", 0.95)]
+    [InlineData("instagram-feed", "post", 0.95)]
+    [InlineData("instagram-feed", "like", 0.95)]
+    [InlineData("dropbox", "upload", 0.95)]
+    [InlineData("dropbox", "download", 0.95)]
+    [InlineData("dropbox", "metadata", 0.95)]
+    [InlineData("rate-limiter", "check", 0.95)]
+    public void Completion_floors_match_the_frontend_calibration(string slug, string kind, double floor)
+    {
+        var objectives = JsonSerializer.Deserialize<JsonElement>(
+            JsonSerializer.Serialize(FlowDefinitions.ObjectivesFor(slug)));
+
+        Assert.Equal(floor, objectives.GetProperty("minCompletionRate").GetProperty(kind).GetDouble());
+    }
+
     [Fact]
     public void An_unknown_slug_has_no_flows_or_objectives()
     {

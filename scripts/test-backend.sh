@@ -4,10 +4,8 @@
 #
 #   npm run test:backend
 #
-# Integration tests host the real application against throwaway PostgreSQL
-# databases (one per test class, dropped afterwards). A server must be
-# reachable; override it with TEST_POSTGRES, e.g.
-#   TEST_POSTGRES="Host=db;Port=5432;Database=postgres;Username=postgres;Password=secret"
+# The API is database-free (docs/specs/interview-platform.md §2.3): the tests
+# host the real application in-process and need nothing but the .NET SDK.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

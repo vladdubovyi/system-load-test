@@ -2,15 +2,7 @@
 # Visit https://render.com to deploy
 
 services:
-  # PostgreSQL Database
-  - type: pgsql
-    name: systemdesignsim-db
-    databaseName: systemdesignsim
-    plan: free
-    region: oregon
-    ipAllowList: []
-
-  # Backend API
+  # Backend API — database-free (docs/specs/interview-platform.md §2.3)
   - type: web
     name: systemdesignsim-api
     runtime: docker
@@ -22,15 +14,11 @@ services:
     envVars:
       - key: ASPNETCORE_ENVIRONMENT
         value: Production
-      - key: DATABASE_URL
-        fromDatabase:
-          name: systemdesignsim-db
-          property: connectionString
       - key: CORS_ORIGINS
         value: https://systemdesignsim.vercel.app
     buildCommand: ""
     startCommand: dotnet SystemDesignSimulator.Api.dll
-    healthCheckPath: /health
+    healthCheckPath: /api/health
 
   # Frontend (Static Site)
   - type: web

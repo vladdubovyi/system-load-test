@@ -133,6 +133,108 @@ test.describe('Sandbox board editing', () => {
     await expect(db.locator('.component-config-badges')).toHaveCount(0);
   });
 
+  test('moving a component is one undoable gesture', async ({ page }) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    await sandbox.reset();
+
+    const redis = await sandbox.placeComponent('redis', 800, 400);
+    const before = await redis.boundingBox();
+    if (!before) throw new Error('component not visible');
+
+    await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(before.x + before.width / 2 + 200, before.y + before.height / 2 + 120, {
+      steps: 10,
+    });
+    await page.mouse.up();
+
+    const moved = await redis.boundingBox();
+    expect(moved!.x).toBeGreaterThan(before.x + 150);
+    expect(moved!.y).toBeGreaterThan(before.y + 90);
+
+    // One Ctrl+Z returns the component to where the drag started.
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => Math.round((await redis.boundingBox())!.x)).toBe(Math.round(before.x));
+    await expect.poll(async () => Math.round((await redis.boundingBox())!.y)).toBe(Math.round(before.y));
+
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(async () => Math.round((await redis.boundingBox())!.x)).toBe(Math.round(moved!.x));
+  });
+
+  test('undoing a deletion restores the connections it removed', async ({ page }) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    await sandbox.reset();
+
+    const lb = await sandbox.placeComponent('load-balancer', 620, 336);
+    const service = await sandbox.placeComponent('backend-service', 880, 336);
+    await sandbox.connectFromSource(sandbox.port(lb, 'in'));
+    await sandbox.connect(sandbox.port(lb, 'out'), sandbox.port(service, 'in'));
+    await expect(sandbox.belts).toHaveCount(2);
+
+    await sandbox.deleteComponent('Load Balancer');
+    await expect(sandbox.components).toHaveCount(1);
+    await expect(sandbox.belts).toHaveCount(0);
+
+    // Deleting the component and its belts was one gesture; undo brings
+    // everything back together.
+    await page.keyboard.press('Control+z');
+    await expect(sandbox.components).toHaveCount(2);
+    await expect(sandbox.belts).toHaveCount(2);
+    await expect(sandbox.playButton).toBeEnabled();
+
+    await page.keyboard.press('Control+Shift+z');
+    await expect(sandbox.components).toHaveCount(1);
+    await expect(sandbox.belts).toHaveCount(0);
+  });
+
+  test('pen strokes and text notes take part in undo and redo', async ({ page }) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    await sandbox.reset();
+
+    const strokes = page.locator('#board .board-stroke:not(.board-stroke-live)');
+    const texts = page.locator('#board .board-text');
+
+    // Draw a stroke with the pen tool.
+    await page.locator('.tool-btn[data-tool="pen"]').click();
+    const start = await sandbox.worldToScreen(500, 500);
+    await page.mouse.move(start.x, start.y);
+    await page.mouse.down();
+    await page.mouse.move(start.x + 120, start.y + 40, { steps: 8 });
+    await page.mouse.move(start.x + 240, start.y - 20, { steps: 8 });
+    await page.mouse.up();
+    await expect(strokes).toHaveCount(1);
+
+    await page.keyboard.press('Control+z');
+    await expect(strokes).toHaveCount(0);
+    await page.keyboard.press('Control+Shift+z');
+    await expect(strokes).toHaveCount(1);
+
+    // Place a text note and type into it. Creating and typing is one gesture.
+    await page.locator('.tool-btn[data-tool="text"]').click();
+    const where = await sandbox.worldToScreen(900, 600);
+    await page.mouse.click(where.x, where.y);
+    await expect(texts).toHaveCount(1);
+    await expect(texts.first()).toHaveClass(/editing/);
+    await page.keyboard.type('cache the hot keys');
+    // Clicking empty board commits the edit.
+    const away = await sandbox.worldToScreen(300, 200);
+    await page.mouse.click(away.x, away.y);
+    await expect(texts.first()).not.toHaveClass(/editing/);
+    await expect(texts.first()).toHaveText('cache the hot keys');
+
+    await page.keyboard.press('Control+z');
+    await expect(texts).toHaveCount(0);
+    // The stroke is a separate, earlier gesture and is untouched.
+    await expect(strokes).toHaveCount(1);
+
+    await page.keyboard.press('Control+Shift+z');
+    await expect(texts).toHaveCount(1);
+    await expect(texts.first()).toHaveText('cache the hot keys');
+  });
+
   test('speed buttons are mutually exclusive', async ({ page }) => {
     const sandbox = new SandboxPage(page);
     await sandbox.goto('url-shortener');

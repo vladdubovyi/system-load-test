@@ -7,7 +7,7 @@ const SOURCE_ID = '__source__';
 function makeBelt(fromPortId: string, toPortId: string): ConveyorBelt {
   const isIngress = fromPortId.startsWith(SOURCE_ID);
   return {
-    id: `belt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    id: `belt-${crypto.randomUUID()}`,
     fromPortId,
     toPortId,
     capacity: isIngress ? 2000 : 1000,
@@ -40,8 +40,11 @@ export function createScaleInstance(
 ): PlacedComponent {
   const def = getComponentDef(primary.type);
 
+  // Random, never index- or clock-derived: an index can be reused after a
+  // scale-in, and two instances created in one millisecond once collided.
+  void instanceIndex;
   return {
-    id: `${primary.type}-inst-${primary.id}-${instanceIndex}-${Date.now().toString(36)}`,
+    id: `${primary.type}-inst-${primary.id}-${crypto.randomUUID()}`,
     type: primary.type,
     x: primary.x,
     y: primary.y,
@@ -61,16 +64,28 @@ export function createInstanceBelts(
   belts: ConveyorBelt[]
 ): ConveyorBelt[] {
   const newBelts: ConveyorBelt[] = [];
-  const loadBalancer = components.find((component) => component.type === 'load-balancer');
+  const primaryInPortId = `${primary.id}:in`;
+  const primaryOutPortId = `${primary.id}:out`;
 
-  if (loadBalancer) {
-    newBelts.push(makeBelt(`${loadBalancer.id}:out`, `${instance.id}:in`));
+  // Mirror the primary's own wiring. Instances used to hang off the load
+  // balancer regardless of what fed the primary, so a service behind a
+  // gateway or a rate limiter scaled out to instances that never saw a
+  // request — the flow's next step was the gateway, and only the primary
+  // was reachable from it.
+  for (const belt of belts) {
+    if (belt.toPortId === primaryInPortId) {
+      newBelts.push(makeBelt(belt.fromPortId, `${instance.id}:in`));
+    } else if (belt.fromPortId === primaryOutPortId) {
+      newBelts.push(makeBelt(`${instance.id}:out`, belt.toPortId));
+    }
   }
 
-  const primaryOutPortId = `${primary.id}:out`;
-  for (const belt of belts) {
-    if (belt.fromPortId === primaryOutPortId) {
-      newBelts.push(makeBelt(`${instance.id}:out`, belt.toPortId));
+  if (!belts.some((belt) => belt.toPortId === primaryInPortId)) {
+    // Nothing feeds the primary yet; fall back to the load balancer so the
+    // instance is at least reachable.
+    const loadBalancer = components.find((component) => component.type === 'load-balancer');
+    if (loadBalancer) {
+      newBelts.push(makeBelt(`${loadBalancer.id}:out`, `${instance.id}:in`));
     }
   }
 
@@ -101,8 +116,12 @@ export function pickDespawnInstance(
   const idle = extras.filter((component) => queuedCount(component.id) === 0);
   const candidates = idle.length > 0 ? idle : extras;
 
+  // Ties break on board order (newest instance first), never on the id:
+  // ids are random, and a seeded run must make the same choice on every
+  // client (interview-platform.md §8).
+  const order = new Map(components.map((component, index) => [component.id, index]));
   return [...candidates].sort(
-    (a, b) => queuedCount(a.id) - queuedCount(b.id) || a.id.localeCompare(b.id)
+    (a, b) => queuedCount(a.id) - queuedCount(b.id) || order.get(b.id)! - order.get(a.id)!
   )[0]!;
 }
 

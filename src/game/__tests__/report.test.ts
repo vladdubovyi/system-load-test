@@ -74,6 +74,7 @@ function input(overrides: InputOverrides = {}): ReportInput {
     },
     objectives: overrides.objectives,
     scoringPriorities: overrides.scoringPriorities,
+    seed: 1,
     peakRps: 400,
     spikeEvents: 2,
     architectureConfig: {

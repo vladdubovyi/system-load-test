@@ -60,9 +60,22 @@ let trafficOverride: TrafficProfile | null = null;
  * only — Save pushes it to the backend.
  */
 let scenarioOverride: ScenarioDocument | null = null;
+/**
+ * The opaque flow bundle of a room run in interview mode
+ * (docs/specs/interview-platform.md §6.2): flows delivered when the run
+ * starts and discarded when it ends. Layered on top of everything so the
+ * engine can route, but kept out of the authorable scenario document so no
+ * UI ever renders it.
+ */
+let runFlowBundle: FlowSpec[] | null = null;
 
 export function getActiveScenario(): RuntimeScenario {
-  return activeScenario;
+  return runFlowBundle ? { ...activeScenario, flows: runFlowBundle } : activeScenario;
+}
+
+/** Install (or, with `null`, discard) the flow bundle for the run in progress. */
+export function setRunFlowBundle(flows: FlowSpec[] | null): void {
+  runFlowBundle = flows && flows.length > 0 ? flows : null;
 }
 
 /** Select a challenge. Any Traffic-panel override from a previous challenge is discarded. */
@@ -89,7 +102,9 @@ export function getActiveScenarioOverride(): ScenarioDocument | null {
  * definition (with preset fallbacks resolved).
  */
 export function getActiveScenarioDocument(): ScenarioDocument {
-  const scenario = getActiveScenario();
+  // Deliberately reads the scenario *without* the run flow bundle: the
+  // editor and the PDF must never show flows a projection withheld (§6.2).
+  const scenario = activeScenario;
   return {
     requestTypes: { ...scenario.requestTypes },
     tags: scenario.tags ? structuredClone(scenario.tags) : [],

@@ -1,12 +1,13 @@
-import { AUTHOR_EMAIL, REAL_API_URL, authorToken, expect, signInAsAuthor, test } from './fixtures/real-api';
+import { REAL_API_URL, expect, test } from './fixtures/real-api';
 import { SandboxPage, readFlowStats, readObjectives, readReport } from './helpers/sandbox';
+import { STARTER_PRESETS } from './fixtures/api-data';
 
 /**
- * Full-stack tests: a real ASP.NET API on a real PostgreSQL database, with
- * no request mocking at all. These prove the parts the mocked suite cannot —
- * that flows, objectives and capabilities actually survive the trip from
- * jsonb through the API and the client mapping into the simulation engine,
- * and that the authoring endpoint persists what the editor sends.
+ * Full-stack tests: a real ASP.NET API, with no request mocking at all.
+ * These prove the parts the mocked suite cannot — that flows, objectives and
+ * capabilities actually survive the trip from the in-memory catalog through
+ * the API and the client mapping into the simulation engine, and that the
+ * deployed API really has no account surface.
  *
  * Run with `npm run test:e2e:real`; skipped otherwise.
  */
@@ -44,7 +45,7 @@ test.describe('Live backend', () => {
       'rate-limiter',
       'url-shortener',
     ]);
-    // Every seeded challenge carries flows in its jsonb config.
+    // Every seeded challenge carries flows in its scenario config.
     for (const challenge of challenges) {
       expect(challenge.scenario.scenarioConfig.flows?.length ?? 0, challenge.slug).toBeGreaterThan(0);
     }
@@ -53,7 +54,7 @@ test.describe('Live backend', () => {
     await expect(page.locator('.challenge-list-item')).toHaveCount(4);
   });
 
-  test('component capabilities come from the database and keep Redis out of the write path', async ({ page, request }) => {
+  test('component capabilities come from the API and keep Redis out of the write path', async ({ page, request }) => {
     const components = (await (await request.get(`${REAL_API_URL}/api/components`)).json()) as {
       componentType: string;
       capabilities: string[] | null;
@@ -74,7 +75,7 @@ test.describe('Live backend', () => {
     expect(creates.violated).toBeGreaterThan(0);
   });
 
-  test('database-sourced flows drive a clean run of the seeded starter', async ({ page }) => {
+  test('API-sourced flows drive a clean run of the seeded starter', async ({ page }) => {
     const sandbox = new SandboxPage(page);
     await sandbox.goto('url-shortener');
 
@@ -85,13 +86,16 @@ test.describe('Live backend', () => {
     await expect(sandbox.reportOverlay).toBeVisible({ timeout: 60_000 });
 
     const report = await readReport(sandbox.reportOverlay);
-    expect(report.title).toBe('Architecture survived');
+    // Correct but under capacity, like every starter (interview-platform.md §8).
+    expect(report.title).toBe('Survived, objectives missed');
 
     const objectives = await readObjectives(sandbox.reportOverlay);
     expect(objectives.map((o) => o.id)).toEqual(
       expect.arrayContaining(['completion:create', 'completion:read', 'violations', 'failures'])
     );
-    expect(objectives.every((o) => o.met)).toBe(true);
+    expect(objectives.find((o) => o.id === 'violations')!.met).toBe(true);
+    expect(objectives.find((o) => o.id === 'failures')!.met).toBe(true);
+    expect(objectives.some((o) => o.id.startsWith('completion:') && !o.met)).toBe(true);
 
     const stats = await readFlowStats(sandbox.reportOverlay);
     expect(stats.map((s) => s.kind).sort()).toEqual(['create', 'read']);
@@ -120,123 +124,101 @@ test.describe('Live backend', () => {
     }
   });
 
-  test('an author saves a scenario and the backend serves it on the next load', async ({ page, context, request }) => {
-    await signInAsAuthor(context, request);
+  test('two people share one room through the real hub', async ({ page, browser }) => {
+    // docs/specs/interview-platform.md §3, §5: the only part of rooms the
+    // mocked suite cannot prove is the real SignalR hub, the real merge and
+    // the real credentials, so this test drives two browsers through them.
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    const room = await host.shareRoom();
+    expect(room.code).toMatch(/^[0-9A-Z]{4}-[0-9A-Z]{4}$/);
 
-    // This test writes to the shared backend. Capture the seeded scenario so
-    // it can be put back, or later tests would see the edited flows.
-    const slugUnderEdit = 'rate-limiter';
-    const original = (await (
-      await request.get(`${REAL_API_URL}/api/challenges/slug/${slugUnderEdit}`)
-    ).json()) as { scenario: { scenarioConfig: Record<string, unknown> } };
-    const seeded = original.scenario.scenarioConfig;
+    const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+    const guestPage = await context.newPage();
+    const guest = new SandboxPage(guestPage);
+    await guest.gotoRoomLink(room.participantLink);
+    await expect(guest.components).toHaveCount(STARTER_PRESETS['url-shortener'].components);
+    await expect(guest.presenceNames()).toHaveCount(2);
+    await expect(host.presenceNames()).toHaveCount(2);
 
-    try {
+    await host.placeComponent('redis', 800, 520);
+    await expect(guest.component('Redis Cache')).toHaveCount(2);
 
-      const sandbox = new SandboxPage(page);
-      await sandbox.goto('rate-limiter');
-      await sandbox.openScenarioEditor();
+    await guest.deleteComponent('Load Balancer');
+    await expect(host.component('Load Balancer')).toHaveCount(0);
+    await expect(host.belts).toHaveCount(await guest.belts.count());
 
-      // Replace the check flow with one that requires a tagged component, and
-      // declare the role it selects.
-      const doc = await sandbox.scenarioDocument();
-      await sandbox.setScenarioDocument({
-        ...doc,
-        tags: [{ id: 'edge-limiter', label: 'Edge limiter', appliesTo: { capability: 'traffic-filter' } }],
-        flows: [
-          {
-            kind: 'check',
-            steps: [
-              { id: 'ingress', require: { capability: 'ingress' } },
-              { id: 'limiter', require: { tag: 'edge-limiter' } },
-              { id: 'service', require: { capability: 'compute' } },
-              { id: 'store', require: { capability: 'durable-store' }, terminal: true },
-            ],
-          },
-        ],
-      });
+    // The host link works from the other browser and keeps the code.
+    await guestPage.goto(room.hostLink);
+    await expect(guest.roomPresence).toBeVisible();
+    await expect(guest.shareButton).toHaveText(new RegExp(room.code));
 
-      await expect(page.locator('#scenario-save')).toBeEnabled();
-      await page.locator('#scenario-save').click();
-      await expect(sandbox.boardToast).toContainText(/saved/i);
-
-      // The API really stored it.
-      const stored = (await (
-        await request.get(`${REAL_API_URL}/api/challenges/slug/rate-limiter`)
-      ).json()) as { scenario: { scenarioConfig: { flows: { steps: { require: { tag?: string } }[] }[]; tags: { id: string }[] } } };
-      expect(stored.scenario.scenarioConfig.tags[0].id).toBe('edge-limiter');
-      expect(stored.scenario.scenarioConfig.flows[0].steps[1].require.tag).toBe('edge-limiter');
-
-      // A fresh page load picks the saved scenario up from the database: the
-      // role chip is offered, and the untagged board now fails the lint.
-      await page.reload();
-      await sandbox.playButton.click();
-      await expect(sandbox.lintPanel).toBeVisible();
-      await expect(sandbox.lintPanel).toContainText('tagged "Edge limiter"');
-
-      // Assigning the role satisfies the saved flow.
-      await page.locator('#btn-reset').click();
-      await sandbox.loadStarter();
-      const limiter = sandbox.component('Rate Limiter');
-      await limiter.click();
-      await sandbox.tagChip('edge-limiter').dragTo(limiter);
-      await expect(limiter.locator('.component-tag-badge')).toHaveText(/Edge limiter/);
-
-      await sandbox.setSpeed(100);
-      await sandbox.playButton.click();
-      await expect(sandbox.lintPanel).toHaveCount(0);
-      await expect(sandbox.reportOverlay).toBeVisible({ timeout: 60_000 });
-      const stats = await readFlowStats(sandbox.reportOverlay);
-      expect(stats.find((s) => s.kind === 'check')!.violated).toBe(0);
-    } finally {
-      const restore = await request.put(
-        `${REAL_API_URL}/api/challenges/slug/${slugUnderEdit}/scenario-config`,
-        {
-          data: {
-            flows: seeded.flows,
-            objectives: seeded.objectives,
-            requestTypes: seeded.requestTypes,
-            tags: seeded.tags ?? [],
-          },
-          headers: { Authorization: `Bearer ${await authorToken(request)}` },
-          failOnStatusCode: false,
-        }
-      );
-      expect(restore.ok(), 'failed to restore the seeded scenario').toBe(true);
-    }
-  });
-
-  test('a signed-out visitor cannot save, and a non-author is refused by the API', async ({ page, request }) => {
-    const sandbox = new SandboxPage(page);
-    await sandbox.goto('url-shortener');
-    await sandbox.openScenarioEditor();
-    await expect(page.locator('#scenario-save')).toBeDisabled();
-
-    // Anonymous call is rejected by the endpoint itself.
-    const anonymous = await request.put(
-      `${REAL_API_URL}/api/challenges/slug/url-shortener/scenario-config`,
-      { data: { flows: [] }, failOnStatusCode: false }
-    );
-    expect(anonymous.status()).toBe(401);
-
-    // A registered user who is not on the allowlist gets 403, not 200.
-    const email = `intruder+${Date.now()}@example.com`;
-    const registration = await request.post(`${REAL_API_URL}/api/auth/register`, {
-      data: { email, password: 'Intruder123', displayName: 'Intruder' },
+    // The hub lives next to the API, and the hub endpoint exists only for WebSockets.
+    const negotiate = await page.request.post(`${REAL_API_URL}/hubs/room/negotiate?negotiateVersion=1`, {
       failOnStatusCode: false,
     });
-    expect(registration.ok()).toBe(true);
-    const { token } = (await registration.json()) as { token: string };
-    expect(email).not.toBe(AUTHOR_EMAIL);
+    expect(negotiate.ok()).toBe(true);
 
-    const forbidden = await request.put(
-      `${REAL_API_URL}/api/challenges/slug/url-shortener/scenario-config`,
-      {
-        data: { flows: [] },
-        headers: { Authorization: `Bearer ${token}` },
+    // A run through the real hub (§4.4): one Play, two identical reports.
+    await guestPage.goto(room.participantLink);
+    await expect(guest.roomPresence).toBeVisible();
+    await host.setSpeed(100);
+    await host.playButton.click();
+    await expect.poll(() => guest.engineStatus()).toBe('running');
+    await expect(host.reportOverlay).toBeVisible({ timeout: 90_000 });
+    await expect(guest.reportOverlay).toBeVisible({ timeout: 90_000 });
+    const hostReport = { summary: await readReport(host.reportOverlay), flows: await readFlowStats(host.reportOverlay) };
+    const guestReport = { summary: await readReport(guest.reportOverlay), flows: await readFlowStats(guest.reportOverlay) };
+    expect(guestReport).toEqual(hostReport);
+    await context.close();
+  });
+
+  test('interview mode projects the scenario through the real hub', async ({ page, browser }) => {
+    // docs/specs/interview-platform.md §6: the real server withholds flows
+    // and objectives from participants and ships the opaque flow bundle with
+    // the run; the mocked suite only proves the fake hub does.
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    const room = await host.shareRoom();
+    await host.shareButton.click();
+    await host.roomDialog.locator('#room-setting-mode').selectOption('interview');
+    await host.roomDialog.locator('#room-setting-report').selectOption('everyone');
+    await host.roomDialog.locator('#room-close').click();
+
+    const context = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+    const guestPage = await context.newPage();
+    const guest = new SandboxPage(guestPage);
+    await guest.gotoRoomLink(room.participantLink);
+    await expect(guest.roomPresence.locator('#room-presence-flags')).toContainText('Interview mode');
+
+    await host.setSpeed(100);
+    await host.playButton.click();
+    await expect(host.reportOverlay).toBeVisible({ timeout: 90_000 });
+    await expect(guest.reportOverlay).toBeVisible({ timeout: 90_000 });
+    // The run agreed tick for tick (the bundle drove the guest's engine)…
+    expect(await readFlowStats(guest.reportOverlay)).toEqual(await readFlowStats(host.reportOverlay));
+    // …but the authored objectives never reached the guest.
+    expect((await readObjectives(host.reportOverlay)).map((o) => o.id)).toContain('completion:read');
+    expect((await readObjectives(guest.reportOverlay)).map((o) => o.id)).toEqual(['failures']);
+    await context.close();
+  });
+
+  test('the API has no account surface and no write endpoint', async ({ request }) => {
+    // docs/specs/interview-platform.md §2.3: the routes are gone, not gated.
+    for (const path of ['/api/auth/register', '/api/auth/login', '/api/auth/google']) {
+      const response = await request.post(`${REAL_API_URL}${path}`, {
+        data: { email: 'someone@example.com', password: 'a-password' },
         failOnStatusCode: false,
-      }
-    );
-    expect(forbidden.status()).toBe(403);
+      });
+      expect(response.status(), path).toBe(404);
+    }
+    const me = await request.get(`${REAL_API_URL}/api/auth/me`, { failOnStatusCode: false });
+    expect(me.status()).toBe(404);
+
+    const put = await request.put(`${REAL_API_URL}/api/challenges/slug/url-shortener/scenario-config`, {
+      data: { flows: [] },
+      failOnStatusCode: false,
+    });
+    expect([404, 405]).toContain(put.status());
   });
 });

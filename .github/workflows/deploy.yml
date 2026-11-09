@@ -32,6 +32,9 @@ jobs:
         run: npm run build
         env:
           GITHUB_PAGES: 'true'
+          # Repository variable (Settings → Variables). Without it the built
+          # site points at http://localhost:5000 and has no backend.
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
 
       - name: Deploy production site to gh-pages
         uses: peaceiris/actions-gh-pages@v4

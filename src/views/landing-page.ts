@@ -50,6 +50,17 @@ export function renderLandingPage(): string {
         </section>
       </main>
       <footer class="site-footer">
+        <div class="site-notes">
+          <p id="privacy-note">
+            <strong>Privacy.</strong> BreakIT is anonymous: no account, nothing saved in your browser,
+            and nothing you type is stored. Rooms live in memory and disappear shortly after everyone
+            leaves. Our hosting provider keeps standard access logs.
+          </p>
+          <p id="terms-note">
+            <strong>Terms.</strong> BreakIT is free and provided as-is. Rooms are private and temporary,
+            and we cannot recover them. Don't use rooms for unlawful or abusive content.
+          </p>
+        </div>
         <p>© ${new Date().getFullYear()} BreakIT · Built for engineers preparing for — and running — interviews.</p>
       </footer>
     </div>

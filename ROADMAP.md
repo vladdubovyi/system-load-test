@@ -4,9 +4,9 @@ Work planned for the next stretch of development (well over 20 hours of real pro
 
 ## Proper frontend ↔ backend communication
 
-- Make the Vite app rely on the ASP.NET API for challenges, components, and auth end-to-end (no silent stale fallbacks in normal flows).
+- Make the Vite app rely on the ASP.NET API for challenges and components end-to-end (no silent stale fallbacks in normal flows).
 - Align types, error handling, CORS, and env config (`VITE_API_URL`) so local and deployed FE/BE stay in sync.
-- Harden auth token handling and API client retries/timeouts.
+- Harden API client retries/timeouts.
 
 ## More scenarios
 
@@ -17,7 +17,7 @@ Work planned for the next stretch of development (well over 20 hours of real pro
 ## Edge-case testing
 
 - Automated tests for simulation edge cases (spikes, cache stampedes, cascading failures, saturation at 100%).
-- API tests for challenge/component endpoints and auth failure paths.
+- API tests for challenge/component endpoints.
 - Frontend regression coverage for connect mode, undo/redo, and sandbox routing.
 
 ## Production-like test environment

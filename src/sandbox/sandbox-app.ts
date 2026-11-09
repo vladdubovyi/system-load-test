@@ -20,13 +20,16 @@ import { lintBoard } from '../game/flow-validator';
 import { showLintPanel, hideLintPanel } from '../ui/lint-panel';
 import { showBoardToast, dismissBoardToast } from '../ui/toast';
 import { buildPreset, URL_SHORTENER_PRESET } from '../game/presets';
-import { buildChallengePreset } from '../game/challenge-presets';
+import { buildChallengePreset, buildChallengeReference } from '../game/challenge-presets';
+import { parseSeed, randomSeed } from '../game/rng';
 import { getComponentDef } from '../game/component-catalog';
 import {
   getActiveScenario,
   setActiveScenarioFromChallenge,
   setActiveTrafficOverride,
+  setRunFlowBundle,
 } from '../game/scenario-runtime';
+import { mapChallengeFromApi } from '../api/client';
 import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
 import { ConnectionPreview } from '../ui/connection-preview';
@@ -39,8 +42,6 @@ import {
   setActiveScenarioOverride,
 } from '../game/scenario-runtime';
 import { describeSelector } from '../game/flows';
-import { isAuthenticated } from '../auth/auth-store';
-import { apiClient } from '../api/client';
 import { renderComponentsPanel, mountComponentsPanel } from '../ui/components-panel';
 import {
   applyConfigChip,
@@ -85,6 +86,65 @@ import {
   isRequestInspectorMounted,
 } from '../ui/request-inspector';
 import type { Challenge, TrafficProfile } from '../game/scenario-types';
+import {
+  applyDiff,
+  diffBoards,
+  invertDiff,
+  isEmptyDiff,
+  snapshotBoard,
+  type BoardDiff,
+  type BoardState,
+} from '../game/board-diff';
+import type { ScenarioDocument } from '../game/flow-types';
+import { navigate } from '../router';
+import {
+  RoomClient,
+  boardToEntities,
+  changesToDiff,
+  diffToChanges,
+  entitiesToBoard,
+  roomErrorMessage,
+  type BoardChanged,
+  type ParticipantInfo,
+  type RoomClientEvents,
+  type RoomJoined,
+  type RunEvent,
+  type RunEventKind,
+  type RunStarted,
+  type RunTick,
+  type TickStamp,
+  type RoomSettings,
+  DEFAULT_ROOM_SETTINGS,
+  effectiveLintVisible,
+  effectiveReportVisibility,
+} from '../rooms/room-client';
+import { clearHostNotes, getHostNotes, toggleHostNotes } from '../rooms/host-notes';
+import type { SimulationReport } from '../game/types';
+import {
+  clearRemoteCursors,
+  closeRoomDialog,
+  hideRoomBanner,
+  isRoomDialogOpen,
+  openRoomDialog,
+  remountRemoteCursors,
+  removeRemoteCursor,
+  renderPresencePanel,
+  renderPublicScenarioBanner,
+  showJoinInputError,
+  showRemoteCursor,
+  showRoomBanner,
+  showHeldReportNotice,
+  hideHeldReportNotice,
+  updateRoomDialog,
+  type RoomDialogCallbacks,
+  type RoomViewModel,
+} from '../rooms/room-ui';
+import {
+  formatJoinCode,
+  normalizeJoinCode,
+  roomFragment,
+  type RoomCredential,
+} from '../rooms/join-codes';
 
 type BoardSelection =
   | { kind: 'component'; id: string }
@@ -136,12 +196,22 @@ interface GameState {
   paused: boolean;
   /** Request currently being traced in the inspector. */
   tracedRequestId: number | null;
+  /**
+   * Traffic seed pinned through `?seed=` in the URL (interview-platform.md
+   * §8): every run in this tab uses it. Null means a fresh seed per run.
+   */
+  pinnedSeed: number | null;
+  /** Seed of the most recent run, so the report can replay it exactly. */
+  lastSeed: number | null;
 }
 
+/**
+ * One undoable gesture, stored as a per-entity diff (interview-platform.md
+ * §5.2) rather than a board snapshot. Undo applies the inverse diff; redo
+ * applies it forward. The same diffs will become room sync messages.
+ */
 interface HistoryEntry {
-  components: PlacedComponent[];
-  belts: ConveyorBelt[];
-  componentConfigs: Map<string, ComponentInstanceConfig>;
+  diff: BoardDiff;
 }
 
 const SIM_STEP = 1 / 60;
@@ -183,6 +253,8 @@ const state: GameState = {
   failureInjectionOpen: false,
   paused: false,
   tracedRequestId: null,
+  pinnedSeed: null,
+  lastSeed: null,
 };
 
 const boardRenderer = new BoardRenderer();
@@ -203,6 +275,22 @@ interface BoardSnapshot {
 }
 
 let boardSnapshotBeforeSim: BoardSnapshot | null = null;
+
+/**
+ * The board as of the last committed gesture. `pushHistory` diffs the live
+ * board against it, and undo/redo start from it so runtime-only changes (a
+ * finished run's scale instances) never leak into the undo stack.
+ */
+let lastCommittedBoard: BoardState | null = null;
+
+function liveBoard(): BoardState {
+  return {
+    components: state.components,
+    belts: state.belts,
+    componentConfigs: state.componentConfigs,
+    annotations: state.annotations,
+  };
+}
 
 function invalidateBoardSnapshot(): void {
   boardSnapshotBeforeSim = null;
@@ -278,6 +366,7 @@ function render(): void {
   applyViewport();
   updateToolUi();
   refreshConfigPalette();
+  renderRoomChrome();
 }
 
 function refreshConfigPalette(): void {
@@ -385,6 +474,11 @@ function tryStartDrag(
   e: PointerEvent
 ): boolean {
   if (!target || isSimRunning()) return false;
+  if (!canEditBoard()) {
+    selectItem(target);
+    ensureCanEdit();
+    return false;
+  }
 
   if (target.kind === 'component') {
     const c = state.components.find((x) => x.id === target.id);
@@ -418,6 +512,8 @@ function beginTextEdit(textId: string): void {
   annotationRenderer.beginTextEdit(textId, (content) => {
     const text = state.annotations.texts.find((t) => t.id === textId);
     if (text) text.content = content;
+    // Creating a note and typing into it commit together as one gesture.
+    pushHistory();
   });
 }
 
@@ -482,6 +578,7 @@ function mountBoard(): void {
   boardRenderer.setTracedRequest(tracedRequest());
   boardRenderer.update(null, 0);
   positionSourceNode();
+  remountRemoteCursors();
 }
 
 /**
@@ -515,6 +612,7 @@ function refreshRequestInspector(): void {
     now: state.engine?.getTime() ?? 0,
     paused: state.paused,
     running: isSimRunning(),
+    hideFlowDetails: flowDetailsHidden(),
   });
 }
 
@@ -650,6 +748,7 @@ function getOrCreateComponentConfig(componentId: string): ComponentInstanceConfi
 function dropConfigChipOnComponent(componentId: string, chipId: ConfigChipId): void {
   const component = state.components.find((c) => c.id === componentId);
   if (!component) return;
+  if (!ensureCanEdit()) return;
   const cfg = getOrCreateComponentConfig(componentId);
   if (applyConfigChip(cfg, chipId, component.type)) {
     state.componentConfigs.set(componentId, cfg);
@@ -706,6 +805,7 @@ function rerenderConfigPalette(): void {
 /** Assign (or remove) a scenario role on a component; refuses ineligible types with a toast. */
 function dropTagOnComponent(componentId: string, tagId: string): void {
   if (isSimRunning()) return;
+  if (!ensureCanEdit()) return;
   const component = state.components.find((c) => c.id === componentId);
   const tag = (getActiveScenario().tags ?? []).find((t) => t.id === tagId);
   if (!component || !tag) return;
@@ -736,33 +836,24 @@ function openScenarioEditor(): void {
     hideLintPanel();
     invalidateBoardSnapshot();
     updateStatus();
+    // The public-scenario banner (§6.1) follows whether an override exists.
+    renderRoomChrome();
   };
 
   mountScenarioEditor(
     container,
     getActiveScenarioDocument(),
-    { canSave: isAuthenticated(), overridden: getActiveScenarioOverride() !== null },
+    { overridden: getActiveScenarioOverride() !== null },
     {
       onApply: (doc) => {
         setActiveScenarioOverride(doc);
+        roomPublishScenario(doc);
         afterScenarioChange();
       },
       onReset: () => {
         setActiveScenarioOverride(null);
+        roomPublishScenario(null);
         afterScenarioChange();
-      },
-      onSave: async (doc) => {
-        const slug = state.currentChallenge?.slug;
-        if (!slug) throw new Error('No challenge is loaded');
-        const updated = await apiClient.saveScenarioConfig(slug, doc);
-        state.currentChallenge = updated;
-        state.availableChallenges = state.availableChallenges.map((c) =>
-          c.slug === updated.slug ? updated : c
-        );
-        // The saved document is now the challenge's own definition.
-        setActiveScenarioFromChallenge(updated);
-        afterScenarioChange();
-        showBoardToast('Scenario saved to the challenge.');
       },
       onClose: closeScenarioEditor,
     }
@@ -775,6 +866,7 @@ function closeScenarioEditor(): void {
 
 function deleteSelection(): void {
   if (!state.selection || isSimRunning()) return;
+  if (!ensureCanEdit()) return;
 
   if (state.selection.kind === 'component') {
     const id = state.selection.id;
@@ -800,10 +892,21 @@ function deleteSelection(): void {
   pushHistory();
 }
 
+/**
+ * Window-level listeners from the current `bindEvents` call. `render()`
+ * rebuilds the DOM and rebinds, so the previous set is aborted first;
+ * otherwise every re-render stacked another copy of the keyboard shortcuts
+ * and one Ctrl+Z undid several gestures.
+ */
+let windowListeners: AbortController | null = null;
+
 function bindEvents(): void {
   const viewport = document.getElementById('board-viewport')!;
+  windowListeners?.abort();
+  windowListeners = new AbortController();
+  const { signal } = windowListeners;
 
-  window.addEventListener('resize', () => boardRenderer.resizeCanvas());
+  window.addEventListener('resize', () => boardRenderer.resizeCanvas(), { signal });
 
   document.querySelectorAll('[data-tool]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -828,13 +931,23 @@ function bindEvents(): void {
     if (menu) menu.hidden = true;
     resetBoard();
   });
-  window.addEventListener('click', (e) => {
-    if (!(e.target as HTMLElement).closest('#btn-menu, #main-menu') && menu) {
-      menu.hidden = true;
-    }
-  });
+  window.addEventListener(
+    'click',
+    (e) => {
+      if (!(e.target as HTMLElement).closest('#btn-menu, #main-menu') && menu) {
+        menu.hidden = true;
+      }
+    },
+    { signal }
+  );
 
   document.getElementById('btn-play')?.addEventListener('click', () => {
+    if (room) {
+      if (!ensureCanRun()) return;
+      if (!isSimRunning()) requestRoomRun();
+      else sendRoomRunEvent(state.paused ? 'resume' : 'pause');
+      return;
+    }
     if (!isSimRunning()) startSimulation();
     else if (state.paused) resumeSimulation();
     else pauseSimulation();
@@ -843,16 +956,21 @@ function bindEvents(): void {
   document.getElementById('btn-scenario')?.addEventListener('click', openScenarioEditor);
   document.getElementById('btn-failure')?.addEventListener('click', openFailureInjection);
   document.getElementById('btn-preset')?.addEventListener('click', loadChallengeStarter);
+  document.getElementById('btn-reference')?.addEventListener('click', loadChallengeReference);
   document.getElementById('btn-reset')?.addEventListener('click', resetBoard);
+  document.getElementById('btn-share')?.addEventListener('click', openRoomDialogNow);
+  document.getElementById('btn-notes')?.addEventListener('click', toggleHostNotes);
   
   // Speed control buttons
   document.querySelectorAll('.speed-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const speed = parseInt(btn.getAttribute('data-speed') || '1');
-      state.simulationSpeed = speed as 1 | 5 | 20 | 100;
-      document.querySelectorAll('.speed-btn').forEach((el) => {
-        el.classList.toggle('active', el === btn);
-      });
+      const speed = parseInt(btn.getAttribute('data-speed') || '1') as 1 | 5 | 20 | 100;
+      // During a room run speed is room-wide (§4.4): it travels as an event.
+      if (inRoomRun() && isSimRunning()) {
+        if (ensureCanRun()) sendRoomRunEvent('speed', { speed });
+        return;
+      }
+      applySpeed(speed);
     });
   });
 
@@ -896,6 +1014,7 @@ function bindEvents(): void {
   });
 
   window.addEventListener('keydown', (e) => {
+    if (signal.aborted) return;
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if ((e.target as HTMLElement).isContentEditable) return;
 
@@ -939,15 +1058,19 @@ function bindEvents(): void {
       e.preventDefault();
       pasteSelection();
     }
-  });
+  }, { signal });
 
-  window.addEventListener('keyup', (e) => {
-    if (e.code === 'Space') {
-      state.spaceHeld = false;
-      state.panning = null;
-      updateToolUi();
-    }
-  });
+  window.addEventListener(
+    'keyup',
+    (e) => {
+      if (e.code === 'Space') {
+        state.spaceHeld = false;
+        state.panning = null;
+        updateToolUi();
+      }
+    },
+    { signal }
+  );
 
   viewport.addEventListener('selectstart', (e) => {
     if ((e.target as HTMLElement).closest('.board-text.editing')) return;
@@ -967,6 +1090,10 @@ function bindEvents(): void {
 
   viewport.addEventListener('pointermove', (e) => {
     state.lastPointer = { x: e.clientX, y: e.clientY };
+    if (room) {
+      const cursorWorld = eventToWorld(e);
+      roomSendCursor(cursorWorld.x, cursorWorld.y);
+    }
 
     if (isSimRunning() && state.paused && !state.panning) {
       const world = eventToWorld(e);
@@ -1094,6 +1221,7 @@ function bindEvents(): void {
     if (isSimRunning()) return;
 
     if (effectiveTool === 'pen') {
+      if (!ensureCanEdit()) return;
       state.drawing = createStrokePoint(world.x, world.y);
       annotationRenderer.renderLiveStroke(state.drawing);
       viewport.setPointerCapture(e.pointerId);
@@ -1119,6 +1247,10 @@ function bindEvents(): void {
     const world = eventToWorld(e);
 
     if (state.activeTool === 'component' && state.placementType) {
+      if (!ensureCanEdit()) {
+        setTool('hand');
+        return;
+      }
       const comp = createComponent(
         state.placementType,
         world.x - 70,
@@ -1135,6 +1267,10 @@ function bindEvents(): void {
     }
 
     if (state.activeTool === 'text') {
+      if (!ensureCanEdit()) {
+        setTool('hand');
+        return;
+      }
       const annotation = createTextAnnotation(world.x, world.y);
       state.annotations.texts.push(annotation);
       annotationRenderer.render(state.annotations);
@@ -1156,6 +1292,8 @@ function bindEvents(): void {
   });
 
   viewport.addEventListener('pointerup', (e) => {
+    // A drag or a pen stroke is one gesture; it is committed on release.
+    const gestureEnded = Boolean(state.dragging || state.drawing);
     if (state.connectingFromPortId) {
       finishConnection(e.clientX, e.clientY);
       state.connectingFromPortId = null;
@@ -1181,6 +1319,10 @@ function bindEvents(): void {
     } catch {
       /* ignore */
     }
+    if (gestureEnded && !isSimRunning()) {
+      invalidateBoardSnapshot();
+      pushHistory();
+    }
   });
 
   viewport.addEventListener('auxclick', (e) => {
@@ -1194,6 +1336,7 @@ function finishConnection(screenX: number, screenY: number): void {
 
   const to = findPortAtScreen(screenX, screenY);
   if (!to || to.id === from.id) return;
+  if (!ensureCanEdit()) return;
 
   const componentMap = new Map(state.components.map((c) => [c.id, c]));
   const fromPort = from.side === 'out' ? from : to;
@@ -1245,66 +1388,97 @@ function zoomAt(screenX: number, screenY: number, factor: number): void {
 }
 
 function resetBoard(): void {
-  stopSimulation();
-  closeRequestTrace();
-  hideLintPanel();
-  invalidateBoardSnapshot();
-  state.components = [];
-  state.belts = [];
-  state.annotations = createDefaultAnnotations();
-  state.componentConfigs = new Map();
-  state.engine = null;
-  state.selection = null;
-  mountBoard();
-  updateStatus();
-  setTool('hand');
-  seedHistory();
+  installBoard(
+    {
+      components: [],
+      belts: [],
+      componentConfigs: new Map(),
+      annotations: createDefaultAnnotations(),
+    },
+    { broadcast: true }
+  );
 }
 
 /**
- * Start undo history from the board as just loaded. Without a baseline entry
- * the first edit after Reset/Starter becomes the only entry and Ctrl+Z has
- * nothing earlier to return to.
+ * Start undo history from the board as just loaded: the baseline every
+ * later gesture is diffed against, with nothing to undo yet.
  */
 function seedHistory(): void {
   state.history = [];
   state.historyIndex = -1;
-  pushHistory();
+  lastCommittedBoard = snapshotBoard(liveBoard());
 }
 
 function loadChallengeStarter(): void {
-  if (isSimRunning()) stopSimulation();
-  closeRequestTrace();
-  hideLintPanel();
-  invalidateBoardSnapshot();
-
   const slug = state.currentChallenge?.slug;
   const challengePreset = slug ? buildChallengePreset(slug) : null;
   const { components, belts } = challengePreset ?? buildPreset(URL_SHORTENER_PRESET);
+  replaceBoard(components, belts, buildReferenceComponentConfigs(components));
+}
 
-  state.components = components;
-  state.belts = belts;
-  state.annotations = createDefaultAnnotations();
-  state.componentConfigs = cloneComponentConfigMap(buildReferenceComponentConfigs(components));
-  state.engine = null;
-  state.selection = null;
-  setTool('hand');
-  mountBoard();
-  annotationRenderer.updateProblemFrame();
-  updateStatus();
-  seedHistory();
+/**
+ * The challenge's reference solution (interview-platform.md §8): a board
+ * that meets every objective, for players who want to see one answer.
+ */
+function loadChallengeReference(): void {
+  const slug = state.currentChallenge?.slug;
+  const reference = slug ? buildChallengeReference(slug) : null;
+  if (!reference) {
+    loadChallengeStarter();
+    return;
+  }
+  replaceBoard(reference.components, reference.belts, reference.componentConfigs);
+}
+
+function replaceBoard(
+  components: PlacedComponent[],
+  belts: ConveyorBelt[],
+  componentConfigs: Map<string, ComponentInstanceConfig>
+): void {
+  installBoard(
+    {
+      components,
+      belts,
+      componentConfigs: cloneComponentConfigMap(componentConfigs),
+      annotations: createDefaultAnnotations(),
+    },
+    { broadcast: true }
+  );
 }
 
 function showRunReport(): void {
   if (!state.engine) return;
-  mountReportModal(
-    state.engine.getReport(),
-    () => undefined,
-    () => startSimulation()
-  );
+  const report = state.engine.getReport();
+  if (room && !participantSeesReport()) {
+    room.heldReport = report;
+    showHeldReportNotice();
+    return;
+  }
+  presentReport(report);
 }
 
-function startSimulation(): void {
+function presentReport(report: SimulationReport): void {
+  const hostHolds =
+    room?.role === 'host' && effectiveReportVisibility(room.settings) === 'hostOnly' && !room.reportReleased;
+  mountReportModal(
+    report,
+    () => renderRoomChrome(),
+    () => (room ? requestRoomRun() : startSimulation()),
+    () => (room ? requestRoomRun(report.seed) : startSimulation(report.seed)),
+    {
+      pdfExtras: roomPdfExtras,
+      onRelease: hostHolds ? () => void releaseHeldReport() : undefined,
+    }
+  );
+  renderRoomChrome();
+}
+
+/**
+ * Start a run. The seed decides every random draw the engine makes (spec
+ * §8): an explicit one replays a run, the pinned one makes a tab
+ * reproducible, and otherwise each run gets a fresh seed.
+ */
+function startSimulation(seed?: number): void {
   if (!boardSnapshotBeforeSim) {
     captureBoardSnapshot();
   }
@@ -1323,17 +1497,22 @@ function startSimulation(): void {
     tags: lintScenario.tags,
   });
   const workspace = document.querySelector('.canvas-workspace') as HTMLElement | null;
-  if (workspace && lintIssues.length > 0) {
+  const lintAllowed = !room || room.role === 'host' || effectiveLintVisible(room.settings);
+  if (workspace && lintIssues.length > 0 && lintAllowed) {
     showLintPanel(workspace, lintIssues);
   } else {
     hideLintPanel();
   }
 
+  const runSeed = seed ?? state.pinnedSeed ?? randomSeed();
+  state.lastSeed = runSeed;
   state.engine = new SimulationEngine(
     state.components,
     state.belts,
     cloneComponentConfigMap(state.componentConfigs),
-    onSimulationTopologyChange
+    onSimulationTopologyChange,
+    getActiveScenario(),
+    runSeed
   );
   state.engine.start();
   state.lastRunStatus = 'running';
@@ -1368,6 +1547,8 @@ function runSimulationLoop(): void {
         state.lastRunStatus = snap.status;
         showRunReport();
       }
+      if (roomRun) finishRoomRun(snap?.status === 'won' || snap?.status === 'lost' ? snap.status : 'idle');
+      if (room?.staleDuringRun) void resyncBoard();
       return;
     }
 
@@ -1380,9 +1561,40 @@ function runSimulationLoop(): void {
     state.lastTick = now;
     state.simAccumulator += frameDt * state.simulationSpeed;
 
-    while (state.simAccumulator >= SIM_STEP) {
-      state.engine.tick(SIM_STEP);
-      state.simAccumulator -= SIM_STEP;
+    if (roomRun) {
+      const behind = roomRun.targetTick - roomRun.tick;
+      if (!roomRun.controller && behind > ROOM_CATCHUP_THRESHOLD) {
+        // Fell behind the controller (background tab, slow machine, joined
+        // mid-run): catch up without rendering the frames in between.
+        let budget = Math.min(behind, ROOM_CATCHUP_PER_FRAME);
+        while (budget-- > 0 && stepRoomTick()) {
+          /* fast-forward */
+        }
+        state.simAccumulator = 0;
+      } else {
+        while (state.simAccumulator >= SIM_STEP) {
+          if (!stepRoomTick()) {
+            state.simAccumulator = 0;
+            break;
+          }
+          state.simAccumulator -= SIM_STEP;
+        }
+      }
+      reportRoomTick();
+      if (state.paused || !roomRun) {
+        state.animFrame = null;
+        refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
+        updateStatus();
+        if (!roomRun && state.engine && state.engine.getSnapshot().status !== 'running') {
+          state.animFrame = requestAnimationFrame(loop);
+        }
+        return;
+      }
+    } else {
+      while (state.simAccumulator >= SIM_STEP) {
+        state.engine.tick(SIM_STEP);
+        state.simAccumulator -= SIM_STEP;
+      }
     }
 
     // Leftover accumulator is simulation time not yet ticked; the renderer
@@ -1396,6 +1608,10 @@ function runSimulationLoop(): void {
 }
 
 function pauseSimulation(): void {
+  if (inRoomRun()) {
+    sendRoomRunEvent('pause');
+    return;
+  }
   if (!isSimRunning() || state.paused) return;
   state.paused = true;
   if (state.animFrame !== null) {
@@ -1407,6 +1623,10 @@ function pauseSimulation(): void {
 }
 
 function resumeSimulation(): void {
+  if (inRoomRun()) {
+    sendRoomRunEvent('resume');
+    return;
+  }
   if (!isSimRunning() || !state.paused) return;
   state.paused = false;
   state.lastTick = performance.now();
@@ -1426,6 +1646,8 @@ function stopSimulation(): void {
   if (snap?.status === 'running') state.lastRunStatus = 'idle';
   refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
   updateStatus();
+  if (roomRun) finishRoomRun('idle');
+  if (room?.staleDuringRun) void resyncBoard();
 }
 
 // Copy/Paste functions
@@ -1455,6 +1677,7 @@ function copySelection(): void {
 }
 
 function pasteSelection(): void {
+  if (!ensureCanEdit()) return;
   if (!clipboard || clipboard.components.length === 0) return;
   
   const idMap = new Map<string, string>();
@@ -1462,7 +1685,7 @@ function pasteSelection(): void {
   
   // Clone components with new IDs and offset position
   for (const comp of clipboard.components) {
-    const newId = `${comp.type}-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const newId = `${comp.type}-${crypto.randomUUID()}`;
     idMap.set(comp.id, newId);
     
     newComponents.push({
@@ -1484,7 +1707,7 @@ function pasteSelection(): void {
     if (newFromId && newToId) {
       newBelts.push({
         ...belt,
-        id: `belt-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        id: `belt-${crypto.randomUUID()}`,
         fromPortId: `${newFromId}:${fromParts[1]}`,
         toPortId: `${newToId}:${toParts[1]}`,
       });
@@ -1514,50 +1737,93 @@ function pasteSelection(): void {
   pushHistory();
 }
 
-// History management functions
-function pushHistory(): void {
-  // Trim future history if we're not at the end
-  state.history = state.history.slice(0, state.historyIndex + 1);
-  
-  // Add current state
-  state.history.push({
-    components: structuredClone(state.components),
-    belts: structuredClone(state.belts),
-    componentConfigs: cloneComponentConfigMap(state.componentConfigs),
+/**
+ * Scale instances the engine spawned during the last run live in the board
+ * arrays until the next Play restores the pre-run board. An edit in between
+ * must not commit them as real components (nor send them to a room).
+ */
+function discardRunArtifacts(): void {
+  if (isSimRunning()) return;
+  const instances = new Set(
+    state.components.filter((c) => c.scaleGroupId && c.scaleGroupId !== c.id).map((c) => c.id)
+  );
+  if (instances.size === 0) return;
+  state.components = state.components.filter((c) => !instances.has(c.id));
+  state.belts = state.belts.filter((b) => {
+    const from = b.fromPortId.slice(0, b.fromPortId.lastIndexOf(':'));
+    const to = b.toPortId.slice(0, b.toPortId.lastIndexOf(':'));
+    return !instances.has(from) && !instances.has(to);
   });
-  
+  for (const id of instances) state.componentConfigs.delete(id);
+}
+
+// History management: one entry per gesture, stored as a per-entity diff.
+function pushHistory(): void {
+  if (!lastCommittedBoard) {
+    lastCommittedBoard = snapshotBoard(liveBoard());
+    return;
+  }
+  discardRunArtifacts();
+  const diff = diffBoards(lastCommittedBoard, liveBoard());
+  if (isEmptyDiff(diff)) return;
+  roomSend(diff);
+
+  // Trim redo entries if we're not at the end
+  state.history = state.history.slice(0, state.historyIndex + 1);
+  state.history.push({ diff });
+
   // Limit history size
   if (state.history.length > state.maxHistory) {
     state.history.shift();
   } else {
     state.historyIndex++;
   }
+  lastCommittedBoard = snapshotBoard(liveBoard());
 }
 
 function undo(): void {
   if (isSimRunning()) return;
-  if (state.historyIndex > 0) {
-    state.historyIndex--;
-    const entry = state.history[state.historyIndex];
-    state.components = structuredClone(entry.components);
-    state.belts = structuredClone(entry.belts);
-    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
-    onSimulationTopologyChange();
-    render();
-  }
+  if (state.historyIndex < 0) return;
+  if (!ensureCanEdit()) return;
+  const entry = state.history[state.historyIndex];
+  state.historyIndex--;
+  applyHistoryDiff(invertDiff(entry.diff));
 }
 
 function redo(): void {
   if (isSimRunning()) return;
-  if (state.historyIndex < state.history.length - 1) {
-    state.historyIndex++;
-    const entry = state.history[state.historyIndex];
-    state.components = structuredClone(entry.components);
-    state.belts = structuredClone(entry.belts);
-    state.componentConfigs = cloneComponentConfigMap(entry.componentConfigs);
-    onSimulationTopologyChange();
-    render();
+  if (state.historyIndex >= state.history.length - 1) return;
+  if (!ensureCanEdit()) return;
+  state.historyIndex++;
+  applyHistoryDiff(state.history[state.historyIndex].diff);
+}
+
+/**
+ * Apply an undo or redo diff on top of the last committed board. Entities
+ * that no longer match what the diff expects are skipped — in a room that is
+ * what keeps one person's undo from erasing another's work (§5.2); solo, the
+ * only other writer is the engine, whose run-time instances are discarded by
+ * starting from the committed board.
+ */
+function applyHistoryDiff(diff: BoardDiff): void {
+  const base = lastCommittedBoard ?? liveBoard();
+  const { board } = applyDiff(base, diff, { skipConflicts: true });
+  roomSend(diffBoards(base, board));
+  state.components = board.components;
+  state.belts = board.belts;
+  state.componentConfigs = board.componentConfigs;
+  state.annotations = board.annotations;
+  lastCommittedBoard = snapshotBoard(board);
+
+  if (
+    state.selection?.kind === 'text' &&
+    !state.annotations.texts.some((t) => t.id === state.selection!.id)
+  ) {
+    state.selection = null;
   }
+  invalidateBoardSnapshot();
+  onSimulationTopologyChange();
+  render();
 }
 
 // Challenge selection modal removed — use /challenges page instead.
@@ -1570,6 +1836,7 @@ function closeChallengeSelector(): void {
 
 // Traffic configuration functions
 function openTrafficConfig(): void {
+  if (!ensureCanRun()) return;
   state.trafficConfigOpen = true;
   showTrafficConfigPanel();
 }
@@ -1603,11 +1870,15 @@ function showTrafficConfigPanel(): void {
  * it. A running simulation keeps the parameters it started with; the HUD and
  * problem frame update immediately so the change is visible before Play.
  */
-function applyTrafficConfig(traffic: TrafficProfile | null): void {
+function applyTrafficConfig(traffic: TrafficProfile | null, options: { fromRoom?: boolean } = {}): void {
   state.customTrafficConfig = traffic;
   setActiveTrafficOverride(traffic);
   annotationRenderer.updateProblemFrame();
   updateStatus();
+  // Everyone in a room runs the same traffic (§4.4 needs identical inputs).
+  if (room && !options.fromRoom) {
+    void room.client.setTrafficOverride(traffic).catch((error) => showBoardToast(roomErrorMessage(error)));
+  }
 }
 
 function closeTrafficConfig(): void {
@@ -1617,6 +1888,7 @@ function closeTrafficConfig(): void {
 
 // Failure injection functions
 function openFailureInjection(): void {
+  if (!ensureCanRun()) return;
   if (!isSimRunning()) {
     alert('Start the simulation first before injecting failures!');
     return;
@@ -1637,9 +1909,16 @@ function showFailureInjectionPanel(): void {
     container,
     state.components,
     (failure) => {
+      if (inRoomRun()) {
+        sendRoomRunEvent('failure', {
+          componentId: failure.componentId,
+          type: failure.type,
+          duration: failure.duration,
+        });
+        return;
+      }
       if (state.engine) {
         state.engine.injectFailure(failure.componentId, failure.type, failure.duration);
-        console.log('Injected failure:', failure);
       }
     },
     () => closeFailureInjection()
@@ -1651,15 +1930,903 @@ function closeFailureInjection(): void {
   document.getElementById('failure-injection-container')?.remove();
 }
 
+// ── Rooms (docs/specs/interview-platform.md §3, §5) ────────────────────────
+//
+// A room session mirrors committed gestures to the hub and applies everyone
+// else's. The undo stack stays per person: remote changes update the
+// committed baseline directly and never enter `state.history`.
+
+interface RoomSession {
+  client: RoomClient;
+  role: 'host' | 'participant';
+  connectionId: string;
+  name: string;
+  /** Formatted join code; participants learn it from the link they used. */
+  joinCode: string | null;
+  hostSecret: string | null;
+  /** Null for interview-mode participants: the slug is withheld (§6.1). */
+  scenarioSlug: string | null;
+  version: number;
+  participants: ParticipantInfo[];
+  /** Remote changes arrived during a local run; refetch the board when it ends. */
+  staleDuringRun: boolean;
+  credential: RoomCredential;
+  settings: RoomSettings;
+  penHolder: string | null;
+  penRequests: string[];
+  reportReleased: boolean;
+  /** The last run's report, held back from participants until released (§4). */
+  heldReport: SimulationReport | null;
+}
+
+let room: RoomSession | null = null;
+let roomBusy = false;
+let roomError: string | null = null;
+/** The open → interview warning is showing; offer a fresh room (§4.2). */
+let roomFreshOffer = false;
+let lastCursorSentAt = 0;
+const CURSOR_INTERVAL_MS = 50;
+
+function roomViewModel(): RoomViewModel {
+  return {
+    status: room ? room.role : roomBusy ? 'busy' : 'none',
+    joinCode: room?.joinCode ?? null,
+    hostSecret: room?.hostSecret ?? null,
+    name: room?.name ?? null,
+    connectionId: room?.connectionId ?? null,
+    participants: room?.participants ?? [],
+    error: roomError,
+    settings: room?.settings ?? DEFAULT_ROOM_SETTINGS,
+    penHolder: room?.penHolder ?? null,
+    penRequests: room?.penRequests ?? [],
+    reportHeld:
+      room?.role === 'host' &&
+      state.lastRunStatus !== 'running' &&
+      state.lastRunStatus !== 'idle' &&
+      !room.reportReleased &&
+      effectiveReportVisibility(room.settings) === 'hostOnly',
+    offerFreshRoom: roomFreshOffer && room?.role === 'host',
+  };
+}
+
+/**
+ * Interview mode, participant side, lint off (§6.2): the request inspector
+ * must not render violation wording or step-level flow detail.
+ */
+function flowDetailsHidden(): boolean {
+  return (
+    room !== null &&
+    room.role === 'participant' &&
+    room.settings.mode === 'interview' &&
+    !effectiveLintVisible(room.settings)
+  );
+}
+
+/** Whether this client may change the board right now (§4.3 pen rule). */
+function canEditBoard(): boolean {
+  if (!room) return true;
+  if (room.settings.pen === 'shared') return true;
+  return room.penHolder === room.connectionId;
+}
+
+/** Explain a refused edit; true when editing is allowed. */
+function ensureCanEdit(): boolean {
+  if (canEditBoard()) return true;
+  const holder = room?.participants.find((p) => p.connectionId === room?.penHolder);
+  showBoardToast(holder ? `${holder.name} holds the pen.` : 'Nobody holds the pen; ask the host for it.');
+  return false;
+}
+
+/** Whether this client may start or steer runs and change traffic (§4, "Who can run"). */
+function canRun(): boolean {
+  return !room || room.settings.whoCanRun === 'anyone' || room.role === 'host';
+}
+
+function ensureCanRun(): boolean {
+  if (canRun()) return true;
+  showBoardToast('Only the host can control runs in this room.');
+  return false;
+}
+
+function participantSeesReport(): boolean {
+  if (!room || room.role === 'host') return true;
+  return effectiveReportVisibility(room.settings) === 'everyone' || room.reportReleased;
+}
+
+async function updateRoomSettings(settings: RoomSettings): Promise<void> {
+  if (!room || room.role !== 'host') return;
+  const before = room.settings;
+  room.settings = settings;
+  renderRoomChrome();
+  try {
+    await room.client.updateSettings(settings);
+    if (before.mode === 'open' && settings.mode === 'interview' && room.participants.length > 1) {
+      roomError = "Participants who joined in open mode have already seen this scenario's internals.";
+      roomFreshOffer = true;
+      renderRoomChrome();
+    }
+    if (settings.mode === 'interview' && effectiveLintVisible(settings) && !effectiveLintVisible(before)) {
+      showBoardToast('Participants will now see required flow steps as design hints.');
+    }
+  } catch (error) {
+    if (room) room.settings = before;
+    roomError = roomErrorMessage(error);
+    renderRoomChrome();
+  }
+}
+
+function roomPdfExtras() {
+  return {
+    notes: getHostNotes(),
+    scenario: getActiveScenarioDocument(),
+    board: {
+      components: state.components.map((c) => ({ label: c.label, type: c.type })),
+      beltCount: state.belts.length,
+      textCount: state.annotations.texts.length,
+      strokeCount: state.annotations.strokes.length,
+    },
+    roomCode: room?.joinCode ?? null,
+  };
+}
+
+function roomDialogCallbacks(): RoomDialogCallbacks {
+  return {
+    onShare: () => void createRoomSession(),
+    onJoin: (input) => {
+      const code = normalizeJoinCode(input);
+      if (!code) {
+        showJoinInputError('Enter the 8-character code or paste the participant link.');
+        return;
+      }
+      closeRoomDialog();
+      navigate(`/sandbox${roomFragment({ kind: 'join', code })}`);
+    },
+    onRotateCode: () => void rotateJoinCode(),
+    onRotateHost: () => void rotateHostLink(),
+    onLeave: () => void leaveRoomSession(),
+    onClose: () => {
+      roomError = null;
+      roomFreshOffer = false;
+      closeRoomDialog();
+    },
+    onSettings: (settings) => void updateRoomSettings(settings),
+    onAssignPen: (connectionId) => {
+      if (!room) return;
+      room.penRequests = room.penRequests.filter((id) => id !== connectionId);
+      void room.client.assignPen(connectionId).catch((error) => showBoardToast(roomErrorMessage(error)));
+    },
+    onRequestPen: () => {
+      if (!room) return;
+      void room.client.requestPen().catch((error) => showBoardToast(roomErrorMessage(error)));
+      showBoardToast('Asked the host for the pen.');
+    },
+    onReleaseReport: () => void releaseHeldReport(),
+    onFreshRoom: () => void startFreshInterviewRoom(),
+  };
+}
+
+/**
+ * §4.2: participants who joined in open mode have seen the scenario's
+ * internals, and clients cannot be trusted to forget. Leave this room and
+ * open a new one — new code, new host link — around the same board, already
+ * in interview mode.
+ */
+async function startFreshInterviewRoom(): Promise<void> {
+  if (!room || room.role !== 'host') return;
+  const settings: RoomSettings = { ...room.settings, mode: 'interview' };
+  roomError = null;
+  roomFreshOffer = false;
+  await leaveRoomSession();
+  await createRoomSession();
+  if (room) await updateRoomSettings(settings);
+}
+
+async function releaseHeldReport(): Promise<void> {
+  if (!room || room.role !== 'host') return;
+  try {
+    await room.client.releaseReport();
+    room.reportReleased = true;
+    renderRoomChrome();
+  } catch (error) {
+    showBoardToast(roomErrorMessage(error));
+  }
+}
+
+function openRoomDialogNow(): void {
+  openRoomDialog(roomViewModel(), roomDialogCallbacks());
+}
+
+/** Presence panel, Share button and host-only chrome, after any room change. */
+function renderRoomChrome(): void {
+  const model = roomViewModel();
+  renderPresencePanel(model, openRoomDialogNow);
+  updateRoomDialog(model);
+  const share = document.getElementById('btn-share');
+  if (share) {
+    share.textContent = room ? `🔗 Room ${room.joinCode ?? ''}`.trim() : '🔗 Share';
+    share.classList.toggle('in-room', room !== null);
+  }
+  // In a room only the host edits the scenario (§4.1); participants receive it.
+  const scenario = document.getElementById('btn-scenario');
+  if (scenario) scenario.hidden = room?.role === 'participant';
+  const reference = document.getElementById('btn-reference');
+  if (reference) reference.hidden = room?.role === 'participant';
+  const notes = document.getElementById('btn-notes');
+  if (notes) notes.hidden = room?.role !== 'host';
+  const runControls = canRun();
+  for (const id of ['btn-traffic', 'btn-failure']) {
+    const el = document.getElementById(id);
+    if (el) el.classList.toggle('is-restricted', !runControls);
+  }
+  // §6.1: an unedited catalog scenario is public; the host sees that until
+  // the first Apply makes it theirs.
+  renderPublicScenarioBanner(
+    room !== null &&
+      room.role === 'host' &&
+      room.settings.mode === 'interview' &&
+      getActiveScenarioOverride() === null
+  );
+}
+
+function roomEvents(): RoomClientEvents {
+  return {
+    onBoardChanged: handleRemoteBoardChange,
+    onPresence: (participants) => {
+      if (!room) return;
+      const gone = room.participants.filter((p) => !participants.some((q) => q.connectionId === p.connectionId));
+      gone.forEach((p) => removeRemoteCursor(p.connectionId));
+      room.participants = participants;
+      renderRoomChrome();
+    },
+    onCursor: (connectionId, x, y) => {
+      const who = room?.participants.find((p) => p.connectionId === connectionId);
+      if (who) showRemoteCursor(connectionId, who.name, x, y);
+    },
+    onScenarioChanged: (projection) => {
+      if (!room || room.role === 'host') return;
+      room.scenarioSlug = projection.scenarioSlug;
+      installScenarioProjection(projection);
+    },
+    onTrafficChanged: (traffic) => applyTrafficConfig(traffic, { fromRoom: true }),
+    onRunStarted: (started) => beginRoomRun(started),
+    onRunTick: handleRoomRunTick,
+    onRunEvent: handleRoomRunEvent,
+    onRunEnded: handleRoomRunEnded,
+    onRunControllerChanged: handleRoomControllerChanged,
+    onSettingsChanged: (settings, penHolder) => {
+      if (!room) return;
+      room.settings = settings;
+      room.penHolder = penHolder;
+      renderRoomChrome();
+    },
+    onPenChanged: (penHolder) => {
+      if (!room) return;
+      room.penHolder = penHolder;
+      room.penRequests = room.penRequests.filter((id) => id !== penHolder);
+      if (penHolder === room.connectionId && room.settings.pen === 'single') showBoardToast('You have the pen.');
+      renderRoomChrome();
+    },
+    onPenRequested: (connectionId, name) => {
+      if (!room || room.role !== 'host') return;
+      if (!room.penRequests.includes(connectionId)) room.penRequests.push(connectionId);
+      showBoardToast(`${name} is asking for the pen.`);
+      renderRoomChrome();
+    },
+    onReportReleased: () => {
+      if (!room) return;
+      room.reportReleased = true;
+      renderRoomChrome();
+      if (room.role === 'participant' && room.heldReport) {
+        hideHeldReportNotice();
+        presentReport(room.heldReport);
+        room.heldReport = null;
+      }
+    },
+    onEnded: (reason) => endRoomSession(reason),
+    onClosed: () => endRoomSession('connection-lost'),
+    onReconnected: () => void rejoinAfterReconnect(),
+  };
+}
+
+function setRoomFragment(credential: RoomCredential | null): void {
+  const url = `${window.location.pathname}${window.location.search}${credential ? roomFragment(credential) : ''}`;
+  window.history.replaceState({}, '', url);
+}
+
+/** Share: open a room around the current board and become its host (§3.1). */
+async function createRoomSession(): Promise<void> {
+  if (room || roomBusy) return;
+  roomBusy = true;
+  roomError = null;
+  renderRoomChrome();
+  const client = new RoomClient(roomEvents());
+  try {
+    await client.connect();
+    const scenarioSlug = state.currentChallenge?.slug ?? 'url-shortener';
+    const created = await client.createRoom({
+      scenarioSlug,
+      scenarioOverride: getActiveScenarioOverride(),
+      trafficOverride: state.customTrafficConfig,
+      board: boardToEntities(liveBoard()),
+    });
+    room = {
+      client,
+      role: 'host',
+      connectionId: created.connectionId,
+      name: created.name,
+      joinCode: created.joinCode,
+      hostSecret: created.hostSecret,
+      scenarioSlug,
+      version: created.version,
+      participants: created.participants,
+      staleDuringRun: false,
+      credential: { kind: 'host', secret: created.hostSecret },
+      settings: DEFAULT_ROOM_SETTINGS,
+      penHolder: null,
+      penRequests: [],
+      reportReleased: false,
+      heldReport: null,
+    };
+    hideRoomBanner();
+    setRoomFragment(room.credential);
+  } catch (error) {
+    roomError = roomErrorMessage(error);
+    await client.dispose();
+  }
+  roomBusy = false;
+  renderRoomChrome();
+  if (!isRoomDialogOpen()) openRoomDialogNow();
+}
+
+/** Open the connection and join with a code or a host secret. Null on failure, with the reason in `roomError`. */
+async function joinRoomSession(credential: RoomCredential): Promise<RoomJoined | null> {
+  const client = new RoomClient(roomEvents());
+  try {
+    await client.connect();
+    const joined =
+      credential.kind === 'join'
+        ? await client.joinByCode(credential.code)
+        : await client.joinAsHost(credential.secret);
+    room = {
+      client,
+      role: joined.role === 'Host' ? 'host' : 'participant',
+      connectionId: joined.connectionId,
+      name: joined.name,
+      joinCode: joined.joinCode ?? (credential.kind === 'join' ? formatJoinCode(credential.code) : null),
+      hostSecret: credential.kind === 'host' ? credential.secret : null,
+      scenarioSlug: joined.scenarioSlug,
+      version: joined.version,
+      participants: joined.participants,
+      staleDuringRun: false,
+      credential,
+      settings: joined.settings,
+      penHolder: joined.penHolder,
+      penRequests: [],
+      reportReleased: joined.reportReleased,
+      heldReport: null,
+    };
+    roomError = null;
+    return joined;
+  } catch (error) {
+    roomError = roomErrorMessage(error);
+    await client.dispose();
+    return null;
+  }
+}
+
+/**
+ * Apply one scenario projection (§6.1): the stripped catalog entry for an
+ * interview-mode participant, or the slug-identified catalog scenario plus
+ * the room's override for everyone else.
+ */
+function installScenarioProjection(projection: {
+  scenarioSlug: string | null;
+  challenge: unknown | null;
+  scenarioOverride: ScenarioDocument | null;
+}): void {
+  if (projection.challenge) {
+    state.currentChallenge = mapChallengeFromApi(projection.challenge);
+    setActiveScenarioFromChallenge(state.currentChallenge);
+  } else if (projection.scenarioSlug && state.currentChallenge?.slug !== projection.scenarioSlug) {
+    const match = state.availableChallenges.find((c) => c.slug === projection.scenarioSlug);
+    if (match) {
+      state.currentChallenge = match;
+      setActiveScenarioFromChallenge(match);
+    }
+  }
+  // Selecting a challenge clears the overrides; restore the room's.
+  setActiveScenarioOverride(projection.scenarioOverride);
+  setActiveTrafficOverride(state.customTrafficConfig);
+  rerenderConfigPalette();
+  hideLintPanel();
+  invalidateBoardSnapshot();
+  annotationRenderer.updateProblemFrame();
+  updateStatus();
+}
+
+/** Put the room's board and scenario on this client without broadcasting. */
+function installRoomBoard(joined: RoomJoined): void {
+  installScenarioProjection(joined);
+  applyTrafficConfig(joined.trafficOverride, { fromRoom: true });
+  rerenderConfigPalette();
+  hideLintPanel();
+  installBoard(entitiesToBoard(joined.board), { broadcast: false });
+  updateStatus();
+  if (joined.run) {
+    // Joined mid-run: replay from tick 0 up to the controller's clock.
+    beginRoomRun(joined.run, { lastTick: joined.run.lastTick, events: joined.run.events });
+  }
+}
+
+async function resyncBoard(): Promise<void> {
+  if (!room) return;
+  try {
+    const snapshot = await room.client.requestBoard();
+    if (!room) return;
+    room.version = snapshot.version;
+    room.staleDuringRun = false;
+    installBoard(entitiesToBoard(snapshot.board), { broadcast: false });
+    updateStatus();
+  } catch (error) {
+    showBoardToast(roomErrorMessage(error));
+  }
+}
+
+async function rejoinAfterReconnect(): Promise<void> {
+  if (!room) return;
+  const credential = room.credential;
+  const old = room;
+  try {
+    const joined =
+      credential.kind === 'join'
+        ? await old.client.joinByCode(credential.code)
+        : await old.client.joinAsHost(credential.secret);
+    old.connectionId = joined.connectionId;
+    old.name = joined.name;
+    old.participants = joined.participants;
+    old.version = joined.version;
+    old.settings = joined.settings;
+    old.penHolder = joined.penHolder;
+    old.reportReleased = joined.reportReleased;
+    installRoomBoard(joined);
+    renderRoomChrome();
+  } catch {
+    endRoomSession('connection-lost');
+  }
+}
+
+/** Mirror a committed local gesture to the room. */
+function roomSend(diff: BoardDiff): void {
+  if (!room || isEmptyDiff(diff)) return;
+  void room.client.applyDiff(room.version, diffToChanges(diff)).catch((error) => {
+    showBoardToast(roomErrorMessage(error));
+  });
+}
+
+function roomSendCursor(x: number, y: number): void {
+  if (!room) return;
+  const now = performance.now();
+  if (now - lastCursorSentAt < CURSOR_INTERVAL_MS) return;
+  lastCursorSentAt = now;
+  room.client.moveCursor(Math.round(x), Math.round(y));
+}
+
+/** Commit a text edit in progress so a board rebuild cannot lose it. */
+function finishActiveTextEdit(): void {
+  const editing = document.querySelector<HTMLElement>('.board-text.editing');
+  editing?.dispatchEvent(new FocusEvent('blur'));
+}
+
+function handleRemoteBoardChange(message: BoardChanged): void {
+  if (!room) return;
+  if (message.version <= room.version) return;
+  if (message.version !== room.version + 1) {
+    room.version = message.version;
+    void resyncBoard();
+    return;
+  }
+  room.version = message.version;
+  if (message.origin === room.connectionId) return;
+  if (isSimRunning()) {
+    room.staleDuringRun = true;
+    return;
+  }
+
+  finishActiveTextEdit();
+  // An entity under the local pointer keeps its local value until release;
+  // last-writer-wins settles it when that gesture commits.
+  const held = state.dragging?.id ?? null;
+  const incoming = changesToDiff(message.changes, liveBoard());
+  const forLive = { changes: incoming.changes.filter((c) => c.id !== held) };
+  const applied = applyDiff(liveBoard(), forLive).board;
+  state.components = applied.components;
+  state.belts = applied.belts;
+  state.componentConfigs = applied.componentConfigs;
+  state.annotations = applied.annotations;
+  if (lastCommittedBoard) {
+    lastCommittedBoard = applyDiff(
+      lastCommittedBoard,
+      changesToDiff(message.changes, lastCommittedBoard)
+    ).board;
+  }
+
+  if (
+    state.selection?.kind === 'text' &&
+    !state.annotations.texts.some((t) => t.id === state.selection!.id)
+  ) {
+    state.selection = null;
+  }
+  invalidateBoardSnapshot();
+  onSimulationTopologyChange();
+  refreshConfigPalette();
+  updateStatus();
+}
+
+function endRoomSession(reason: string): void {
+  if (!room) return;
+  const wasHost = room.role === 'host';
+  const client = room.client;
+  room = null;
+  roomRun = null;
+  setRunFlowBundle(null);
+  void client.dispose();
+  clearRemoteCursors();
+  setRoomFragment(null);
+  closeRoomDialog();
+  renderRoomChrome();
+  // §3.4: the board is still here; a host can open a new room around it.
+  showRoomBanner(
+    reason,
+    wasHost ? () => void createRoomSession() : null,
+    hideRoomBanner
+  );
+}
+
+async function leaveRoomSession(): Promise<void> {
+  if (!room) return;
+  const client = room.client;
+  room = null;
+  roomRun = null;
+  setRunFlowBundle(null);
+  roomFreshOffer = false;
+  clearRemoteCursors();
+  setRoomFragment(null);
+  closeRoomDialog();
+  renderRoomChrome();
+  await client.leaveRoom();
+  await client.dispose();
+}
+
+async function rotateJoinCode(): Promise<void> {
+  if (!room || room.role !== 'host') return;
+  try {
+    room.joinCode = await room.client.rotateJoinCode();
+    renderRoomChrome();
+  } catch (error) {
+    roomError = roomErrorMessage(error);
+    renderRoomChrome();
+  }
+}
+
+async function rotateHostLink(): Promise<void> {
+  if (!room || room.role !== 'host') return;
+  try {
+    const secret = await room.client.rotateHostLink();
+    room.hostSecret = secret;
+    room.credential = { kind: 'host', secret };
+    setRoomFragment(room.credential);
+    renderRoomChrome();
+  } catch (error) {
+    roomError = roomErrorMessage(error);
+    renderRoomChrome();
+  }
+}
+
+/** The host's scenario edits are the room's scenario (§4.1). */
+function roomPublishScenario(doc: ScenarioDocument | null): void {
+  if (!room || room.role !== 'host') return;
+  void room.client.setScenarioOverride(doc).catch((error) => showBoardToast(roomErrorMessage(error)));
+}
+
+/**
+ * Replace the whole board. Used for Reset, Starter, Reference and for boards
+ * that arrive from a room. In a room the replacement is itself a gesture and
+ * is mirrored unless it came from the room.
+ */
+function installBoard(board: BoardState, options: { broadcast: boolean }): void {
+  if (options.broadcast && inRoomRun() && isSimRunning()) {
+    // The board is locked for everyone during a run; Reset and friends stop it first.
+    if (!ensureCanRun()) return;
+    sendRoomRunEvent('stop');
+    showBoardToast('The board is locked during the run. Stopping the run for everyone.');
+    return;
+  }
+  if (options.broadcast && room && !ensureCanEdit()) return;
+  if (isSimRunning()) stopSimulation();
+  closeRequestTrace();
+  hideLintPanel();
+  invalidateBoardSnapshot();
+
+  const previous = lastCommittedBoard;
+  state.components = board.components;
+  state.belts = board.belts;
+  state.annotations = board.annotations;
+  state.componentConfigs = board.componentConfigs;
+  state.engine = null;
+  state.selection = null;
+  setTool('hand');
+  mountBoard();
+  annotationRenderer.updateProblemFrame();
+  updateStatus();
+  seedHistory();
+  if (options.broadcast && previous) {
+    roomSend(diffBoards(previous, liveBoard()));
+  }
+}
+
+// ── Runs in rooms (docs/specs/interview-platform.md §4.4) ──────────────────
+//
+// Every client runs the simulation itself from the same seed, board and
+// event sequence. The controller's clock is the only clock: it stamps each
+// control event with the tick it applies at and reports its tick about four
+// times a second; nobody else advances past the last tick they heard.
+
+const ROOM_REPORT_INTERVAL_MS = 250;
+const ROOM_EVENT_LEAD_TICKS = 15;
+const ROOM_CATCHUP_THRESHOLD = 90;
+const ROOM_CATCHUP_PER_FRAME = 1200;
+
+interface RoomRunState {
+  seed: number;
+  controller: boolean;
+  controllerConnectionId: string;
+  /** Ticks this client has applied to its engine. */
+  tick: number;
+  /** Non-controllers never tick past this; Infinity for the controller. */
+  targetTick: number;
+  events: Map<number, RunEvent>;
+  /** Controller: stamps not yet reported. */
+  pendingStamps: TickStamp[];
+  lastReportAt: number;
+  /** The server already announced the end; do not announce it again. */
+  serverEnded: boolean;
+}
+
+let roomRun: RoomRunState | null = null;
+
+function inRoomRun(): boolean {
+  return room !== null && roomRun !== null;
+}
+
+/** Play in a room: ask the server to fix seed and version for everyone. */
+function requestRoomRun(seed?: number): void {
+  if (!room) return;
+  if (state.components.length === 0) return;
+  void room.client.startRun(seed ?? room.settings.seed ?? state.pinnedSeed ?? null).catch((error) => {
+    showBoardToast(roomErrorMessage(error));
+  });
+}
+
+function beginRoomRun(started: RunStarted, resume?: { lastTick: number; events: RunEvent[] }): void {
+  if (!room) return;
+  if (isSimRunning()) stopSimulation();
+  const controller = started.controllerConnectionId === room.connectionId;
+  roomRun = {
+    seed: started.seed,
+    controller,
+    controllerConnectionId: started.controllerConnectionId,
+    tick: 0,
+    targetTick: controller ? Number.POSITIVE_INFINITY : (resume?.lastTick ?? 0),
+    events: new Map((resume?.events ?? []).map((e) => [e.seq, e])),
+    pendingStamps: [],
+    lastReportAt: 0,
+    serverEnded: false,
+  };
+  hideRoomBanner();
+  // §6.2: the opaque flow bundle drives the engine for this run only. It is
+  // null for hosts and open-mode rooms, whose scenario already has flows.
+  setRunFlowBundle(started.flows ?? null);
+  startSimulation(started.seed);
+}
+
+/** Send a control request; the controller stamps it and everyone applies it at that tick. */
+function sendRoomRunEvent(kind: RunEventKind, payload: unknown | null = null): void {
+  if (!room) return;
+  void room.client.sendRunEvent(kind, payload).catch((error) => showBoardToast(roomErrorMessage(error)));
+}
+
+function stampRoomEvent(event: RunEvent): void {
+  if (!roomRun || !roomRun.controller || event.applyAtTick !== null) return;
+  // Paused: nobody is advancing, so the event applies right where everyone stands.
+  const applyAt = state.paused ? roomRun.tick : roomRun.tick + ROOM_EVENT_LEAD_TICKS;
+  event.applyAtTick = applyAt;
+  roomRun.pendingStamps.push({ seq: event.seq, applyAtTick: applyAt });
+}
+
+function handleRoomRunEvent(event: RunEvent): void {
+  if (!roomRun) return;
+  const known = roomRun.events.get(event.seq);
+  if (known) {
+    if (known.applyAtTick === null && event.applyAtTick !== null) known.applyAtTick = event.applyAtTick;
+  } else {
+    roomRun.events.set(event.seq, { ...event });
+  }
+  const held = roomRun.events.get(event.seq)!;
+  stampRoomEvent(held);
+  if (roomRun.controller) reportRoomTick(true);
+  // Paused clients have no loop to reach the tick; apply what is due now.
+  if (state.paused) applyRoomEventsAt(roomRun.tick);
+}
+
+function handleRoomRunTick(tick: RunTick): void {
+  if (!roomRun || roomRun.controller) return;
+  for (const stamp of tick.stamps) {
+    const evt = roomRun.events.get(stamp.seq);
+    if (evt && evt.applyAtTick === null) evt.applyAtTick = stamp.applyAtTick;
+  }
+  if (tick.tick > roomRun.targetTick) roomRun.targetTick = tick.tick;
+  if (state.paused) applyRoomEventsAt(roomRun.tick);
+  else if (state.animFrame === null && isSimRunning()) runSimulationLoop();
+}
+
+/** Apply, in order, every event stamped at `tick` that has not been applied yet. */
+function applyRoomEventsAt(tick: number): void {
+  if (!roomRun || !state.engine) return;
+  const due = [...roomRun.events.values()]
+    .filter((e) => e.applyAtTick !== null && e.applyAtTick <= tick)
+    .sort((a, b) => a.seq - b.seq);
+  for (const evt of due) {
+    roomRun.events.delete(evt.seq);
+    applyRoomEvent(evt);
+    if (!roomRun) return;
+  }
+}
+
+function applyRoomEvent(evt: RunEvent): void {
+  switch (evt.kind) {
+    case 'pause':
+      if (isSimRunning() && !state.paused) {
+        state.paused = true;
+        if (state.animFrame !== null) {
+          cancelAnimationFrame(state.animFrame);
+          state.animFrame = null;
+        }
+        if (roomRun?.controller) reportRoomTick(true);
+        refreshBoardVisuals(state.engine?.getSnapshot() ?? null, 0, 0);
+        updateStatus();
+      }
+      return;
+    case 'resume':
+      if (isSimRunning() && state.paused) {
+        state.paused = false;
+        state.lastTick = performance.now();
+        state.simAccumulator = 0;
+        runSimulationLoop();
+        updateStatus();
+      }
+      return;
+    case 'speed': {
+      const speed = Number((evt.payload as { speed?: number } | null)?.speed);
+      if (speed === 1 || speed === 5 || speed === 20 || speed === 100) applySpeed(speed);
+      return;
+    }
+    case 'failure': {
+      const f = evt.payload as { componentId?: string; type?: string; duration?: number } | null;
+      if (!f?.componentId || !f.type || !state.engine) return;
+      state.engine.injectFailure(
+        f.componentId,
+        f.type as 'shutdown' | 'latency' | 'capacity' | 'partition',
+        Number(f.duration) || 10
+      );
+      return;
+    }
+    case 'stop':
+      if (isSimRunning()) stopSimulation();
+      return;
+  }
+}
+
+/** One engine tick inside a room run. False when blocked by a pause or the controller's clock. */
+function stepRoomTick(): boolean {
+  if (!roomRun || !state.engine) return false;
+  applyRoomEventsAt(roomRun.tick);
+  if (!roomRun || state.paused || !isSimRunning()) return false;
+  if (!roomRun.controller && roomRun.tick >= roomRun.targetTick) return false;
+  state.engine.tick(SIM_STEP);
+  roomRun.tick++;
+  return true;
+}
+
+function reportRoomTick(force = false): void {
+  if (!room || !roomRun || !roomRun.controller) return;
+  const now = performance.now();
+  if (!force && now - roomRun.lastReportAt < ROOM_REPORT_INTERVAL_MS && roomRun.pendingStamps.length === 0) return;
+  roomRun.lastReportAt = now;
+  const stamps = roomRun.pendingStamps;
+  roomRun.pendingStamps = [];
+  room.client.reportTick(roomRun.tick, stamps);
+}
+
+/** The engine left `running`: tell the room if we are the controller, then forget the run. */
+function finishRoomRun(status: 'won' | 'lost' | 'idle'): void {
+  if (!roomRun) return;
+  // The opaque flow bundle is discarded with the run (§6.2); the report was
+  // already computed by the engine that consumed it.
+  setRunFlowBundle(null);
+  const run = roomRun;
+  roomRun = null;
+  if (!room || run.serverEnded) return;
+  if (run.controller) {
+    room.client.reportTick(run.tick, run.pendingStamps);
+    void room.client.endRun(status === 'idle' ? 'stopped' : 'finished').catch(() => undefined);
+  }
+}
+
+function handleRoomRunEnded(reason: 'finished' | 'stopped' | 'interrupted'): void {
+  if (!roomRun) return;
+  roomRun.serverEnded = true;
+  if (reason === 'finished') {
+    // Let a lagging client run to its own end and its own report.
+    roomRun.targetTick = Number.POSITIVE_INFINITY;
+    if (!roomRun.controller && state.animFrame === null && isSimRunning() && !state.paused) runSimulationLoop();
+    return;
+  }
+  if (reason === 'interrupted') showBoardToast('Run interrupted: the person driving the run left.');
+  if (isSimRunning()) stopSimulation();
+  setRunFlowBundle(null);
+  roomRun = null;
+}
+
+function handleRoomControllerChanged(controllerConnectionId: string, lastTick: number): void {
+  if (!room || !roomRun) return;
+  roomRun.controllerConnectionId = controllerConnectionId;
+  if (controllerConnectionId !== room.connectionId) return;
+  roomRun.controller = true;
+  roomRun.targetTick = Number.POSITIVE_INFINITY;
+  // Stamp whatever is waiting, after every tick the others may already hold.
+  const floor = Math.max(roomRun.tick, lastTick);
+  for (const evt of [...roomRun.events.values()].sort((a, b) => a.seq - b.seq)) {
+    if (evt.applyAtTick === null) {
+      evt.applyAtTick = floor + ROOM_EVENT_LEAD_TICKS;
+      roomRun.pendingStamps.push({ seq: evt.seq, applyAtTick: evt.applyAtTick });
+    }
+  }
+  reportRoomTick(true);
+  if (state.animFrame === null && isSimRunning() && !state.paused) runSimulationLoop();
+}
+
+function applySpeed(speed: 1 | 5 | 20 | 100): void {
+  state.simulationSpeed = speed;
+  document.querySelectorAll('.speed-btn').forEach((el) => {
+    el.classList.toggle('active', el.getAttribute('data-speed') === String(speed));
+  });
+}
+
 export interface SandboxMountOptions {
   container: HTMLElement;
   challengeSlug?: string;
   loadReferencePreset?: boolean;
+  /** Join a room on mount (`#join=` or `#host=` in the URL, §3.2). */
+  room?: RoomCredential;
 }
 
 export async function mountSandboxApp(options: SandboxMountOptions): Promise<void> {
   mountContainer = options.container;
-  await initSandbox(options.challengeSlug, options.loadReferencePreset ?? true);
+  if (options.room) {
+    // The room decides the scenario, so join before the challenge loads.
+    const joined = await joinRoomSession(options.room);
+    await initSandbox(joined?.scenarioSlug ?? options.challengeSlug, false);
+    if (joined) {
+      installRoomBoard(joined);
+      renderRoomChrome();
+    } else {
+      loadChallengeStarter();
+      setRoomFragment(null);
+      openRoomDialogNow();
+    }
+  } else {
+    await initSandbox(options.challengeSlug, options.loadReferencePreset ?? true);
+  }
   if (import.meta.env.DEV) {
     // Dev-only hooks for driving the sandbox from automation/devtools.
     (window as unknown as { __breakitDebug?: unknown }).__breakitDebug = {
@@ -1675,6 +2842,23 @@ export async function mountSandboxApp(options: SandboxMountOptions): Promise<voi
 }
 
 export function destroySandboxApp(): void {
+  if (room) {
+    const client = room.client;
+    room = null;
+    roomRun = null;
+    void client.leaveRoom().then(() => client.dispose());
+  }
+  setRunFlowBundle(null);
+  roomBusy = false;
+  roomError = null;
+  roomFreshOffer = false;
+  clearRemoteCursors();
+  clearHostNotes();
+  closeRoomDialog();
+  hideRoomBanner();
+  hideHeldReportNotice();
+  windowListeners?.abort();
+  windowListeners = null;
   if (state.animFrame !== null) {
     cancelAnimationFrame(state.animFrame);
     state.animFrame = null;
@@ -1700,6 +2884,8 @@ export function destroySandboxApp(): void {
 }
 
 async function initSandbox(challengeSlug?: string, loadReferencePreset = true): Promise<void> {
+  state.pinnedSeed = parseSeed(new URLSearchParams(window.location.search).get('seed'));
+  state.lastSeed = null;
   try {
     console.log('Initializing sandbox...');
     const appData = await initializeApp(challengeSlug);

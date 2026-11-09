@@ -1,7 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.EntityFrameworkCore;
 using SystemDesignSimulator.Api.Data;
 using SystemDesignSimulator.Api.Data.Seed;
+using SystemDesignSimulator.Api.Models;
 
 namespace SystemDesignSimulator.Api.Controllers;
 
@@ -9,79 +9,55 @@ namespace SystemDesignSimulator.Api.Controllers;
 [Route("api/[controller]")]
 public class ComponentsController : ControllerBase
 {
-    private readonly ApplicationDbContext _context;
-    private readonly ILogger<ComponentsController> _logger;
+    private readonly IChallengeCatalog _catalog;
 
-    public ComponentsController(ApplicationDbContext context, ILogger<ComponentsController> logger)
+    public ComponentsController(IChallengeCatalog catalog)
     {
-        _context = context;
-        _logger = logger;
+        _catalog = catalog;
     }
 
     [HttpGet]
-    public async Task<IActionResult> GetComponents([FromQuery] string? category = null)
+    public IActionResult GetComponents([FromQuery] string? category = null)
     {
-        var query = _context.ComponentDefinitions.Where(c => c.Enabled);
+        IEnumerable<ComponentDefinition> components = _catalog.Components.Where(c => c.Enabled);
 
         if (!string.IsNullOrEmpty(category))
         {
-            query = query.Where(c => c.Category == category);
+            components = components.Where(c => c.Category == category);
         }
 
-        var components = await query
-            .OrderBy(c => c.Category)
-            .ThenBy(c => c.Label)
-            .ToListAsync();
-
-        var result = components.Select(c => new
-        {
-            c.Id,
-            c.ComponentType,
-            c.Label,
-            c.Category,
-            c.DefaultCapacity,
-            c.DefaultQueueLimit,
-            c.MonthlyCost,
-            c.Emoji,
-            c.Width,
-            c.Height,
-            c.Description,
-            c.Enabled,
-            // Semantic capabilities (docs/specs/flow-authoring.md §2.2), stored in ConfigSchema.
-            Capabilities = FlowDefinitions.CapabilitiesFromSchema(c.ConfigSchema)
-        });
+        var result = components
+            .OrderBy(c => c.Category, StringComparer.Ordinal)
+            .ThenBy(c => c.Label, StringComparer.Ordinal)
+            .Select(ToDto);
 
         return Ok(result);
     }
 
     [HttpGet("{type}")]
-    public async Task<IActionResult> GetComponentByType(string type)
+    public IActionResult GetComponentByType(string type)
     {
-        var component = await _context.ComponentDefinitions
-            .FirstOrDefaultAsync(c => c.ComponentType == type);
-
-        if (component == null)
-        {
-            return NotFound(new { error = "Component not found" });
-        }
-
-        var result = new
-        {
-            component.Id,
-            component.ComponentType,
-            component.Label,
-            component.Category,
-            component.DefaultCapacity,
-            component.DefaultQueueLimit,
-            component.MonthlyCost,
-            component.Emoji,
-            component.Width,
-            component.Height,
-            component.Description,
-            component.Enabled,
-            Capabilities = FlowDefinitions.CapabilitiesFromSchema(component.ConfigSchema)
-        };
-
-        return Ok(result);
+        var component = _catalog.FindComponent(type);
+        return component == null
+            ? NotFound(new { error = "Component not found" })
+            : Ok(ToDto(component));
     }
+
+    private static object ToDto(ComponentDefinition c) => new
+    {
+        c.Id,
+        c.ComponentType,
+        c.Label,
+        c.Category,
+        c.DefaultCapacity,
+        c.DefaultQueueLimit,
+        c.MonthlyCost,
+        c.Emoji,
+        c.Width,
+        c.Height,
+        c.Description,
+        c.Enabled,
+        // Semantic capabilities (docs/specs/flow-authoring.md §2.2), stored in ConfigSchema.
+        Capabilities = FlowDefinitions.CapabilitiesFromSchema(c.ConfigSchema)
+    };
 }

@@ -94,6 +94,8 @@ export interface ReportInput {
   objectives?: Objectives;
   /** Scenario scoring priorities, used to weight the score dimensions. */
   scoringPriorities?: ScoringPriorities;
+  /** Traffic seed the run was generated from (interview-platform.md §8). */
+  seed: number;
   peakRps: number;
   spikeEvents: number;
   architectureConfig: ArchitectureConfig;
@@ -560,6 +562,7 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     spikeEvents: input.spikeEvents,
     availabilityPct,
     recommendations,
+    seed: input.seed,
   };
 }
 

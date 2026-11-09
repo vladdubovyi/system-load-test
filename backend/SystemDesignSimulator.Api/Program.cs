@@ -1,13 +1,12 @@
-using System.IdentityModel.Tokens.Jwt;
-using System.Text;
-using Microsoft.AspNetCore.Authentication.JwtBearer;
-using Microsoft.AspNetCore.Identity;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 using SystemDesignSimulator.Api.Data;
-using SystemDesignSimulator.Api.Data.Seed;
-using SystemDesignSimulator.Api.Models;
-using SystemDesignSimulator.Api.Services;
+using SystemDesignSimulator.Api.Rooms;
+
+// BreakIT API — anonymous and database-free (docs/specs/interview-platform.md §2).
+// There is no persistence of any kind: the challenge library is built from the
+// seed source into memory at startup, and there are no accounts, tokens or
+// write endpoints. Keep it that way; §2.1 is the checklist.
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,93 +17,57 @@ if (!string.IsNullOrEmpty(port))
     builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 }
 
-// Add services to the container
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Configure database
-// Support both appsettings.json and DATABASE_URL environment variable (Railway/Render)
-var connectionString = Environment.GetEnvironmentVariable("DATABASE_URL");
+builder.Services.AddSingleton<IChallengeCatalog, ChallengeCatalog>();
 
-if (!string.IsNullOrEmpty(connectionString))
+// Rooms (docs/specs/interview-platform.md §3, §5, §7): one hub, state in
+// process memory, no persistence. Detailed errors stay off so a stack trace
+// never carries a payload to a client; the hub itself logs nothing sensitive.
+builder.Services.AddSignalR(options =>
 {
-    // Railway/Render format: postgresql://user:password@host:port/database
-    // Convert to Npgsql format
-    try
-    {
-        var databaseUri = new Uri(connectionString);
-        var userInfo = databaseUri.UserInfo.Split(':');
-        
-        connectionString = $"Host={databaseUri.Host};" +
-                          $"Port={databaseUri.Port};" +
-                          $"Database={databaseUri.LocalPath.TrimStart('/')};" +
-                          $"Username={userInfo[0]};" +
-                          $"Password={userInfo[1]};" +
-                          $"SSL Mode=Require;" +
-                          $"Trust Server Certificate=true";
-    }
-    catch (Exception ex)
-    {
-        builder.Logging.AddConsole().AddDebug();
-        var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
-        logger.LogWarning(ex, "Failed to parse DATABASE_URL, falling back to appsettings.json");
-        connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
-            ?? "Host=localhost;Port=5432;Database=systemdesignsim;Username=postgres;Password=postgres";
-    }
-}
-else
-{
-    // Fallback to appsettings.json
-    connectionString = builder.Configuration.GetConnectionString("DefaultConnection") 
-        ?? "Host=localhost;Port=5432;Database=systemdesignsim;Username=postgres;Password=postgres";
-}
-
-builder.Services.AddDbContext<ApplicationDbContext>(options =>
-    options.UseNpgsql(connectionString));
-
-builder.Services
-    .AddIdentity<ApplicationUser, IdentityRole>(options =>
-    {
-        options.Password.RequiredLength = 8;
-        options.Password.RequireNonAlphanumeric = false;
-        options.User.RequireUniqueEmail = true;
-    })
-    .AddEntityFrameworkStores<ApplicationDbContext>()
-    .AddDefaultTokenProviders();
-
-var jwtSecret = builder.Configuration["JWT_SECRET"]
-    ?? builder.Configuration["Jwt:Secret"]
-    ?? "dev-only-change-me-in-production-use-32-chars-min";
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "SystemDesignSimulator";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "SystemDesignSimulator";
-
-builder.Services.AddAuthentication(options =>
-{
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuer = true,
-        ValidateAudience = true,
-        ValidateLifetime = true,
-        ValidateIssuerSigningKey = true,
-        ValidIssuer = jwtIssuer,
-        ValidAudience = jwtAudience,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
-        ClockSkew = TimeSpan.FromMinutes(1),
-    };
+    options.EnableDetailedErrors = false;
+    options.MaximumReceiveMessageSize = RoomLimits.MaxDiffBytes + 64 * 1024;
 });
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton<RoomRegistry>();
+builder.Services.AddSingleton<RoomGuards>();
+builder.Services.AddSingleton<ScenarioProjector>();
+builder.Services.AddHostedService<RoomExpiryService>();
 
-builder.Services.AddSingleton<JwtTokenService>();
+// Behind a reverse proxy the rate limits (§7) key on X-Forwarded-For, but
+// only from proxies we name: KNOWN_PROXIES is a comma-separated list of IPs
+// or CIDR ranges. Unset, every client appears as the proxy and shares one
+// bucket, which is safe but blunt.
+var knownProxies = Environment.GetEnvironmentVariable("KNOWN_PROXIES") ?? builder.Configuration["KNOWN_PROXIES"];
+if (!string.IsNullOrWhiteSpace(knownProxies))
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var entry in knownProxies.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var slash = entry.IndexOf('/');
+            if (slash > 0 && IPAddress.TryParse(entry[..slash], out var network) && int.TryParse(entry[(slash + 1)..], out var prefix))
+            {
+                options.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(network, prefix));
+            }
+            else if (IPAddress.TryParse(entry, out var proxy))
+            {
+                options.KnownProxies.Add(proxy);
+            }
+        }
+    });
+}
 
 static string NormalizeOrigin(string origin) =>
     origin.Trim().Trim('"', '\'').TrimEnd('/');
 
-// Configure CORS — explicit origins only (set CORS_ORIGINS in Railway Variables)
+// Configure CORS — explicit origins only (set CORS_ORIGINS in the host's variables)
 var corsOrigins =
     Environment.GetEnvironmentVariable("CORS_ORIGINS") ??
     builder.Configuration["CORS_ORIGINS"];
@@ -146,31 +109,17 @@ if (builder.Environment.IsProduction() && string.IsNullOrWhiteSpace(corsOrigins)
         "CORS_ORIGINS is not set. Set it to your frontend URL, e.g. CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}");
 }
 
-// Apply migrations and seed data
-using (var scope = app.Services.CreateScope())
+var catalog = app.Services.GetRequiredService<IChallengeCatalog>();
+app.Logger.LogInformation(
+    "Challenge catalog loaded: {Challenges} challenges, {Components} component definitions",
+    catalog.Challenges.Count,
+    catalog.Components.Count);
+
+if (!string.IsNullOrWhiteSpace(knownProxies))
 {
-    var services = scope.ServiceProvider;
-    try
-    {
-        var context = services.GetRequiredService<ApplicationDbContext>();
-        
-        // Apply pending migrations
-        context.Database.Migrate();
-        
-        // Seed data
-        ChallengeSeeder.SeedData(context);
-        ChallengeSeeder.EnsureChallengeContent(context);
-        ChallengeSeeder.EnsureFlowDefinitions(context);
-        
-        app.Logger.LogInformation("Database initialized successfully");
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogError(ex, "An error occurred while initializing the database");
-    }
+    app.UseForwardedHeaders();
 }
 
-// Configure the HTTP request pipeline
 app.UseCors("AllowFrontend");
 
 if (app.Environment.IsDevelopment())
@@ -179,10 +128,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
 }
 
-app.UseAuthentication();
-app.UseAuthorization();
-
 app.MapControllers().RequireCors("AllowFrontend");
+app.MapHub<RoomHub>("/hubs/room").RequireCors("AllowFrontend");
 
 app.Run();
 

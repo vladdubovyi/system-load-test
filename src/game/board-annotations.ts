@@ -38,7 +38,7 @@ export const DEFAULT_TEXT_MIN_HEIGHT = 48;
 
 export function createTextAnnotation(x: number, y: number): TextAnnotation {
   return {
-    id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `text-${crypto.randomUUID()}`,
     x: x - DEFAULT_TEXT_WIDTH / 2,
     y: y - DEFAULT_TEXT_MIN_HEIGHT / 2,
     width: DEFAULT_TEXT_WIDTH,
@@ -49,7 +49,7 @@ export function createTextAnnotation(x: number, y: number): TextAnnotation {
 
 export function createStrokePoint(x: number, y: number): DrawStroke {
   return {
-    id: `stroke-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    id: `stroke-${crypto.randomUUID()}`,
     points: [{ x, y }],
     color: '#1e1e1e',
     width: 2.5,

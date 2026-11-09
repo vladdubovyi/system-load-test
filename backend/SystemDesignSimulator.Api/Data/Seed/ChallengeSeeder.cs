@@ -1,122 +1,58 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 using SystemDesignSimulator.Api.Models;
 
 namespace SystemDesignSimulator.Api.Data.Seed;
 
+/// <summary>
+/// Source of the challenge library (docs/specs/interview-platform.md §2.3).
+/// Returns plain records that <see cref="ChallengeCatalog"/> holds in memory;
+/// nothing here touches storage. IDs are derived from slugs and component
+/// types so that they are the same on every start of every instance.
+/// </summary>
 public static class ChallengeSeeder
 {
-    public static void SeedData(ApplicationDbContext context)
-    {
-        if (context.Challenges.Any())
-        {
-            return;
-        }
-        
-        SeedComponentDefinitions(context);
-        SeedChallenges(context);
-        
-        context.SaveChanges();
-    }
-
-    public static void EnsureChallengeContent(ApplicationDbContext context)
-    {
-        var contentBySlug = GetChallengeContent();
-        var challenges = context.Challenges.ToList();
-        var updated = false;
-
-        foreach (var challenge in challenges)
-        {
-            if (!contentBySlug.TryGetValue(challenge.Slug, out var content))
-            {
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(challenge.OverviewContent))
-            {
-                challenge.OverviewContent = content.Overview;
-                updated = true;
-            }
-
-            if (string.IsNullOrWhiteSpace(challenge.VideoUrl))
-            {
-                challenge.VideoUrl = content.VideoUrl;
-                updated = true;
-            }
-        }
-
-        if (updated)
-        {
-            context.SaveChanges();
-        }
-    }
+    /// <summary>
+    /// A fixed "created" timestamp for the whole library. The catalog has no
+    /// rows to date-stamp, and a value that changed on every boot would make
+    /// the API's output differ between restarts for no reason.
+    /// </summary>
+    public static readonly DateTime CatalogDate = new(2026, 7, 14, 0, 0, 0, DateTimeKind.Utc);
 
     /// <summary>
-    /// Backfill flows/objectives into scenarios and capabilities into component
-    /// definitions that predate flow correctness. Idempotent: only keys that
-    /// are missing are added, so authored edits are never overwritten.
+    /// A stable GUID for a catalog entry, derived from its name. MD5 is used
+    /// only as a 128-bit hash of a public string, never for security.
     /// </summary>
-    public static void EnsureFlowDefinitions(ApplicationDbContext context)
+    public static Guid StableId(string name) =>
+        new(System.Security.Cryptography.MD5.HashData(System.Text.Encoding.UTF8.GetBytes("breakit:" + name)));
+
+    /// <summary>Every challenge, in library order, with scenario and allowed components attached.</summary>
+    public static List<Challenge> Challenges()
     {
-        var updated = false;
-
-        foreach (var scenario in context.Scenarios.Include(s => s.Challenge).ToList())
+        var entries = new List<(Challenge challenge, Scenario scenario, List<string> components)>
         {
-            var slug = scenario.Challenge?.Slug;
-            if (slug == null) continue;
-            var flows = FlowDefinitions.Flows(slug);
-            if (flows.Length == 0) continue;
+            CreateUrlShortenerChallenge(),
+            CreateDropboxChallenge(),
+            CreateInstagramChallenge(),
+            CreateRateLimiterChallenge()
+        };
 
-            var config = ParseObject(scenario.ScenarioConfig);
-            var changed = false;
-            if (!config.ContainsKey("flows"))
-            {
-                config["flows"] = JsonSerializer.SerializeToElement(flows);
-                changed = true;
-            }
-            var objectives = FlowDefinitions.ObjectivesFor(slug);
-            if (objectives != null && !config.ContainsKey("objectives"))
-            {
-                config["objectives"] = JsonSerializer.SerializeToElement(objectives);
-                changed = true;
-            }
-            if (changed)
-            {
-                scenario.ScenarioConfig = JsonSerializer.Serialize(config);
-                updated = true;
-            }
-        }
-
-        foreach (var definition in context.ComponentDefinitions.ToList())
+        var challenges = new List<Challenge>(entries.Count);
+        foreach (var (challenge, scenario, components) in entries)
         {
-            if (FlowDefinitions.CapabilitiesFromSchema(definition.ConfigSchema) != null) continue;
-            var capabilities = FlowDefinitions.Capabilities(definition.ComponentType);
-            if (capabilities.Length == 0) continue;
-
-            var schema = ParseObject(definition.ConfigSchema);
-            schema["capabilities"] = JsonSerializer.SerializeToElement(capabilities);
-            definition.ConfigSchema = JsonSerializer.Serialize(schema);
-            updated = true;
+            scenario.Challenge = challenge;
+            challenge.Scenario = scenario;
+            challenge.CreatedAt = CatalogDate;
+            challenge.ChallengeComponents = components
+                .Select(componentType => new ChallengeComponent
+                {
+                    ChallengeId = challenge.Id,
+                    Challenge = challenge,
+                    ComponentType = componentType
+                })
+                .ToList();
+            challenges.Add(challenge);
         }
-
-        if (updated)
-        {
-            context.SaveChanges();
-        }
-    }
-
-    private static Dictionary<string, JsonElement> ParseObject(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return new Dictionary<string, JsonElement>();
-        try
-        {
-            return JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json)
-                ?? new Dictionary<string, JsonElement>();
-        }
-        catch (JsonException)
-        {
-            return new Dictionary<string, JsonElement>();
-        }
+        return challenges;
     }
 
     private static Dictionary<string, (string Overview, string VideoUrl)> GetChallengeContent() => new()
@@ -203,13 +139,13 @@ public static class ChallengeSeeder
         ),
     };
     
-    private static void SeedComponentDefinitions(ApplicationDbContext context)
+    /// <summary>Every component definition the sandbox can place.</summary>
+    public static List<ComponentDefinition> ComponentDefinitions()
     {
         var components = new List<ComponentDefinition>
         {
             // Networking
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "load-balancer",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("load-balancer"),
                 Label = "Load Balancer",
@@ -224,7 +160,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "api-gateway",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("api-gateway"),
                 Label = "API Gateway",
@@ -239,7 +174,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "cdn",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("cdn"),
                 Label = "CDN",
@@ -254,7 +188,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "dns",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("dns"),
                 Label = "DNS",
@@ -269,7 +202,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "reverse-proxy",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("reverse-proxy"),
                 Label = "Reverse Proxy",
@@ -286,7 +218,6 @@ public static class ChallengeSeeder
             
             // Compute
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "backend-service",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("backend-service"),
                 Label = "Backend Service",
@@ -301,7 +232,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "microservice",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("microservice"),
                 Label = "Microservice",
@@ -316,7 +246,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "worker-service",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("worker-service"),
                 Label = "Worker Service",
@@ -331,7 +260,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "serverless-function",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("serverless-function"),
                 Label = "Serverless Function",
@@ -346,7 +274,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "container",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("container"),
                 Label = "Container",
@@ -363,7 +290,6 @@ public static class ChallengeSeeder
             
             // Storage
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "database",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("database"),
                 Label = "SQL Database",
@@ -378,7 +304,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "redis",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("redis"),
                 Label = "Redis Cache",
@@ -393,7 +318,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "nosql-database",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("nosql-database"),
                 Label = "NoSQL Database",
@@ -408,7 +332,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "object-storage",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("object-storage"),
                 Label = "Object Storage",
@@ -423,7 +346,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "file-system",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("file-system"),
                 Label = "File System",
@@ -440,7 +362,6 @@ public static class ChallengeSeeder
             
             // Messaging
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "message-queue",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("message-queue"),
                 Label = "Message Queue",
@@ -455,7 +376,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "kafka",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("kafka"),
                 Label = "Kafka",
@@ -470,7 +390,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "rabbitmq",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("rabbitmq"),
                 Label = "RabbitMQ",
@@ -485,7 +404,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "pubsub",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("pubsub"),
                 Label = "Pub/Sub",
@@ -502,7 +420,6 @@ public static class ChallengeSeeder
             
             // Infrastructure
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "rate-limiter",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("rate-limiter"),
                 Label = "Rate Limiter",
@@ -517,7 +434,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "auth-service",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("auth-service"),
                 Label = "Auth Service",
@@ -532,7 +448,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "monitoring",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("monitoring"),
                 Label = "Monitoring",
@@ -547,7 +462,6 @@ public static class ChallengeSeeder
                 Enabled = true
             },
             new() {
-                Id = Guid.NewGuid(),
                 ComponentType = "search-service",
                 ConfigSchema = FlowDefinitions.CapabilitiesSchema("search-service"),
                 Label = "Search Service",
@@ -562,39 +476,17 @@ public static class ChallengeSeeder
                 Enabled = true
             }
         };
-        
-        context.ComponentDefinitions.AddRange(components);
-    }
-    
-    private static void SeedChallenges(ApplicationDbContext context)
-    {
-        var challenges = new List<(Challenge challenge, Scenario scenario, List<string> components)>
+
+        foreach (var component in components)
         {
-            CreateUrlShortenerChallenge(),
-            CreateDropboxChallenge(),
-            CreateInstagramChallenge(),
-            CreateRateLimiterChallenge()
-        };
-        
-        foreach (var (challenge, scenario, components) in challenges)
-        {
-            context.Challenges.Add(challenge);
-            context.Scenarios.Add(scenario);
-            
-            foreach (var componentType in components)
-            {
-                context.ChallengeComponents.Add(new ChallengeComponent
-                {
-                    ChallengeId = challenge.Id,
-                    ComponentType = componentType
-                });
-            }
+            component.Id = StableId("component:" + component.ComponentType);
         }
+        return components;
     }
-    
+
     private static (Challenge, Scenario, List<string>) CreateUrlShortenerChallenge()
     {
-        var challengeId = Guid.NewGuid();
+        var challengeId = StableId("challenge:url-shortener");
         var challenge = new Challenge
         {
             Id = challengeId,
@@ -608,7 +500,7 @@ public static class ChallengeSeeder
         
         var scenario = new Scenario
         {
-            Id = Guid.NewGuid(),
+            Id = StableId("scenario:url-shortener"),
             ChallengeId = challengeId,
             DurationSeconds = 45,
             BaseRps = 200,
@@ -628,7 +520,10 @@ public static class ChallengeSeeder
                 drainDuration = 10,
                 pattern = "spike",
                 requestTypes = new { read = 0.72, create = 0.28 },
-                characteristics = new { celebrityShare = 0.82 },
+                // hotDataRatio is explicit so the engine's cache hit ratio
+                // survives the interview-mode projection, which withholds the
+                // slug the frontend's legacy fallback keyed on (§6.1).
+                characteristics = new { celebrityShare = 0.82, hotDataRatio = 0.97 },
                 // Flow correctness (docs/specs/flow-authoring.md §2.1)
                 flows = FlowDefinitions.Flows("url-shortener"),
                 objectives = FlowDefinitions.ObjectivesFor("url-shortener")
@@ -657,7 +552,7 @@ public static class ChallengeSeeder
     
     private static (Challenge, Scenario, List<string>) CreateDropboxChallenge()
     {
-        var challengeId = Guid.NewGuid();
+        var challengeId = StableId("challenge:dropbox");
         var challenge = new Challenge
         {
             Id = challengeId,
@@ -671,7 +566,7 @@ public static class ChallengeSeeder
         
         var scenario = new Scenario
         {
-            Id = Guid.NewGuid(),
+            Id = StableId("scenario:dropbox"),
             ChallengeId = challengeId,
             DurationSeconds = 60,
             BaseRps = 300,
@@ -723,7 +618,7 @@ public static class ChallengeSeeder
     
     private static (Challenge, Scenario, List<string>) CreateInstagramChallenge()
     {
-        var challengeId = Guid.NewGuid();
+        var challengeId = StableId("challenge:instagram-feed");
         var challenge = new Challenge
         {
             Id = challengeId,
@@ -737,7 +632,7 @@ public static class ChallengeSeeder
         
         var scenario = new Scenario
         {
-            Id = Guid.NewGuid(),
+            Id = StableId("scenario:instagram-feed"),
             ChallengeId = challengeId,
             DurationSeconds = 50,
             BaseRps = 400,
@@ -789,7 +684,7 @@ public static class ChallengeSeeder
     
     private static (Challenge, Scenario, List<string>) CreateRateLimiterChallenge()
     {
-        var challengeId = Guid.NewGuid();
+        var challengeId = StableId("challenge:rate-limiter");
         var challenge = new Challenge
         {
             Id = challengeId,
@@ -803,7 +698,7 @@ public static class ChallengeSeeder
         
         var scenario = new Scenario
         {
-            Id = Guid.NewGuid(),
+            Id = StableId("scenario:rate-limiter"),
             ChallengeId = challengeId,
             DurationSeconds = 40,
             BaseRps = 300,

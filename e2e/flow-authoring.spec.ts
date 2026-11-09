@@ -1,12 +1,6 @@
 import { expect, test } from './fixtures/test';
-import { CHALLENGES, COMPONENT_DEFINITIONS, TEST_TOKEN, TEST_USER, type ApiChallenge } from './fixtures/api-data';
-import {
-  SandboxPage,
-  readFlowStats,
-  readObjectives,
-  readReport,
-  signInBeforeLoad,
-} from './helpers/sandbox';
+import { CHALLENGES, COMPONENT_DEFINITIONS, type ApiChallenge } from './fixtures/api-data';
+import { SandboxPage, readFlowStats, readObjectives, readReport } from './helpers/sandbox';
 
 // Full runs at 100x are CPU-bound; same headroom as the other run suites.
 test.describe.configure({ timeout: 120_000 });
@@ -15,8 +9,8 @@ test.describe.configure({ timeout: 120_000 });
  * Flow authoring and serialization (docs/specs/flow-authoring.md, Phase 5).
  *
  * Flows, objectives and tags travel inside the challenge's scenarioConfig
- * from the backend; the sandbox exposes a scenario editor that validates,
- * applies and saves that document; scenario-defined tags let a flow single
+ * from the backend; the sandbox exposes a scenario editor that validates and
+ * applies that document for the session; scenario-defined tags let a flow single
  * out one component among several of the same type; and every seeded
  * challenge now carries flows so the engine has no heuristic fallback left.
  */
@@ -131,7 +125,8 @@ test.describe('Scenario editor', () => {
     const overlay = await sandbox.runToReport();
     await expect(sandbox.lintPanel).toHaveCount(0);
     const report = await readReport(overlay);
-    expect(report.title).toBe('Architecture survived');
+    // Correct, and like every starter under capacity (interview-platform.md §8).
+    expect(report.title).toBe('Survived, objectives missed');
 
     const totals = await sandbox.flowTotals();
     expect(totals.violated).toBe(0);
@@ -155,46 +150,40 @@ test.describe('Scenario editor', () => {
     expect((await sandbox.scenarioDocument()).requestTypes).toEqual({ read: 0.72, create: 0.28 });
   });
 
-  test('Save is disabled when signed out', async ({ page }) => {
+  test('Save does not exist: the editor is Apply, Validate and Reset only', async ({ page, api }) => {
     const sandbox = new SandboxPage(page);
     await sandbox.goto('url-shortener');
     await sandbox.openScenarioEditor();
 
-    await expect(page.locator('#scenario-save')).toBeDisabled();
-    await expect(page.locator('.scenario-save-hint')).toContainText(/sign in/i);
-  });
+    // The anonymous MVP (docs/specs/interview-platform.md §2.3) has no
+    // account to gate a Save on and no write endpoint to send it to.
+    await expect(page.locator('#scenario-save')).toHaveCount(0);
+    await expect(page.locator('.scenario-save-hint')).toHaveCount(0);
+    await expect(page.locator('#scenario-editor')).not.toContainText(/sign in/i);
+    await expect(page.locator('#scenario-editor')).not.toContainText(/save/i);
+    await expect(page.locator('#scenario-apply')).toBeVisible();
+    await expect(page.locator('#scenario-validate')).toBeVisible();
+    await expect(page.locator('#scenario-reset')).toBeVisible();
 
-  test('Save sends the document to the authoring endpoint when signed in', async ({ page, api }) => {
-    await signInBeforeLoad(page, TEST_TOKEN, TEST_USER);
-    const sandbox = new SandboxPage(page);
-    await sandbox.goto('url-shortener');
-    await sandbox.openScenarioEditor();
-
-    await expect(page.locator('#scenario-save')).toBeEnabled();
+    // Apply still works, and it stays in the browser.
     const doc = await sandbox.scenarioDocument();
     await sandbox.setScenarioDocument({ ...doc, tags: [WRITE_SERVICE_TAG] });
-    await page.locator('#scenario-save').click();
-
-    await expect(sandbox.boardToast).toContainText(/saved/i);
-    const puts = api.calls('/api/challenges/slug/url-shortener/scenario-config', 'PUT');
-    expect(puts).toHaveLength(1);
-    expect(puts[0].headers['authorization']).toBe(`Bearer ${TEST_TOKEN}`);
-    const body = puts[0].body as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(['flows', 'objectives', 'requestTypes', 'tags']);
-    expect(body.tags).toEqual([WRITE_SERVICE_TAG]);
-    expect(Array.isArray(body.flows)).toBe(true);
+    await page.locator('#scenario-apply').click();
+    await sandbox.openScenarioEditor();
+    expect((await sandbox.scenarioDocument()).tags).toEqual([WRITE_SERVICE_TAG]);
+    expect(api.requests.filter((r) => r.method !== 'GET')).toEqual([]);
   });
 
-  test('an invalid document is never sent', async ({ page, api }) => {
-    await signInBeforeLoad(page, TEST_TOKEN, TEST_USER);
+  test('an invalid document is not applied', async ({ page }) => {
     const sandbox = new SandboxPage(page);
     await sandbox.goto('url-shortener');
     await sandbox.openScenarioEditor();
 
     await sandbox.setScenarioDocument({ flows: [{ kind: 'create', steps: [] }] });
-    await page.locator('#scenario-save').click();
+    await page.locator('#scenario-apply').click();
     await expect(sandbox.scenarioErrors.first()).toBeVisible();
-    expect(api.calls('/api/challenges/slug/url-shortener/scenario-config', 'PUT')).toHaveLength(0);
+    await expect(page.locator('#scenario-editor')).toBeVisible();
+    await expect(page.locator('#scenario-editor-title')).not.toContainText('edited');
   });
 });
 
@@ -315,31 +304,58 @@ test.describe('Backend-supplied definitions', () => {
 });
 
 test.describe('Every seeded challenge carries flows', () => {
-  for (const slug of ['dropbox', 'rate-limiter'] as const) {
-    test(`${slug}: the starter meets its objectives with no violations`, async ({ page }) => {
+  for (const slug of CHALLENGES.map((c) => c.slug)) {
+    test(`${slug}: the starter survives with no violations but misses its completion objectives`, async ({ page }) => {
+      // Scoring recalibration (docs/specs/interview-platform.md §8): the
+      // starter is the beginning of the exercise, not a passing answer. It
+      // must still be a *correct* design — every request takes its required
+      // path — so the shortfall is throughput, which is what the player is
+      // asked to fix.
       const sandbox = new SandboxPage(page);
-      await sandbox.goto(slug);
+      await sandbox.goto(slug, { seed: 1 });
 
-      await sandbox.setSpeed(100);
-      await sandbox.playButton.click();
-      await expect(sandbox.lintPanel).toHaveCount(0);
-      await expect(sandbox.reportOverlay).toBeVisible({ timeout: 60_000 });
+      const overlay = await sandbox.runToReport();
+      const report = await readReport(overlay);
+      expect(report.title).toBe('Survived, objectives missed');
+      expect(report.brokenServices).toEqual([]);
+      await expect(overlay.locator('.report-header')).toHaveClass(/lost/);
 
-      const report = await readReport(sandbox.reportOverlay);
-      expect(report.title).toBe('Architecture survived');
-
-      const objectives = await readObjectives(sandbox.reportOverlay);
-      expect(objectives.map((o) => o.id)).toContain('violations');
-      expect(objectives.every((o) => o.met)).toBe(true);
+      const objectives = await readObjectives(overlay);
+      expect(objectives.find((o) => o.id === 'violations')?.met).toBe(true);
+      expect(objectives.find((o) => o.id === 'failures')?.met).toBe(true);
+      const completion = objectives.filter((o) => o.id.startsWith('completion:'));
+      expect(completion.length).toBeGreaterThan(0);
+      expect(completion.some((o) => !o.met)).toBe(true);
 
       const challenge = CHALLENGES.find((c) => c.slug === slug)!;
       const kinds = Object.keys(challenge.scenario.scenarioConfig.requestTypes as object).sort();
-      const stats = await readFlowStats(sandbox.reportOverlay);
+      const stats = await readFlowStats(overlay);
       expect(stats.map((s) => s.kind).sort()).toEqual(kinds);
       for (const row of stats) {
         expect(row.completed).toBeGreaterThan(0);
         expect(row.violated).toBe(0);
       }
+      expect(await sandbox.engineStatus()).toBe('lost');
+    });
+
+    test(`${slug}: the reference solution meets every objective`, async ({ page }) => {
+      const sandbox = new SandboxPage(page);
+      await sandbox.goto(slug, { seed: 1 });
+      await sandbox.loadReference();
+
+      const overlay = await sandbox.runToReport();
+      const report = await readReport(overlay);
+      expect(report.title).toBe('Architecture survived');
+      expect(report.brokenServices).toEqual([]);
+      await expect(overlay.locator('.report-header')).toHaveClass(/won/);
+
+      const objectives = await readObjectives(overlay);
+      expect(objectives.length).toBeGreaterThan(1);
+      expect(objectives.every((o) => o.met)).toBe(true);
+      for (const row of await readFlowStats(overlay)) {
+        expect(row.violated).toBe(0);
+      }
+      expect(await sandbox.engineStatus()).toBe('won');
     });
   }
 

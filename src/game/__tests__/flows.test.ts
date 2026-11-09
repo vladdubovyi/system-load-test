@@ -200,9 +200,9 @@ describe('URL Shortener preset', () => {
   });
 
   it('ships objectives that gate on completion and violations', () => {
-    // Completion floors are a minimum bar the shipped starter clears while
-    // shedding spike traffic; correctness is the strict one.
-    expect(URL_SHORTENER_OBJECTIVES.minCompletionRate).toEqual({ create: 0.6, read: 0.6 });
+    // Floors are calibrated so the starter misses and the reference passes
+    // (interview-platform.md §8; see calibration.test.ts for the proof).
+    expect(URL_SHORTENER_OBJECTIVES.minCompletionRate).toEqual({ create: 0.99, read: 0.99 });
     expect(URL_SHORTENER_OBJECTIVES.maxViolationRate).toBe(0);
     expect(URL_SHORTENER_OBJECTIVES.noComponentFailures).toBe(true);
   });
@@ -213,11 +213,12 @@ describe('Instagram feed preset', () => {
     expect(validateFlows(INSTAGRAM_FEED_FLOWS)).toEqual([]);
   });
 
-  it('holds edge-served reads to a higher floor than contended writes', () => {
+  it('holds every request kind to the same calibrated floor', () => {
+    // Edge-served feed loads clear 0.95 on the starter already; the floor
+    // exists so that the writes, which the starter sheds, are what decide
+    // the verdict (interview-platform.md §8).
     const objectives = getPresetObjectives('instagram-feed')!;
-    expect(objectives.minCompletionRate!.feedLoad).toBeGreaterThan(
-      objectives.minCompletionRate!.post
-    );
+    expect(objectives.minCompletionRate).toEqual({ feedLoad: 0.95, post: 0.95, like: 0.95 });
     expect(objectives.maxViolationRate).toBe(0);
   });
 

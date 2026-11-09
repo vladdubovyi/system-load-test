@@ -77,36 +77,6 @@
   gap: 10px;
 }
 
-.site-user-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: var(--site-surface);
-  border: 1px solid var(--site-border);
-  max-width: 180px;
-}
-
-.site-user-avatar,
-.site-user-avatar-fallback {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  object-fit: cover;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #e5e7eb;
-}
-
-.site-user-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.82rem;
-}
-
 .btn {
   display: inline-flex;
   align-items: center;
@@ -172,11 +142,22 @@
   font-size: 0.85rem;
 }
 
+.site-notes {
+  display: grid;
+  gap: 10px;
+  max-width: 72ch;
+  margin-bottom: 18px;
+  line-height: 1.6;
+}
+
+.site-notes strong {
+  color: var(--site-ink);
+}
+
 /* Landing */
 
 .landing-main,
-.challenges-main,
-.login-main {
+.challenges-main {
   max-width: 1200px;
   margin: 0 auto;
   padding: 28px 20px 48px;
@@ -191,7 +172,6 @@
 }
 
 .landing-eyebrow,
-.login-eyebrow,
 .challenge-detail-eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -201,7 +181,6 @@
 }
 
 .landing-hero h1,
-.login-card h1,
 .challenges-sidebar h1 {
   font-family: 'Caveat', cursive;
   font-size: clamp(2.4rem, 5vw, 4rem);
@@ -209,8 +188,7 @@
   margin: 0 0 16px;
 }
 
-.landing-lead,
-.login-lead {
+.landing-lead {
   color: var(--site-muted);
   line-height: 1.7;
   max-width: 58ch;
@@ -519,87 +497,6 @@
   color: var(--site-muted);
 }
 
-/* Login */
-
-.login-main {
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-}
-
-.login-card {
-  width: min(100%, 460px);
-  background: var(--site-surface);
-  border: 1px solid var(--site-border);
-  border-radius: 24px;
-  box-shadow: var(--site-shadow);
-  padding: 28px;
-}
-
-.login-google-section {
-  margin: 20px 0;
-}
-
-.google-signin-host {
-  display: flex;
-  justify-content: center;
-}
-
-.login-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: var(--site-muted);
-  font-size: 0.82rem;
-  margin: 18px 0;
-}
-
-.login-divider::before,
-.login-divider::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--site-border);
-}
-
-.login-form {
-  display: grid;
-  gap: 14px;
-}
-
-/* `display: grid` above would otherwise override the UA [hidden] rule, so the
-   login/register toggle had no visual effect. */
-.login-form[hidden] {
-  display: none;
-}
-
-.login-form label {
-  display: grid;
-  gap: 6px;
-  font-size: 0.85rem;
-}
-
-.login-form input {
-  border: 1px solid var(--site-border);
-  border-radius: 12px;
-  padding: 12px 14px;
-  font: inherit;
-}
-
-.login-switch,
-.login-hint {
-  color: var(--site-muted);
-  font-size: 0.88rem;
-}
-
-.login-error {
-  background: #fee2e2;
-  color: #991b1b;
-  border-radius: 12px;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-}
-
 .sandbox-root,
 .sandbox-root .canvas-app {
   width: 100%;
@@ -633,5 +530,50 @@
   .site-nav {
     order: 3;
     width: 100%;
+  }
+}
+
+/* ── Join a room (header) ── */
+
+.join-room-form {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  position: relative;
+}
+
+.join-room-input {
+  width: 9.5rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong, #c9c9c9);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.join-room-input::placeholder {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.join-room-error {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: #e03131;
+  white-space: nowrap;
+}
+
+.join-room-error:empty {
+  display: none;
+}
+
+@media (max-width: 720px) {
+  .join-room-input {
+    width: 7rem;
   }
 }

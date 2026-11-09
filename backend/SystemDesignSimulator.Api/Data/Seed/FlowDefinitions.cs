@@ -142,16 +142,18 @@ public static class FlowDefinitions
     };
 
     /// <summary>
-    /// Completion floors are a minimum bar the shipped starter clears while
-    /// shedding spike traffic (see flow-correctness.md §6 amendments); the
-    /// strict objective is the zero-violation ceiling.
+    /// Completion floors, calibrated so that each challenge's starter board
+    /// does not pass and its reference solution does, on every seed
+    /// (docs/specs/interview-platform.md §8). Mirrors
+    /// <c>src/game/flow-presets.ts</c>; change both, and re-run the frontend's
+    /// calibration test before moving a number.
     /// </summary>
     public static object? ObjectivesFor(string slug) => slug switch
     {
-        "url-shortener" => Objectives(new() { ["create"] = 0.6, ["read"] = 0.6 }),
-        "instagram-feed" => Objectives(new() { ["feedLoad"] = 0.85, ["post"] = 0.5, ["like"] = 0.5 }),
-        "dropbox" => Objectives(new() { ["upload"] = 0.4, ["download"] = 0.4, ["metadata"] = 0.4 }),
-        "rate-limiter" => Objectives(new() { ["check"] = 0.2 }),
+        "url-shortener" => Objectives(new() { ["create"] = 0.99, ["read"] = 0.99 }),
+        "instagram-feed" => Objectives(new() { ["feedLoad"] = 0.95, ["post"] = 0.95, ["like"] = 0.95 }),
+        "dropbox" => Objectives(new() { ["upload"] = 0.95, ["download"] = 0.95, ["metadata"] = 0.95 }),
+        "rate-limiter" => Objectives(new() { ["check"] = 0.95 }),
         _ => null,
     };
 

@@ -2,6 +2,12 @@ import type { ComponentType, ConveyorBelt, PlacedComponent } from './types';
 import { SOURCE_ID, createBelt } from './simulation';
 import { getComponentDef } from './component-catalog';
 import type { PresetBlueprint } from './presets';
+import {
+  applyConfigChip,
+  createEmptyComponentConfig,
+  type ComponentInstanceConfig,
+  type ConfigChipId,
+} from './component-config';
 
 function component(
   id: string,
@@ -109,17 +115,95 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
   },
 };
 
+/**
+ * A reference solution: a board plus the configuration chips dropped on it.
+ * Each challenge has one (interview-platform.md §8). It is the design the
+ * objective floors are calibrated against, so it must meet every objective
+ * on every seed — `calibration.test.ts` holds it to that.
+ */
+export interface ReferenceBlueprint extends PresetBlueprint {
+  /** Config chips per component id, applied in order. */
+  chips: Record<string, ConfigChipId[]>;
+}
+
+/**
+ * Calibrated 2026-11-06 against the starters above with seeded runs
+ * (interview-platform.md §8). Each reference keeps the starter's topology
+ * and adds what the exercise is about: auto-scaling on every compute tier,
+ * replication and sharding on the SQL database, and for the rate limiter a
+ * second counter cache — scaling the API alone pushes 5x spikes straight
+ * into one Redis, which fails.
+ */
+const COMPUTE: ConfigChipId[] = [
+  'horizontal-scaling',
+  'vertical-scaling',
+  'reactive-scaling',
+  'predictive-scaling',
+];
+const SQL: ConfigChipId[] = ['db-replication', 'db-sharding'];
+
+function reference(
+  slug: string,
+  description: string,
+  chips: Record<string, ConfigChipId[]>,
+  extra: {
+    components?: { id: string; type: ComponentType; x: number; y: number }[];
+    connections?: { from: string; to: string }[];
+  } = {}
+): ReferenceBlueprint {
+  const starter = CHALLENGE_PRESETS[slug];
+  return {
+    id: `${slug}-reference`,
+    name: `${starter.name.replace(/ starter$/, '')} reference`,
+    description,
+    components: [...starter.components, ...(extra.components ?? [])],
+    connections: [...starter.connections, ...(extra.connections ?? [])],
+    chips,
+  };
+}
+
+const CHALLENGE_REFERENCES: Record<string, ReferenceBlueprint> = {
+  'url-shortener': reference(
+    'url-shortener',
+    'Starter topology with auto-scaled write and read services and a replicated, sharded database.',
+    { 'ch-writes': COMPUTE, 'ch-reads': COMPUTE, 'ch-db': SQL }
+  ),
+  dropbox: reference(
+    'dropbox',
+    'Starter topology with auto-scaled API and worker tiers and a replicated, sharded metadata database.',
+    { 'db-api': COMPUTE, 'db-worker': COMPUTE, 'db-meta': SQL }
+  ),
+  'instagram-feed': reference(
+    'instagram-feed',
+    'Starter topology with an auto-scaled feed service behind the CDN.',
+    { 'ig-api': COMPUTE }
+  ),
+  'rate-limiter': reference(
+    'rate-limiter',
+    'Starter topology with an auto-scaled API tier and a second Redis for counters, so spikes never overload one cache.',
+    { 'rl-api': COMPUTE, 'rl-db': SQL },
+    {
+      components: [component('rl-redis-2', 'redis', 1180, 120)],
+      connections: [
+        { from: 'rl-api:out', to: 'rl-redis-2:in' },
+        { from: 'rl-redis-2:out', to: 'rl-db:in' },
+      ],
+    }
+  ),
+};
+
 export function getChallengePreset(slug: string): PresetBlueprint | null {
   return CHALLENGE_PRESETS[slug] ?? null;
 }
 
-export function buildChallengePreset(slug: string): {
+export function getChallengeReference(slug: string): ReferenceBlueprint | null {
+  return CHALLENGE_REFERENCES[slug] ?? null;
+}
+
+function materialize(blueprint: PresetBlueprint): {
   components: PlacedComponent[];
   belts: ConveyorBelt[];
-} | null {
-  const blueprint = getChallengePreset(slug);
-  if (!blueprint) return null;
-
+} {
   const components = blueprint.components.map(({ id, type, x, y }) => {
     const def = getComponentDef(type);
     return {
@@ -137,4 +221,34 @@ export function buildChallengePreset(slug: string): {
 
   const belts = blueprint.connections.map(({ from, to }) => createBelt(from, to));
   return { components, belts };
+}
+
+export function buildChallengePreset(slug: string): {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+} | null {
+  const blueprint = getChallengePreset(slug);
+  return blueprint ? materialize(blueprint) : null;
+}
+
+export function buildChallengeReference(slug: string): {
+  components: PlacedComponent[];
+  belts: ConveyorBelt[];
+  componentConfigs: Map<string, ComponentInstanceConfig>;
+} | null {
+  const blueprint = getChallengeReference(slug);
+  if (!blueprint) return null;
+
+  const { components, belts } = materialize(blueprint);
+  const componentConfigs = new Map<string, ComponentInstanceConfig>();
+  for (const component of components) {
+    const chips = blueprint.chips[component.id] ?? [];
+    if (chips.length === 0) continue;
+    const config = createEmptyComponentConfig();
+    for (const chip of chips) {
+      applyConfigChip(config, chip, component.type);
+    }
+    componentConfigs.set(component.id, config);
+  }
+  return { components, belts, componentConfigs };
 }

@@ -46,7 +46,24 @@ function ensureSpace(doc: jsPDF, y: number, needed: number): number {
   return y;
 }
 
-export function downloadReportPdf(report: SimulationReport): void {
+/**
+ * Optional record sections (interview-platform.md §4.5): the host's notes,
+ * the scenario as applied, and the board. With these the PDF is the whole
+ * interview record, and it lives only on the host's machine.
+ */
+export interface ReportPdfExtras {
+  notes?: string;
+  scenario?: unknown;
+  board?: {
+    components: { label: string; type: string }[];
+    beltCount: number;
+    textCount: number;
+    strokeCount: number;
+  };
+  roomCode?: string | null;
+}
+
+export function downloadReportPdf(report: SimulationReport, extras: ReportPdfExtras = {}): void {
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
   const won = report.outcome === 'won';
 
@@ -91,6 +108,8 @@ export function downloadReportPdf(report: SimulationReport): void {
     ['Requests completed', report.totalCompleted.toLocaleString()],
     ['Requests dropped', report.totalDropped.toLocaleString()],
     ['Flow violations', report.totalViolated.toLocaleString()],
+    // Reproducibility (interview-platform.md §8): the same board and seed replay this run.
+    ['Traffic seed', String(report.seed)],
   ];
 
   autoTable(doc, {
@@ -253,6 +272,67 @@ export function downloadReportPdf(report: SimulationReport): void {
     const lines = doc.splitTextToSize(`• ${tip}`, 182);
     doc.text(lines, 14, y);
     y += lines.length * 5 + 2;
+  }
+
+  // Record sections (§4.5)
+  if (extras.board) {
+    y = ensureSpace(doc, y, 30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(30, 30, 30);
+    doc.text('Board as run', 14, y);
+    y += 4;
+    autoTable(doc, {
+      startY: y,
+      head: [['Component', 'Type']],
+      body: extras.board.components.map((c) => [c.label, c.type]),
+      styles: { fontSize: 9 },
+      theme: 'grid',
+    });
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 5;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9);
+    doc.text(
+      `${extras.board.beltCount} connections · ${extras.board.textCount} notes on the board · ${extras.board.strokeCount} drawings · seed ${report.seed}${extras.roomCode ? ` · room ${extras.roomCode}` : ''}`,
+      14,
+      y
+    );
+    y += 8;
+  }
+
+  if (extras.scenario !== undefined) {
+    y = ensureSpace(doc, y, 30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(30, 30, 30);
+    doc.text('Scenario as applied', 14, y);
+    y += 6;
+    doc.setFont('courier', 'normal');
+    doc.setFontSize(7);
+    const json = JSON.stringify(extras.scenario, null, 2);
+    for (const line of json.split('\n').slice(0, 400)) {
+      y = ensureSpace(doc, y, 4);
+      doc.text(line.length > 110 ? `${line.slice(0, 107)}…` : line, 14, y);
+      y += 3.2;
+    }
+    y += 6;
+  }
+
+  if (extras.notes !== undefined && extras.notes.trim() !== '') {
+    y = ensureSpace(doc, y, 30);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(30, 30, 30);
+    doc.text('Host notes', 14, y);
+    y += 7;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    for (const paragraph of extras.notes.split(/\n/)) {
+      const lines = doc.splitTextToSize(paragraph || ' ', 182);
+      y = ensureSpace(doc, y, lines.length * 5 + 2);
+      doc.text(lines, 14, y);
+      y += lines.length * 5 + 1;
+    }
   }
 
   // Footer on each page

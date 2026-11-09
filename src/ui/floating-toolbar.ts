@@ -55,8 +55,11 @@ export function renderFloatingChrome(
         <button class="chrome-action-btn" id="btn-traffic" type="button">📊 Traffic</button>
         <button class="chrome-action-btn" id="btn-scenario" type="button" title="Edit this challenge's flows, objectives and roles">✎ Scenario</button>
         <button class="chrome-action-btn" id="btn-failure" type="button">💥 Failures</button>
-        <button class="chrome-action-btn" id="btn-preset" type="button">⚡ Starter</button>
+        <button class="chrome-action-btn" id="btn-preset" type="button" title="Reload this challenge's starter board">⚡ Starter</button>
+        <button class="chrome-action-btn" id="btn-reference" type="button" title="Load a reference solution that meets every objective">💡 Reference</button>
         <button class="chrome-action-btn" id="btn-reset" type="button">Reset</button>
+        <button class="chrome-action-btn" id="btn-share" type="button" title="Share this board live, or join a room">🔗 Share</button>
+        <button class="chrome-action-btn" id="btn-notes" type="button" title="Private notes, only in this tab" hidden>📝 Notes</button>
         <div class="speed-controls">
           <button class="speed-btn ${simulationSpeed === 1 ? 'active' : ''}" data-speed="1" type="button">1x</button>
           <button class="speed-btn ${simulationSpeed === 5 ? 'active' : ''}" data-speed="5" type="button">5x</button>

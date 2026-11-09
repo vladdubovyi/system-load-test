@@ -167,6 +167,8 @@ export interface SimulationSnapshot {
   currentRps: number;
   spikeActive: boolean;
   message: string;
+  /** Traffic seed the run is generated from (spec §8). */
+  seed: number;
 }
 
 export const REQUEST_COLORS = [
@@ -325,6 +327,8 @@ export interface SimulationReport {
   peakRps: number;
   spikeEvents: number;
   availabilityPct: number;
+  /** Traffic seed the run was generated from (interview-platform.md §8). */
+  seed: number;
   recommendations: string[];
 }
 

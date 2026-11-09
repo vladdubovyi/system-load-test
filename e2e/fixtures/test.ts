@@ -1,4 +1,5 @@
 import { test as base, expect, type BrowserContext, type Route } from '@playwright/test';
+import { FakeRoomHub } from './fake-hub';
 import {
   CHALLENGES,
   COMPONENT_DEFINITIONS,
@@ -148,16 +149,22 @@ const EXTERNAL_HOSTS = [
 
 type Fixtures = {
   api: ApiMock;
+  /** Fake room hub shared by every context the test opens; see fixtures/fake-hub.ts. */
+  hub: FakeRoomHub;
 };
 
 export const test = base.extend<Fixtures>({
+  hub: async ({}, use) => {
+    await use(new FakeRoomHub());
+  },
   api: [
-    async ({ context }, use) => {
+    async ({ context, hub }, use) => {
       for (const pattern of EXTERNAL_HOSTS) {
         await context.route(pattern, (route) => route.abort('blockedbyclient'));
       }
       const api = new ApiMock(context);
       await api.install();
+      await hub.install(context);
       await use(api);
     },
     { auto: true },

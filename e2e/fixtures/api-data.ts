@@ -117,7 +117,10 @@ export const CHALLENGES: ApiChallenge[] = [
         drainDuration: 10,
         pattern: 'spike',
         requestTypes: { read: 0.72, create: 0.28 },
-        characteristics: { celebrityShare: 0.82 },
+        // hotDataRatio is explicit (not left to the slug-keyed frontend
+        // fallback) so interview-mode projections, which withhold the slug,
+        // keep the same cache hit ratio. Mirrors ChallengeSeeder.cs.
+        characteristics: { celebrityShare: 0.82, hotDataRatio: 0.97 },
       },
       scoringWeights: { availability: 40, latency: 30, scalability: 20, cost: 10 },
     },

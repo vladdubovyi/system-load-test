@@ -24,6 +24,7 @@
     "vitest": "^3.2.7"
   },
   "dependencies": {
+    "@microsoft/signalr": "^8.0.29",
     "jspdf": "^4.2.1",
     "jspdf-autotable": "^5.0.8"
   }

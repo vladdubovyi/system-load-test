@@ -3,11 +3,10 @@
 # Docs: https://docs.railway.com/config-as-code
 #
 # Required variables (set in Railway → backend service → Variables, then Deploy):
-#   DATABASE_URL=${{Postgres.DATABASE_URL}}
 #   CORS_ORIGINS=https://${{frontend.RAILWAY_PUBLIC_DOMAIN}}
-#   JWT_SECRET=<random-32+-char-secret>
-#   GOOGLE_CLIENT_ID=<google-oauth-client-id>
 # Use the exact frontend URL only — never a *.up.railway.app wildcard.
+# No database and no secrets: the API is anonymous and database-free
+# (docs/specs/interview-platform.md §2.3).
 #
 # Must use DOCKERFILE builder: Railpack detects root package.json and installs
 # Node only — dotnet is not available for buildCommand on this monorepo layout.

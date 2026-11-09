@@ -326,7 +326,15 @@ body.sandbox-mode #app {
   gap: 0.4rem;
   flex-wrap: wrap;
   justify-content: flex-end;
-  max-width: 50%;
+  /* Stop short of the centred drawing toolbar (about 200px wide) so a long
+     row of actions wraps instead of covering the Draw and Text tools. */
+  max-width: calc(50% - 130px);
+  /* Only the buttons take clicks, not the empty space between rows. */
+  pointer-events: none;
+}
+
+.chrome-top-right > * {
+  pointer-events: auto;
 }
 
 .chrome-action-btn {
@@ -2705,4 +2713,366 @@ body.sandbox-mode #app {
   pointer-events: none;
   z-index: 80;
   animation: ri-pop 0.16s ease-out;
+}
+
+/* ── Rooms (docs/specs/interview-platform.md §3, §5) ── */
+
+.room-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  z-index: 320;
+  font-family: var(--font-ui);
+}
+
+.room-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.room-section h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.room-section p {
+  margin: 0 0 0.6rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  line-height: 1.45;
+}
+
+.room-join-form {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.room-join-input,
+.room-link-field input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.room-join-error,
+.room-error {
+  margin: 0.4rem 0 0;
+  min-height: 1.1em;
+  font-size: 0.82rem;
+  color: var(--danger);
+}
+
+.room-join-error:empty {
+  display: none;
+}
+
+.room-code-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.room-code {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 1.15rem;
+  letter-spacing: 0.08em;
+  color: var(--ink);
+}
+
+.room-link-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-top: 0.6rem;
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+.room-link-field {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.room-warning {
+  margin-top: 0.4rem !important;
+  color: var(--warn) !important;
+  font-weight: 600;
+}
+
+.room-participants,
+.room-presence-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.room-participant {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+}
+
+.room-role {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.room-participant[data-role='participant'] .room-role {
+  background: #f1f3f4;
+  color: var(--ink-muted);
+}
+
+.room-you {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.room-actions {
+  flex-wrap: wrap;
+}
+
+.room-leave {
+  margin-left: auto;
+}
+
+.chrome-action-btn.in-room {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.room-presence {
+  position: absolute;
+  right: 12px;
+  bottom: 56px;
+  z-index: 40;
+  max-width: 240px;
+  padding: 0.5rem 0.7rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-sm);
+  font: inherit;
+  font-family: var(--font-ui);
+  font-size: 0.8rem;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.room-presence-code {
+  display: block;
+  font-weight: 700;
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  letter-spacing: 0.05em;
+}
+
+.room-presence-count {
+  display: block;
+  color: var(--ink-muted);
+  margin-bottom: 0.35rem;
+}
+
+.remote-cursors {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  overflow: visible;
+}
+
+.remote-cursor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.25rem;
+  pointer-events: none;
+  transition: transform 0.08s linear;
+}
+
+.remote-cursor-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50% 50% 50% 0;
+  transform: rotate(-45deg) translate(-2px, -2px);
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: var(--shadow-sm);
+}
+
+.remote-cursor-name {
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  white-space: nowrap;
+  transform: translateY(8px);
+}
+
+.room-banner {
+  position: absolute;
+  top: 64px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  max-width: min(720px, calc(100% - 32px));
+  padding: 0.6rem 0.9rem;
+  background: #fff8e6;
+  border: 1px solid #f3d99a;
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-ui);
+  font-size: 0.85rem;
+}
+
+.room-banner-why {
+  color: var(--ink-muted);
+}
+
+/* ── Room settings, pen, notes (§4) ── */
+
+.room-settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem 0.8rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.room-settings-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.room-settings-grid select,
+.room-settings-grid input[type='number'] {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--ink);
+  background: var(--surface);
+}
+
+.room-setting-check {
+  grid-column: 1 / -1;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 0.5rem !important;
+}
+
+.room-hint {
+  color: var(--warn);
+}
+
+.room-settings > .config-btn {
+  margin-top: 0.6rem;
+}
+
+.room-pen,
+.room-hand {
+  font-size: 0.85rem;
+}
+
+.room-give-pen {
+  margin-left: auto;
+  padding: 0.15rem 0.5rem !important;
+  font-size: 0.72rem !important;
+}
+
+.room-participant[data-pen='1'] .room-participant-name {
+  font-weight: 700;
+}
+
+.room-presence-flags {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--accent);
+  margin-bottom: 0.35rem;
+}
+
+.chrome-action-btn.is-restricted {
+  opacity: 0.55;
+}
+
+.room-report-held {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.host-notes {
+  position: absolute;
+  left: 12px;
+  bottom: 56px;
+  z-index: 45;
+  width: min(360px, calc(100% - 24px));
+  display: flex;
+  flex-direction: column;
+  background: #fffbe6;
+  border: 1px solid #f3d99a;
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  font-family: var(--font-ui);
+}
+
+.host-notes-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.6rem 0.3rem;
+  font-size: 0.8rem;
+}
+
+.host-notes-hint {
+  flex: 1;
+  color: var(--ink-muted);
+  font-size: 0.7rem;
+}
+
+.host-notes-text {
+  min-height: 160px;
+  resize: vertical;
+  border: 0;
+  border-top: 1px solid #f3d99a;
+  border-radius: 0 0 10px 10px;
+  padding: 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  background: transparent;
+  outline: none;
 }

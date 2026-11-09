@@ -5,20 +5,18 @@ import { validateScenarioDocument } from '../game/flows';
  * Scenario editor (docs/specs/flow-authoring.md §3.1): one JSON document
  * holding the authorable part of the active scenario — request mix, tags,
  * flows and objectives. Validate reports problems; Apply installs the
- * document for this session; Save pushes it to the backend; Reset returns
- * to the challenge's own definition.
+ * document for this session; Reset returns to the challenge's own
+ * definition. Nothing leaves the browser: the anonymous MVP has no write
+ * endpoint (docs/specs/interview-platform.md §2.3, §4.1).
  */
 
 export interface ScenarioEditorCallbacks {
   onApply: (doc: ScenarioDocument) => void;
   onReset: () => void;
-  onSave: (doc: ScenarioDocument) => Promise<void>;
   onClose: () => void;
 }
 
 export interface ScenarioEditorOptions {
-  /** Whether Save is available (the user is signed in). */
-  canSave: boolean;
   /** True when the shown document is a session override rather than the challenge's. */
   overridden: boolean;
 }
@@ -41,20 +39,14 @@ export function renderScenarioEditor(doc: ScenarioDocument, options: ScenarioEdi
       <div class="config-panel-body scenario-editor-body">
         <p class="scenario-editor-help">
           Request mix, roles (tags), flows and objectives for this challenge.
-          <strong>Apply</strong> uses the document for your next runs; <strong>Save</strong> writes it to the challenge.
+          <strong>Apply</strong> uses the document for your next runs in this session; copy the JSON to keep it.
         </p>
         <textarea id="scenario-json" class="scenario-json" spellcheck="false" aria-label="Scenario document (JSON)">${escapeHtml(JSON.stringify(doc, null, 2))}</textarea>
         <ul class="scenario-editor-errors" id="scenario-errors" aria-live="polite"></ul>
-        ${
-          options.canSave
-            ? ''
-            : '<p class="scenario-save-hint">Sign in to save changes to the challenge. Apply still works for this session.</p>'
-        }
       </div>
       <div class="config-panel-actions scenario-editor-actions">
         <button class="config-btn config-btn-secondary" id="scenario-reset" type="button" title="Discard the applied document and return to the challenge definition">Reset</button>
         <button class="config-btn config-btn-secondary" id="scenario-validate" type="button">Validate</button>
-        <button class="config-btn config-btn-secondary" id="scenario-save" type="button" ${options.canSave ? '' : 'disabled'}>Save</button>
         <button class="config-btn config-btn-primary" id="scenario-apply" type="button">Apply</button>
       </div>
     </div>
@@ -118,23 +110,5 @@ export function mountScenarioEditor(
   container.querySelector('#scenario-reset')?.addEventListener('click', () => {
     callbacks.onReset();
     callbacks.onClose();
-  });
-
-  const saveButton = container.querySelector<HTMLButtonElement>('#scenario-save');
-  saveButton?.addEventListener('click', async () => {
-    const next = readDocument(container);
-    if (!next) return;
-    saveButton.disabled = true;
-    try {
-      await callbacks.onSave(next);
-      callbacks.onClose();
-    } catch (error) {
-      const errors = container.querySelector<HTMLElement>('#scenario-errors');
-      if (errors) {
-        errors.innerHTML = `<li class="scenario-error">Save failed: ${escapeHtml((error as Error).message)}</li>`;
-      }
-    } finally {
-      saveButton.disabled = false;
-    }
   });
 }
