@@ -7,6 +7,7 @@ import { renderChallengesPage, mountChallengesPage, updateChallengesSelection } 
 import { destroySandboxApp, mountSandboxApp } from './sandbox/sandbox-app';
 import type { Challenge } from './game/scenario-types';
 import { parseRoomFragment } from './rooms/join-codes';
+import { parseBoardFragment } from './share/snapshot';
 
 const app = document.getElementById('app')!;
 
@@ -40,7 +41,10 @@ async function renderRoute(route: RouteMatch): Promise<void> {
   // A participant or host link is `{site}#join=…` / `{site}#host=…`
   // (docs/specs/interview-platform.md §3.2); the room lives in the sandbox.
   const roomCredential = parseRoomFragment(window.location.hash);
-  if (roomCredential && route.name !== 'sandbox') {
+  // A board link is `{site}#board=1.…` (product-directions.md §2.3); it also
+  // lives in the sandbox. A room credential wins: a room defines its own board.
+  const snapshotToken = roomCredential ? null : parseBoardFragment(window.location.hash);
+  if ((roomCredential || snapshotToken) && route.name !== 'sandbox') {
     navigate(`/sandbox${window.location.hash}`, true);
     return;
   }
@@ -72,6 +76,7 @@ async function renderRoute(route: RouteMatch): Promise<void> {
         challengeSlug: route.params.slug,
         loadReferencePreset: true,
         room: roomCredential ?? undefined,
+        snapshotToken: snapshotToken ?? undefined,
       });
       sandboxMounted = true;
       document.title = roomCredential

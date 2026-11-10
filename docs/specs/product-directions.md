@@ -90,8 +90,11 @@ interface BoardSnapshotV1 {
 
 ### 2.3 Encoding for the URL carrier
 
-`{site}/sandbox#board=1.<payload>` where `payload` is
+`{site}/#board=1.<payload>` where `payload` is
 `base64url(deflate-raw(JSON))` and the leading `1.` is the format version.
+Links sit at the site root, exactly like room links, because cold-loading a
+deep path 404s on GitHub Pages; `main.ts` redirects a board fragment to the
+sandbox the same way it already does for `#join=` / `#host=`.
 
 - **The fragment, again.** Same reasons as room links
   (interview-platform §3.2): works on a static host with no SPA fallback,
@@ -177,6 +180,32 @@ offers *Export replay* after a room run (the client already holds the
 stamped events). Solo runs with manual failure injections do **not**
 record events in v1 — that would mean instrumenting solo controls; noted
 as the first v2 item.
+
+### 2.6a As built (phases 1–2, 2026-11-10)
+
+- `src/share/snapshot.ts` is the codec: `BoardSnapshotV1`,
+  `encodeSnapshot`/`decodeSnapshot` (deflate-raw via Compression Streams,
+  base64url, `1.` version prefix), `parseBoardFragment`/`boardFragment`,
+  whole-snapshot rejection with toast-ready messages, duplicate last-wins,
+  the orphan-belt cascade, and the caps from §2.3. One correction to §2.4:
+  seeds validate as **uint32**, not int32 — `randomSeed()` draws the full
+  32-bit range (the int32 bound belongs to the room's server-pinned seed),
+  and the narrower check silently broke half of all run links.
+- Links sit at the site root (`{site}/#board=1.…`); `main.ts` redirects a
+  board fragment to the sandbox exactly like room credentials, and a room
+  credential wins over a board fragment in the same URL.
+- The Share dialog's new **Snapshot** section (solo and in rooms) copies
+  board and run links; the run button is disabled until a run exists. The
+  report modal's **Copy run link** captures the board at report time, so a
+  link copied later still reproduces that run. Loading installs scenario
+  override, traffic, board and (for run links) the pinned seed, then clears
+  the fragment; a failed decode leaves a plain sandbox plus one toast.
+- Tests: `src/share/__tests__/snapshot.test.ts` (11) and `e2e/share.spec.ts`
+  (5): board-link round-trip across tabs, run-link replay equality by flow
+  stats, room-beats-board, malformed/newer-version fallback, and an
+  imported `<img onerror>` note rendering inert.
+- Phase 3 (file export/import, room import-as-gesture, replay events) is
+  not started.
 
 ### 2.7 Phases, tests, risks
 

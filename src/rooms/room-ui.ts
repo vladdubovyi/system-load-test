@@ -30,6 +30,8 @@ export interface RoomViewModel {
    * the scenario's internals, so offer a fresh room with new credentials.
    */
   offerFreshRoom: boolean;
+  /** A finished run exists, so a run link can carry its seed (product-directions §2). */
+  hasRunSeed: boolean;
 }
 
 export interface RoomDialogCallbacks {
@@ -45,6 +47,8 @@ export interface RoomDialogCallbacks {
   onReleaseReport: () => void;
   /** Start a fresh interview room around the current board (§4.2). */
   onFreshRoom: () => void;
+  /** Copy a snapshot link for the current board, or the last run (product-directions §2). */
+  onCopySnapshot: (kind: 'board' | 'run') => void;
 }
 
 function escapeHtml(value: string): string {
@@ -100,11 +104,30 @@ export function renderRoomDialog(model: RoomViewModel): string {
         <button class="config-panel-close" id="room-close" type="button" aria-label="Close">×</button>
       </div>
       <div class="config-panel-body room-dialog-body">
+        ${renderSnapshotSection(model)}
         ${renderDialogBody(model)}
         ${model.error ? `<p class="room-error" id="room-error" role="alert">${escapeHtml(model.error)}</p>` : ''}
         ${model.offerFreshRoom ? '<button class="config-btn config-btn-primary" id="room-fresh-interview" type="button" title="Leave this room and open a new one, with new credentials, around the same board">Start a fresh interview room</button>' : ''}
       </div>
     </div>
+  `;
+}
+
+/**
+ * Snapshot links (product-directions.md §2): the board — scenario, traffic
+ * and all — as a URL. No server state; the link is the artifact. Available
+ * solo and in rooms alike.
+ */
+function renderSnapshotSection(model: RoomViewModel): string {
+  return `
+    <section class="room-section" id="snapshot-section">
+      <h4>Snapshot</h4>
+      <p>A link that carries this exact board. Nothing is uploaded or stored — the link itself holds the design.</p>
+      <div class="config-panel-actions room-actions">
+        <button class="config-btn config-btn-secondary" id="snapshot-copy-board" type="button" title="Copy a link to this board, with its scenario and traffic">🔗 Copy board link</button>
+        <button class="config-btn config-btn-secondary" id="snapshot-copy-run" type="button" ${model.hasRunSeed ? 'title="Copy a link that replays the last run, seed and all"' : 'disabled title="Run the simulation first — a run link carries its seed"'}>🔗 Copy run link</button>
+      </div>
+    </section>
   `;
 }
 
@@ -250,6 +273,8 @@ function bindDialog(container: HTMLElement, callbacks: RoomDialogCallbacks): voi
   container.querySelector('#room-request-pen')?.addEventListener('click', callbacks.onRequestPen);
   container.querySelector('#room-release-report')?.addEventListener('click', callbacks.onReleaseReport);
   container.querySelector('#room-fresh-interview')?.addEventListener('click', callbacks.onFreshRoom);
+  container.querySelector('#snapshot-copy-board')?.addEventListener('click', () => callbacks.onCopySnapshot('board'));
+  container.querySelector('#snapshot-copy-run')?.addEventListener('click', () => callbacks.onCopySnapshot('run'));
   container.querySelectorAll<HTMLButtonElement>('[data-give-pen]').forEach((btn) => {
     btn.addEventListener('click', () => callbacks.onAssignPen(btn.dataset.givePen ?? null));
   });

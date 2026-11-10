@@ -30,6 +30,13 @@ import {
   setRunFlowBundle,
 } from '../game/scenario-runtime';
 import { mapChallengeFromApi } from '../api/client';
+import {
+  MAX_FRAGMENT_CHARS,
+  boardFragment,
+  decodeSnapshot,
+  encodeSnapshot,
+  type BoardSnapshotV1,
+} from '../share/snapshot';
 import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
 import { ConnectionPreview } from '../ui/connection-preview';
@@ -114,6 +121,7 @@ import {
   type RunTick,
   type TickStamp,
   type RoomSettings,
+  type WireEntity,
   DEFAULT_ROOM_SETTINGS,
   effectiveLintVisible,
   effectiveReportVisibility,
@@ -143,6 +151,7 @@ import {
   formatJoinCode,
   normalizeJoinCode,
   roomFragment,
+  siteBase,
   type RoomCredential,
 } from '../rooms/join-codes';
 
@@ -1464,6 +1473,10 @@ function showRunReport(): void {
 function presentReport(report: SimulationReport): void {
   const hostHolds =
     room?.role === 'host' && effectiveReportVisibility(room.settings) === 'hostOnly' && !room.reportReleased;
+  // The board as it stands when the report appears *is* the board as run
+  // (scale instances are already dropped); capture it so a link copied later
+  // still reproduces this run even if the board is edited afterwards.
+  const runSnapshot = buildSnapshot('run', report.seed);
   mountReportModal(
     report,
     () => renderRoomChrome(),
@@ -1472,6 +1485,7 @@ function presentReport(report: SimulationReport): void {
     {
       pdfExtras: roomPdfExtras,
       onRelease: hostHolds ? () => void releaseHeldReport() : undefined,
+      onCopyRunLink: () => void copySnapshotLink(runSnapshot),
     }
   );
   renderRoomChrome();
@@ -1990,6 +2004,7 @@ function roomViewModel(): RoomViewModel {
       !room.reportReleased &&
       effectiveReportVisibility(room.settings) === 'hostOnly',
     offerFreshRoom: roomFreshOffer && room?.role === 'host',
+    hasRunSeed: state.lastSeed !== null,
   };
 }
 
@@ -2106,6 +2121,7 @@ function roomDialogCallbacks(): RoomDialogCallbacks {
     },
     onReleaseReport: () => void releaseHeldReport(),
     onFreshRoom: () => void startFreshInterviewRoom(),
+    onCopySnapshot: (kind) => void copySnapshotLink(buildSnapshot(kind, state.lastSeed)),
   };
 }
 
@@ -2818,12 +2834,82 @@ function applySpeed(speed: 1 | 5 | 20 | 100): void {
   });
 }
 
+// ── Portable snapshots (docs/specs/product-directions.md §2) ────────────────
+
+/**
+ * Load a `#board=` snapshot: scenario, overrides, traffic, board, and — for
+ * run links — the pinned seed. A snapshot that fails to decode leaves the
+ * sandbox exactly as a plain visit would, with one toast; the fragment is
+ * cleared only on success, so a refresh of a bad link explains itself again.
+ */
+async function mountFromSnapshot(token: string, fallbackSlug?: string): Promise<void> {
+  let snapshot: BoardSnapshotV1 | null = null;
+  let problem = '';
+  try {
+    snapshot = await decodeSnapshot(token);
+  } catch (error) {
+    problem = error instanceof Error ? error.message : 'That board link could not be read.';
+  }
+  if (!snapshot) {
+    await initSandbox(fallbackSlug, true);
+    showBoardToast(problem);
+    return;
+  }
+  await initSandbox(snapshot.scenarioSlug ?? fallbackSlug, false);
+  setActiveScenarioOverride(snapshot.scenario ?? null);
+  applyTrafficConfig(snapshot.traffic ?? null);
+  installBoard(entitiesToBoard(snapshot.board as WireEntity[]), { broadcast: false });
+  if (snapshot.kind === 'run' && snapshot.seed) {
+    state.pinnedSeed = snapshot.seed;
+  }
+  rerenderConfigPalette();
+  updateStatus();
+  // The snapshot is loaded; later edits belong to this tab, not the link.
+  setRoomFragment(null);
+}
+
+/** The current tab's state as a snapshot document. */
+function buildSnapshot(kind: 'board' | 'run', seed: number | null, board = liveBoard()): BoardSnapshotV1 {
+  const snapshot: BoardSnapshotV1 = {
+    v: 1,
+    kind,
+    scenarioSlug: room ? room.scenarioSlug : (state.currentChallenge?.slug ?? null),
+    board: boardToEntities(board),
+  };
+  const scenario = getActiveScenarioOverride();
+  if (scenario) snapshot.scenario = scenario;
+  if (state.customTrafficConfig) snapshot.traffic = state.customTrafficConfig;
+  if (kind === 'run' && seed !== null) snapshot.seed = seed;
+  return snapshot;
+}
+
+/** Encode, size-check and copy a snapshot link; every outcome is a toast. */
+async function copySnapshotLink(snapshot: BoardSnapshotV1): Promise<void> {
+  if (snapshot.kind === 'run' && snapshot.seed === undefined) {
+    showBoardToast('Run the simulation first — a run link carries its seed.');
+    return;
+  }
+  const fragment = boardFragment(await encodeSnapshot(snapshot));
+  if (fragment.length > MAX_FRAGMENT_CHARS) {
+    showBoardToast('This board is too large for a link.');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(`${siteBase()}${fragment}`);
+    showBoardToast('Link copied — anyone who opens it gets this exact board.');
+  } catch {
+    showBoardToast('Could not reach the clipboard. Copy the address after opening the link yourself.');
+  }
+}
+
 export interface SandboxMountOptions {
   container: HTMLElement;
   challengeSlug?: string;
   loadReferencePreset?: boolean;
   /** Join a room on mount (`#join=` or `#host=` in the URL, §3.2). */
   room?: RoomCredential;
+  /** Load a `#board=` snapshot on mount (product-directions.md §2); ignored in a room. */
+  snapshotToken?: string;
 }
 
 export async function mountSandboxApp(options: SandboxMountOptions): Promise<void> {
@@ -2840,6 +2926,8 @@ export async function mountSandboxApp(options: SandboxMountOptions): Promise<voi
       setRoomFragment(null);
       openRoomDialogNow();
     }
+  } else if (options.snapshotToken) {
+    await mountFromSnapshot(options.snapshotToken, options.challengeSlug);
   } else {
     await initSandbox(options.challengeSlug, options.loadReferencePreset ?? true);
   }

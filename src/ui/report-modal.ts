@@ -268,6 +268,7 @@ export function renderReportModal(report: SimulationReport): string {
         <footer class="report-footer">
           <button class="btn btn-secondary" id="report-dismiss" type="button">Close</button>
           <button class="btn btn-secondary" id="report-download" type="button">⬇ Download PDF</button>
+          <button class="btn btn-secondary" id="report-copy-link" type="button" title="Copy a link that replays this exact run — board, scenario, traffic and seed">🔗 Copy run link</button>
           <button class="btn btn-secondary" id="report-replay-seed" type="button" title="Run the same board against the same traffic">↺ Replay same traffic</button>
           <button class="btn btn-primary" id="report-replay" type="button">▶ Run again</button>
         </footer>
@@ -281,6 +282,8 @@ export interface ReportModalOptions {
   pdfExtras?: () => ReportPdfExtras;
   /** Shown as a button when set: the host can release a held report. */
   onRelease?: () => void;
+  /** Copy a snapshot link that replays this run (product-directions.md §2). */
+  onCopyRunLink?: () => void;
 }
 
 export function mountReportModal(
@@ -302,6 +305,9 @@ export function mountReportModal(
 
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
+  const copyLink = document.getElementById('report-copy-link');
+  if (options.onCopyRunLink) copyLink?.addEventListener('click', options.onCopyRunLink);
+  else copyLink?.remove();
   document.getElementById('report-download')?.addEventListener('click', () => {
     downloadReportPdf(report, options.pdfExtras?.() ?? {});
   });
