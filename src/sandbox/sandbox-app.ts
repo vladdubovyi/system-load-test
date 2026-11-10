@@ -15,7 +15,7 @@ import {
   canConnect,
   connectionRejectionReason,
   SOURCE_ID,
-} from '../game/simulation';
+ describeFailure } from '../game/simulation';
 import { lintBoard } from '../game/flow-validator';
 import { showLintPanel, hideLintPanel } from '../ui/lint-panel';
 import { showBoardToast, dismissBoardToast } from '../ui/toast';
@@ -132,7 +132,7 @@ import {
   effectiveReportVisibility,
 } from '../rooms/room-client';
 import { clearHostNotes, getHostNotes, toggleHostNotes } from '../rooms/host-notes';
-import type { SimulationReport } from '../game/types';
+import type { SimulationReport, SimulationSnapshot } from '../game/types';
 import {
   clearRemoteCursors,
   closeRoomDialog,
@@ -665,6 +665,31 @@ function positionSourceNode(): void {
   sourceNode.style.top = `${port.y - 72}px`;
 }
 
+/**
+ * Scripted failure phases (product-directions.md §3.3): while a drill is
+ * active the workspace shows what the script took down and for how long.
+ * Participants in interview mode see it too — the drill is public data.
+ */
+function renderScriptedBanner(snap: SimulationSnapshot | null): void {
+  const active = snap?.status === 'running' ? snap.scriptedFailures.find((p) => p.active) : undefined;
+  let banner = document.getElementById('scripted-banner');
+  if (!active || !snap) {
+    banner?.remove();
+    return;
+  }
+  if (!banner) {
+    const workspace = document.querySelector('.canvas-workspace');
+    if (!workspace) return;
+    banner = document.createElement('div');
+    banner.id = 'scripted-banner';
+    banner.className = 'room-banner scripted-banner';
+    banner.setAttribute('role', 'status');
+    workspace.appendChild(banner);
+  }
+  const left = Math.max(0, Math.ceil((active.until ?? snap.time) - snap.time));
+  banner.textContent = `⚡ ${active.label}: ${active.componentLabel ?? ''} ${describeFailure(active.type)} — ${left}s left`;
+}
+
 function lerpHud(current: number, target: number, dt: number): number {
   const factor = 1 - Math.exp(-HUD_LERP_SPEED * dt);
   return current + (target - current) * factor;
@@ -691,6 +716,7 @@ function updateStatus(dt = 0): void {
       'Drag configs onto components, drag ports to connect, then press Play.';
 
   document.querySelector('.canvas-app')?.classList.toggle('sim-paused', paused);
+  renderScriptedBanner(snap);
 
   if (snap) {
     if (dt > 0) {
@@ -1887,13 +1913,16 @@ function showTrafficConfigPanel(): void {
   document.body.appendChild(container);
   
   // Get current or default traffic config
-  const traffic = state.customTrafficConfig || state.currentChallenge?.scenario.traffic || {
+  const phases = getActiveScenario().trafficPhases;
+  const base = state.customTrafficConfig || state.currentChallenge?.scenario.traffic || {
     baseRps: 200,
     pattern: 'constant' as const,
     spikeMultiplier: 3.2,
     spikeChance: 0.08,
   };
-  
+  // Phases come from the scenario (§3.4) and are shown read-only.
+  const traffic: TrafficProfile = { ...base, phases: phases ?? base.phases };
+
   mountTrafficConfigPanel(
     container,
     traffic,

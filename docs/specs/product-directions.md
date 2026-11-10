@@ -325,6 +325,50 @@ displays phases read-only in v1 (authoring stays JSON in the scenario
 editor). Engine reads phases inside `updateTrafficPattern` from the
 scenario — again no new run inputs.
 
+### 3.4a As built (phase 1, 2026-11-10)
+
+- **Types and authoring.** `FailureScenario` in `scenario-types.ts` now has
+  the §3.3 shape (the old `name/description/trigger` sketch was unused);
+  `TrafficPhase` and `TrafficProfile.phases` exist; the scenario document
+  gains `failureScenarios` and `trafficPhases`, validated by
+  `validateFailureScenarios` / `validateTrafficPhases` in `flows.ts`, layered
+  by `scenario-runtime.ts` (document over catalog; a Traffic override's
+  `phases` over both), and mapped from the catalog's `scenarioConfig.
+  failureScenarios` / `scenarioConfig.trafficPhases` by `mapChallengeFromApi`.
+  `Objectives.surviveScriptedFailures` exists (default on when phases exist).
+- **Engine.** `src/game/traffic-phases.ts` holds the pure helpers
+  (`baseRpsAt` linear interpolation, `requestTypesAt` step function);
+  `updateTrafficPattern`, `pickRequestKind` and predictive scaling read them.
+  Scripted phases fire in `tick` before the traffic update (not during
+  drain), target the first board component matching the selector via
+  `selectorMatches`, reuse `injectFailure`, and are skipped when nothing
+  matches. **One rule beyond the spec:** while a phase is active its target
+  is exempt from the overload-failure rule — it is down by script, not by
+  design — so a drill is survivable with redundancy instead of an automatic
+  loss when the dead component's queue fills. Components *other* than the
+  target that fail during a phase are recorded per phase
+  (`RunCounts.scriptedPhases[].failedDuring`) and drive the
+  `scripted-failures` objective row.
+- **Surfaces.** `SimulationSnapshot.scriptedFailures` carries live state;
+  the sandbox shows `#scripted-banner` ("⚡ Database outage: SQL Database is
+  down — 9s left") while a phase is active; the report gains a *Scripted
+  failures* section (`#report-scripted`: target, timing, survived / who
+  failed / skipped) and the objective row; the Traffic panel lists phases
+  read-only (`#traffic-phases`). Both fields are in the interview
+  projection whitelist (server and fake hub) — drills are public scenario
+  data, as §3.3 intends — with the C# guard asserting they survive.
+- **Tests.** `traffic-phases.test.ts` (3), `scenario-depth.test.ts` (7:
+  firing and ending on schedule, skip on no match, target not counted as
+  broken, determinism with phases and a ramp, ramp spawns more, objective
+  row semantics, validation); `e2e/scenario-depth.spec.ts` (4: banner and
+  report for an authored outage, skipped phase, interview participant sees
+  the drill but not the objectives, traffic ramp raises peak RPS and the
+  panel shows the phases). Existing scenarios are untouched; calibration is
+  unchanged.
+- Not in phase 1: the §3.3 report "survival before/after" per phase (the
+  section shows outcome, not a timeline), and the `latency` / `partition`
+  failure types remain the engine's existing message-only stubs.
+
 ### 3.5 Phases, tests, risks
 
 Phase 1: engine support (scripted failures + traffic phases) behind the

@@ -128,7 +128,7 @@ function stripChallenge(slug: string, includeFlows: boolean): unknown | null {
   if (!challenge) return null;
   const config = challenge.scenario.scenarioConfig;
   const keptConfig: Record<string, unknown> = {};
-  for (const field of ['requirements', 'drainDuration', 'pattern', 'requestTypes', 'characteristics', 'tags']) {
+  for (const field of ['requirements', 'drainDuration', 'pattern', 'requestTypes', 'characteristics', 'tags', 'failureScenarios', 'trafficPhases']) {
     if (config[field] != null) keptConfig[field] = config[field];
   }
   // The mocked catalog has no flows in its config; like the frontend, the
@@ -161,7 +161,7 @@ function stripOverride(scenarioOverride: unknown | null, includeFlows: boolean):
   if (!scenarioOverride || typeof scenarioOverride !== 'object') return null;
   const doc = scenarioOverride as Record<string, unknown>;
   const kept: Record<string, unknown> = {};
-  for (const field of ['requestTypes', 'tags']) {
+  for (const field of ['requestTypes', 'tags', 'failureScenarios', 'trafficPhases']) {
     if (doc[field] != null) kept[field] = doc[field];
   }
   if (includeFlows && Array.isArray(doc.flows)) kept.flows = doc.flows;

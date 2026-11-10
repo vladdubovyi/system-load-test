@@ -30,6 +30,7 @@ function counts(outcome: ReturnType<typeof runSeeded>): RunCounts {
     completedByKind: s.completedByKind,
     violatedByKind: s.violatedByKind,
     droppedByKind: s.droppedByKind,
+    scriptedPhases: report.scriptedPhases,
     violationsByStep: s.violationsByStep,
     dropReasons: {},
     brokenServices: report.brokenServices.map((c) => c.label),

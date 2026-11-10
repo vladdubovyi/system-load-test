@@ -1,3 +1,4 @@
+import type { ScriptedPhaseOutcome } from './objectives';
 import type { RequestFlowState } from './flow-types';
 
 // ComponentType is now a string to support dynamic components from backend
@@ -169,6 +170,23 @@ export interface SimulationSnapshot {
   message: string;
   /** Traffic seed the run is generated from (spec §8). */
   seed: number;
+  /** Scripted failure phases and their live state (product-directions §3.3). */
+  scriptedFailures: ScriptedFailureState[];
+}
+
+export interface ScriptedFailureState {
+  id: string;
+  label: string;
+  type: 'shutdown' | 'latency' | 'capacity' | 'partition';
+  atSeconds: number;
+  durationSeconds: number;
+  /** The component the phase hit; null until it fires, or when nothing matched. */
+  componentLabel: string | null;
+  fired: boolean;
+  skipped: boolean;
+  /** Simulation time the phase ends; null until fired. */
+  until: number | null;
+  active: boolean;
 }
 
 export const REQUEST_COLORS = [
@@ -330,6 +348,8 @@ export interface SimulationReport {
   /** Traffic seed the run was generated from (interview-platform.md §8). */
   seed: number;
   recommendations: string[];
+  /** Scripted failure phases and what happened during each (product-directions §3.3). */
+  scriptedPhases: ScriptedPhaseOutcome[];
 }
 
 export const SCENARIO = {

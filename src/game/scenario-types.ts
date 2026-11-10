@@ -1,4 +1,4 @@
-import type { FlowSpec, Objectives, TagDefinition } from './flow-types';
+import type { FlowSpec, NodeSelector, Objectives, TagDefinition } from './flow-types';
 
 export interface ScenarioDefinition {
   id: string;
@@ -26,6 +26,8 @@ export interface TrafficProfile {
   spikeChance?: number;
   pattern: 'constant' | 'spike' | 'gradual' | 'random';
   requestTypes?: Record<string, number>;
+  /** Multi-phase traffic (docs/specs/product-directions.md §3.4); undefined means flat. */
+  phases?: TrafficPhase[];
   characteristics?: {
     celebrityShare?: number;
     fileSize?: string;
@@ -46,14 +48,29 @@ export interface ScoringPriorities {
   faultTolerance?: number;
 }
 
+/**
+ * A point on the traffic timeline (product-directions.md §3.4). `baseRps` is
+ * interpolated linearly between points; `requestTypes` switches at the point.
+ */
+export interface TrafficPhase {
+  atSeconds: number;
+  baseRps?: number;
+  requestTypes?: Record<string, number>;
+}
+
+/**
+ * A scripted failure phase (product-directions.md §3.3): at `atSeconds` of
+ * simulation time the engine injects `type` into the first board component
+ * matching `target`, for `durationSeconds`. Scenario time, so deterministic
+ * and room-safe with no new run inputs.
+ */
 export interface FailureScenario {
   id: string;
-  name: string;
-  description: string;
-  trigger?: {
-    time?: number;
-    condition?: string;
-  };
+  label: string;
+  atSeconds: number;
+  target: NodeSelector;
+  type: 'shutdown' | 'latency' | 'capacity' | 'partition';
+  durationSeconds: number;
 }
 
 export interface ReferenceArchitecture {

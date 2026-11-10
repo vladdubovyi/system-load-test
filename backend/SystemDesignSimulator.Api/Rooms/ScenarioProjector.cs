@@ -21,11 +21,11 @@ namespace SystemDesignSimulator.Api.Rooms;
 public sealed class ScenarioProjector
 {
     /// <summary>Override fields a participant may keep in interview mode.</summary>
-    private static readonly string[] KeptOverrideFields = { "requestTypes", "tags" };
+    private static readonly string[] KeptOverrideFields = { "requestTypes", "tags", "failureScenarios", "trafficPhases" };
 
     /// <summary>Scenario-config fields a participant may keep in interview mode.</summary>
     private static readonly string[] KeptConfigFields =
-        { "requirements", "drainDuration", "pattern", "requestTypes", "characteristics", "tags" };
+        { "requirements", "drainDuration", "pattern", "requestTypes", "characteristics", "tags", "failureScenarios", "trafficPhases" };
 
     private readonly IChallengeCatalog _catalog;
 

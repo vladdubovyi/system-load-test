@@ -28,6 +28,7 @@ function report(overrides: Partial<SimulationReport>): SimulationReport {
     totalCompleted: 10,
     totalDropped: 0,
     totalViolated: 0,
+    scriptedPhases: [],
     successRate: 100,
     objectives: [],
     objectivesMet: true,

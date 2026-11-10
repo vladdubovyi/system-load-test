@@ -233,6 +233,57 @@ export function validateFlows(specs: FlowSpec[]): string[] {
  * plus the cross-references between request kinds, objectives and tags that
  * the engine would otherwise only surface at run time.
  */
+const FAILURE_TYPES = new Set(['shutdown', 'latency', 'capacity', 'partition']);
+
+/** Scripted failure phases (product-directions.md §3.3). */
+export function validateFailureScenarios(phases: ScenarioDocument['failureScenarios']): string[] {
+  if (phases === undefined) return [];
+  if (!Array.isArray(phases)) return ['"failureScenarios" must be an array.'];
+  const problems: string[] = [];
+  const ids = new Set<string>();
+  phases.forEach((phase, i) => {
+    const where = `failureScenarios[${i}]`;
+    if (!phase || typeof phase !== 'object') {
+      problems.push(`${where} must be an object.`);
+      return;
+    }
+    if (typeof phase.id !== 'string' || phase.id.length === 0) problems.push(`${where} needs an "id".`);
+    else if (ids.has(phase.id)) problems.push(`${where}: duplicate id "${phase.id}".`);
+    else ids.add(phase.id);
+    if (typeof phase.label !== 'string' || phase.label.length === 0) problems.push(`${where} needs a "label".`);
+    if (typeof phase.atSeconds !== 'number' || !(phase.atSeconds >= 0)) problems.push(`${where}.atSeconds must be a number ≥ 0.`);
+    if (typeof phase.durationSeconds !== 'number' || !(phase.durationSeconds > 0)) problems.push(`${where}.durationSeconds must be a number > 0.`);
+    if (!FAILURE_TYPES.has(phase.type as string)) problems.push(`${where}.type must be shutdown, latency, capacity or partition.`);
+    const target = phase.target;
+    if (!target || typeof target !== 'object' || (target.capability === undefined && target.componentType === undefined && target.tag === undefined)) {
+      problems.push(`${where}.target needs a capability, componentType or tag.`);
+    }
+  });
+  return problems;
+}
+
+/** Multi-phase traffic (product-directions.md §3.4). */
+export function validateTrafficPhases(phases: ScenarioDocument['trafficPhases']): string[] {
+  if (phases === undefined) return [];
+  if (!Array.isArray(phases)) return ['"trafficPhases" must be an array.'];
+  const problems: string[] = [];
+  phases.forEach((phase, i) => {
+    const where = `trafficPhases[${i}]`;
+    if (!phase || typeof phase !== 'object') {
+      problems.push(`${where} must be an object.`);
+      return;
+    }
+    if (typeof phase.atSeconds !== 'number' || !(phase.atSeconds >= 0)) problems.push(`${where}.atSeconds must be a number ≥ 0.`);
+    if (phase.baseRps !== undefined && (typeof phase.baseRps !== 'number' || !(phase.baseRps > 0))) {
+      problems.push(`${where}.baseRps must be a number > 0.`);
+    }
+    for (const [kind, weight] of Object.entries(phase.requestTypes ?? {})) {
+      if (typeof weight !== 'number' || !(weight >= 0)) problems.push(`${where}.requestTypes["${kind}"] must be a number ≥ 0.`);
+    }
+  });
+  return problems;
+}
+
 export function validateScenarioDocument(doc: ScenarioDocument): string[] {
   const problems: string[] = [];
   const flows = doc.flows ?? [];
@@ -267,6 +318,9 @@ export function validateScenarioDocument(doc: ScenarioDocument): string[] {
       problems.push(`Objective references request kind "${kind}", which has neither a flow nor traffic.`);
     }
   }
+  problems.push(...validateFailureScenarios(doc.failureScenarios));
+  problems.push(...validateTrafficPhases(doc.trafficPhases));
+
   if (
     objectives.maxViolationRate !== undefined &&
     (typeof objectives.maxViolationRate !== 'number' ||

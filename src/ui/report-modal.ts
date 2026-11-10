@@ -52,6 +52,34 @@ function objectivesSection(report: SimulationReport): string {
   `;
 }
 
+/** Scripted failure phases (product-directions.md §3.3): what fired, on whom, and who survived. */
+function scriptedSection(report: SimulationReport): string {
+  if (report.scriptedPhases.length === 0) return '';
+  const rows = report.scriptedPhases
+    .map((phase) => {
+      const outcome = phase.skipped
+        ? '<span class="report-scripted-outcome skipped">skipped — no matching component</span>'
+        : phase.failedDuring.length === 0
+          ? '<span class="report-scripted-outcome ok">✓ survived</span>'
+          : `<span class="report-scripted-outcome bad">✕ ${escapeHtml(phase.failedDuring.join(', '))} failed</span>`;
+      const target = phase.componentLabel ? `${escapeHtml(phase.componentLabel)} · ${escapeHtml(phase.type)}` : escapeHtml(phase.type);
+      return `
+        <li class="report-scripted-phase" data-phase="${escapeHtml(phase.id)}">
+          <span class="report-scripted-label">⚡ ${escapeHtml(phase.label)}</span>
+          <span class="report-scripted-target">${target}</span>
+          <span class="report-scripted-when">at ${phase.atSeconds}s for ${phase.durationSeconds}s</span>
+          ${outcome}
+        </li>`;
+    })
+    .join('');
+  return `
+    <section class="report-section" id="report-scripted">
+      <h3>Scripted failures</h3>
+      <ul class="report-scripted-list">${rows}</ul>
+    </section>
+  `;
+}
+
 function flowStatsSection(report: SimulationReport): string {
   if (report.flowStats.length === 0) return '';
 
@@ -199,6 +227,7 @@ export function renderReportModal(report: SimulationReport): string {
           </section>
 
           ${objectivesSection(report)}
+          ${scriptedSection(report)}
           ${flowStatsSection(report)}
 
           <section class="report-section">

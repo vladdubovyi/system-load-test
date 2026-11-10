@@ -31,6 +31,7 @@ export function mapChallengeFromApi(item: any): Challenge {
         pattern: config.pattern || 'constant',
         requestTypes: config.requestTypes,
         characteristics: config.characteristics,
+        phases: config.trafficPhases == null ? undefined : stripNulls(config.trafficPhases),
       },
       allowedComponents: item.allowedComponents || [],
       scoringPriorities: item.scenario.scoringWeights || {},
@@ -39,6 +40,7 @@ export function mapChallengeFromApi(item: any): Challenge {
       flows: config.flows == null ? undefined : stripNulls(config.flows),
       objectives: config.objectives == null ? undefined : stripNulls(config.objectives),
       tags: config.tags == null ? undefined : stripNulls(config.tags),
+      failureScenarios: config.failureScenarios == null ? undefined : stripNulls(config.failureScenarios),
     },
   };
 }

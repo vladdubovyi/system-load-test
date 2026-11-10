@@ -1,4 +1,5 @@
 import type { Capability } from './capabilities';
+import type { FailureScenario, TrafficPhase } from './scenario-types';
 
 /**
  * Flow specifications — the declarative description of the path a request
@@ -37,6 +38,10 @@ export interface ScenarioDocument {
   tags?: TagDefinition[];
   flows?: FlowSpec[];
   objectives?: Objectives;
+  /** Scripted failure phases (product-directions.md §3.3). */
+  failureScenarios?: FailureScenario[];
+  /** Multi-phase traffic timeline (product-directions.md §3.4). */
+  trafficPhases?: TrafficPhase[];
 }
 
 export interface FlowBranch {
@@ -105,4 +110,10 @@ export interface Objectives {
   maxViolationRate?: number;
   /** Existing survival rule; default true. */
   noComponentFailures?: boolean;
+  /**
+   * With scripted failure phases (product-directions.md §3.3): no component
+   * other than the drill's target may fail while a phase is active. Default
+   * true whenever the scenario has phases.
+   */
+  surviveScriptedFailures?: boolean;
 }

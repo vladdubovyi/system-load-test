@@ -48,6 +48,9 @@ import {
 } from './component-taxonomy';
 import { getCapabilities } from './capabilities';
 import { allSteps, describeSelector, matchPendingStep, selectorMatches } from './flows';
+import { baseRpsAt, requestTypesAt, sortPhases } from './traffic-phases';
+import type { TrafficPhase } from './scenario-types';
+import type { ScriptedFailureState } from './types';
 import type { FlowSpec, FlowStep, RequestFlowState } from './flow-types';
 import { getComponentDef } from './component-catalog';
 import { getActiveScenario, type RuntimeScenario } from './scenario-runtime';
@@ -347,6 +350,20 @@ export function connectionRejectionReason(
 
 export type TopologyChangeListener = () => void;
 
+/** Human wording for a scripted failure type (HUD banner, status bar). */
+export function describeFailure(type: 'shutdown' | 'latency' | 'capacity' | 'partition'): string {
+  switch (type) {
+    case 'shutdown':
+      return 'is down';
+    case 'latency':
+      return 'is slow';
+    case 'capacity':
+      return 'lost half its capacity';
+    case 'partition':
+      return 'is partitioned';
+  }
+}
+
 export class SimulationEngine {
   private components: PlacedComponent[];
   private belts: ConveyorBelt[];
@@ -379,6 +396,13 @@ export class SimulationEngine {
   private dropReasons = new Map<string, number>();
   /** Flow spec per request kind; kinds without one are violated on arrival. */
   private flowsByKind = new Map<string, FlowSpec>();
+  /** Scripted failure phases (product-directions §3.3) and their live state. */
+  private scriptedPhases: ScriptedFailureState[] = [];
+  /** Per phase id: the component id it hit, and the labels of others that failed meanwhile. */
+  private scriptedTargets = new Map<string, string>();
+  private scriptedFailedDuring = new Map<string, Set<string>>();
+  /** Multi-phase traffic (§3.4), sorted once. */
+  private trafficPhases: TrafficPhase[] = [];
   private currentRps = getActiveScenario().baseRps;
   private spikeActive = false;
   private spikeTimer = 0;
@@ -422,6 +446,8 @@ export class SimulationEngine {
     for (const spec of scenario.flows ?? []) {
       this.flowsByKind.set(spec.kind, spec);
     }
+    this.trafficPhases = sortPhases(scenario.trafficPhases);
+    this.resetScriptedPhases();
     this.componentConfigs = componentConfigs;
     this.components = components;
     this.belts = belts;
@@ -771,7 +797,7 @@ export class SimulationEngine {
    * satisfying belts). Kinds without a flow carry no routable traffic.
    */
   private predictiveTrafficShare(component: PlacedComponent): number {
-    const weights = Object.entries(this.scenario.requestTypes ?? {}).filter(
+    const weights = Object.entries(this.requestTypesNow()).filter(
       ([, weight]) => weight > 0
     );
     const total = weights.reduce((sum, [, weight]) => sum + weight, 0);
@@ -973,6 +999,7 @@ export class SimulationEngine {
     this.rng = createRng(this.seed);
     this.time = 0;
     this.status = 'running';
+    this.resetScriptedPhases();
     this.spawnAccumulator = 0;
     this.resetRequestCounters();
     this.requests = [];
@@ -1018,6 +1045,9 @@ export class SimulationEngine {
     this.processRecoveries();
     const inDrain =
       this.draining || this.time >= this.scenario.duration;
+
+    if (!inDrain) this.fireScriptedPhases();
+    this.updateScriptedPhaseFlags();
 
     if (!inDrain) {
       this.updateTrafficPattern(dt);
@@ -1081,16 +1111,16 @@ export class SimulationEngine {
       this.spikeTimer -= dt;
       if (this.spikeTimer <= 0) {
         this.spikeActive = false;
-        this.currentRps = this.scenario.baseRps;
+        this.currentRps = this.baseRpsNow();
       }
     } else if (this.rng.chance(this.scenario.spikeChance * dt)) {
       this.spikeActive = true;
       this.spikeTimer = 2.5 + this.rng.next() * 3;
-      this.currentRps = this.scenario.baseRps * this.scenario.spikeMultiplier;
+      this.currentRps = this.baseRpsNow() * this.scenario.spikeMultiplier;
       this.applyPredictiveScaling();
     } else {
       const jitter = 1 + (this.rng.next() - 0.5) * 0.15;
-      this.currentRps = this.scenario.baseRps * jitter;
+      this.currentRps = this.baseRpsNow() * jitter;
     }
 
     this.peakRps = Math.max(this.peakRps, this.currentRps);
@@ -1320,7 +1350,7 @@ export class SimulationEngine {
 
   /** Weighted pick over the scenario's request kinds. */
   private pickRequestKind(): RequestKind {
-    const entries = Object.entries(this.scenario.requestTypes ?? {}).filter(([, w]) => w > 0);
+    const entries = Object.entries(this.requestTypesNow()).filter(([, w]) => w > 0);
     if (entries.length === 0) {
       return this.rng.chance(this.scenario.readRatio) ? 'read' : 'create';
     }
@@ -1454,6 +1484,13 @@ export class SimulationEngine {
         continue;
       }
 
+      if (this.isActiveScriptedTarget(component.id)) {
+        // Down by script, not by design: the drill's own target does not
+        // "fail"; what matters is whether everything else survives it.
+        this.overloadTimers.set(component.id, 0);
+        continue;
+      }
+
       if (state.queue >= queueLimit) {
         const timer = (this.overloadTimers.get(component.id) ?? 0) + dt;
         this.overloadTimers.set(component.id, timer);
@@ -1461,6 +1498,7 @@ export class SimulationEngine {
           state.failed = true;
           this.status = 'lost';
           this.message = `${component.label} overloaded and failed!`;
+          this.recordCollateralFailure(component);
         }
       } else {
         this.overloadTimers.set(component.id, 0);
@@ -1944,7 +1982,91 @@ export class SimulationEngine {
       violationsByStep: Object.fromEntries(this.violationsByStep),
       dropReasons: Object.fromEntries(this.dropReasons),
       brokenServices,
+      scriptedPhases: this.scriptedPhases.map((phase) => ({
+        id: phase.id,
+        label: phase.label,
+        type: phase.type,
+        atSeconds: phase.atSeconds,
+        durationSeconds: phase.durationSeconds,
+        componentLabel: phase.componentLabel,
+        skipped: phase.skipped,
+        failedDuring: [...(this.scriptedFailedDuring.get(phase.id) ?? [])],
+      })),
     };
+  }
+
+  // ── Scripted failure phases and traffic phases (product-directions §3.3–§3.4) ──
+
+  private resetScriptedPhases(): void {
+    this.scriptedTargets.clear();
+    this.scriptedFailedDuring.clear();
+    this.scriptedPhases = (this.scenario.failureScenarios ?? []).map((spec) => ({
+      id: spec.id,
+      label: spec.label,
+      type: spec.type,
+      atSeconds: spec.atSeconds,
+      durationSeconds: spec.durationSeconds,
+      componentLabel: null,
+      fired: false,
+      skipped: false,
+      until: null,
+      active: false,
+    }));
+  }
+
+  /**
+   * Fire every phase whose time has come. The target is the first component
+   * in board order that matches the selector — the same rule flows use. No
+   * match means the phase is skipped and the report says so.
+   */
+  private fireScriptedPhases(): void {
+    for (const phase of this.scriptedPhases) {
+      if (phase.fired || this.time < phase.atSeconds) continue;
+      phase.fired = true;
+      const spec = (this.scenario.failureScenarios ?? []).find((f) => f.id === phase.id);
+      const target = spec
+        ? this.components.find((component) => selectorMatches(spec.target, component))
+        : undefined;
+      if (!target) {
+        phase.skipped = true;
+        continue;
+      }
+      phase.componentLabel = target.label;
+      phase.until = this.time + phase.durationSeconds;
+      phase.active = true;
+      this.scriptedTargets.set(phase.id, target.id);
+      this.scriptedFailedDuring.set(phase.id, new Set());
+      this.injectFailure(target.id, phase.type, phase.durationSeconds);
+      this.message = `⚡ ${phase.label}: ${target.label} ${describeFailure(phase.type)}`;
+    }
+  }
+
+  private updateScriptedPhaseFlags(): void {
+    for (const phase of this.scriptedPhases) {
+      phase.active = phase.fired && !phase.skipped && phase.until !== null && this.time < phase.until;
+    }
+  }
+
+  private isActiveScriptedTarget(componentId: string): boolean {
+    for (const phase of this.scriptedPhases) {
+      if (phase.active && this.scriptedTargets.get(phase.id) === componentId) return true;
+    }
+    return false;
+  }
+
+  private recordCollateralFailure(component: PlacedComponent): void {
+    for (const phase of this.scriptedPhases) {
+      if (!phase.active || this.scriptedTargets.get(phase.id) === component.id) continue;
+      this.scriptedFailedDuring.get(phase.id)?.add(component.label);
+    }
+  }
+
+  private baseRpsNow(): number {
+    return baseRpsAt(this.scenario.baseRps, this.trafficPhases, this.time);
+  }
+
+  private requestTypesNow(): Record<string, number> {
+    return requestTypesAt(this.scenario.requestTypes ?? {}, this.trafficPhases, this.time);
   }
 
   getReport(): SimulationReport {
@@ -2006,6 +2128,7 @@ export class SimulationEngine {
       spikeActive: this.spikeActive,
       message: this.message,
       seed: this.seed,
+      scriptedFailures: this.scriptedPhases.map((phase) => ({ ...phase })),
     };
   }
 

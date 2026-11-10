@@ -47,7 +47,9 @@ public class RoomInterviewTests : IClassFixture<ApiFactory>, IAsyncLifetime
           "requestTypes": { "read": 0.5, "create": 0.5 },
           "tags": [{ "id": "write-service", "label": "Write service" }],
           "flows": [{ "kind": "read", "steps": [{ "id": "s", "require": { "capability": "compute" } }] }],
-          "objectives": { "maxViolationRate": 0 }
+          "objectives": { "maxViolationRate": 0 },
+          "failureScenarios": [{ "id": "db", "label": "Database outage", "atSeconds": 3, "target": { "capability": "durable-store" }, "type": "shutdown", "durationSeconds": 10 }],
+          "trafficPhases": [{ "atSeconds": 0, "baseRps": 40 }, { "atSeconds": 30, "baseRps": 600 }]
         }
         """);
 
@@ -120,9 +122,13 @@ public class RoomInterviewTests : IClassFixture<ApiFactory>, IAsyncLifetime
         Assert.False(challenge.Value.TryGetProperty("videoUrl", out _));
         Assert.False(scenario.TryGetProperty("scoringWeights", out _));
 
-        // The override keeps request mix and tags, loses flows and objectives.
+        // The override keeps request mix, tags and the public depth data
+        // (scripted phases, traffic timeline — product-directions §3.3),
+        // loses flows and objectives.
         Assert.True(Has(joined.ScenarioOverride, "requestTypes"));
         Assert.True(Has(joined.ScenarioOverride, "tags"));
+        Assert.True(Has(joined.ScenarioOverride, "failureScenarios"));
+        Assert.True(Has(joined.ScenarioOverride, "trafficPhases"));
         Assert.False(Has(joined.ScenarioOverride, "flows"));
         Assert.False(Has(joined.ScenarioOverride, "objectives"));
 

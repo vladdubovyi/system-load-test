@@ -557,6 +557,7 @@ export function buildSimulationReport(input: ReportInput): SimulationReport {
     successRate,
     objectives,
     objectivesMet,
+    scriptedPhases: input.counts.scriptedPhases,
     flowStats,
     peakRps: Math.round(input.peakRps),
     spikeEvents: input.spikeEvents,

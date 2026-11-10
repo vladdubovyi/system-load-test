@@ -1,4 +1,4 @@
-import type { Challenge, ScoringPriorities, TrafficProfile } from './scenario-types';
+import type { Challenge, FailureScenario, ScoringPriorities, TrafficPhase, TrafficProfile } from './scenario-types';
 import type { FlowSpec, Objectives, ScenarioDocument, TagDefinition } from './flow-types';
 import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import { validateFlows } from './flows';
@@ -28,6 +28,10 @@ export interface RuntimeScenario {
   scoringPriorities?: ScoringPriorities;
   /** Roles the user can assign to placed components; flow steps may select on them. */
   tags?: TagDefinition[];
+  /** Scripted failure phases (product-directions.md §3.3). */
+  failureScenarios?: FailureScenario[];
+  /** Multi-phase traffic timeline (product-directions.md §3.4). */
+  trafficPhases?: TrafficPhase[];
 }
 
 const DEFAULT_SCENARIO: RuntimeScenario = {
@@ -105,12 +109,15 @@ export function getActiveScenarioDocument(): ScenarioDocument {
   // Deliberately reads the scenario *without* the run flow bundle: the
   // editor and the PDF must never show flows a projection withheld (§6.2).
   const scenario = activeScenario;
-  return {
+  const doc: ScenarioDocument = {
     requestTypes: { ...scenario.requestTypes },
     tags: scenario.tags ? structuredClone(scenario.tags) : [],
     flows: scenario.flows ? structuredClone(scenario.flows) : [],
     objectives: scenario.objectives ? structuredClone(scenario.objectives) : {},
   };
+  if (scenario.failureScenarios) doc.failureScenarios = structuredClone(scenario.failureScenarios);
+  if (scenario.trafficPhases) doc.trafficPhases = structuredClone(scenario.trafficPhases);
+  return doc;
 }
 
 /**
@@ -147,6 +154,8 @@ function applyScenarioOverride(base: RuntimeScenario, doc: ScenarioDocument): Ru
     flows: doc.flows ?? base.flows,
     objectives: doc.objectives ?? base.objectives,
     tags: doc.tags ?? base.tags,
+    failureScenarios: doc.failureScenarios ?? base.failureScenarios,
+    trafficPhases: doc.trafficPhases ?? base.trafficPhases,
   };
 }
 
@@ -179,6 +188,7 @@ function applyTrafficOverride(base: RuntimeScenario, traffic: TrafficProfile): R
     spikeChance: traffic.spikeChance ?? base.spikeChance,
     readRatio,
     requestTypes: hasRequestTypes ? { ...traffic.requestTypes } : base.requestTypes,
+    trafficPhases: traffic.phases ?? base.trafficPhases,
   };
 }
 
@@ -217,6 +227,8 @@ function buildScenarioFromChallenge(challenge: Challenge): RuntimeScenario {
     objectives: challenge.scenario.objectives ?? getPresetObjectives(challenge.slug),
     scoringPriorities: challenge.scenario.scoringPriorities,
     tags: challenge.scenario.tags,
+    failureScenarios: challenge.scenario.failureScenarios,
+    trafficPhases: traffic.phases,
     celebrityShare:
       typeof characteristics.celebrityShare === 'number'
         ? characteristics.celebrityShare

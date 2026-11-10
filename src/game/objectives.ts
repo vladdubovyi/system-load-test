@@ -23,6 +23,21 @@ export interface RunCounts {
   dropReasons: Record<string, number>;
   /** Labels of components that failed under load. */
   brokenServices: string[];
+  /** Scripted failure phases and what happened during each (product-directions §3.3). */
+  scriptedPhases: ScriptedPhaseOutcome[];
+}
+
+export interface ScriptedPhaseOutcome {
+  id: string;
+  label: string;
+  type: string;
+  atSeconds: number;
+  durationSeconds: number;
+  /** Label of the component the phase hit; null when no component matched. */
+  componentLabel: string | null;
+  skipped: boolean;
+  /** Components other than the target that failed while the phase was active. */
+  failedDuring: string[];
 }
 
 export const EMPTY_COUNTS: RunCounts = {
@@ -35,6 +50,7 @@ export const EMPTY_COUNTS: RunCounts = {
   violationsByStep: {},
   dropReasons: {},
   brokenServices: [],
+  scriptedPhases: [],
 };
 
 function pct(value: number): string {
@@ -140,6 +156,25 @@ export function evaluateObjectives(
         violationsMet || !topViolation
           ? undefined
           : `Most violations: ${topViolation.kind} requests at flow step "${topViolation.detail}" (${topViolation.count.toLocaleString()}).`,
+    });
+  }
+
+  if (counts.scriptedPhases.length > 0 && objectives?.surviveScriptedFailures !== false) {
+    const fired = counts.scriptedPhases.filter((phase) => !phase.skipped);
+    const failed = [...new Set(fired.flatMap((phase) => phase.failedDuring))];
+    const worst = fired.find((phase) => phase.failedDuring.length > 0);
+    results.push({
+      id: 'scripted-failures',
+      label: 'Survive scripted failures',
+      target: `${fired.length} drill${fired.length === 1 ? '' : 's'}, nothing else fails`,
+      actual:
+        fired.length === 0
+          ? 'no drill found a target'
+          : failed.length === 0
+            ? `${fired.length} drill${fired.length === 1 ? '' : 's'} survived`
+            : `${failed.length} failed during a drill`,
+      met: failed.length === 0,
+      cause: worst ? `${worst.failedDuring.join(', ')} failed during "${worst.label}".` : undefined,
     });
   }
 

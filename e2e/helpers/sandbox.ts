@@ -356,6 +356,7 @@ export interface ReportSummary {
   brokenServices: string[];
   /** The traffic seed this run was generated from (§8). */
   seed: number;
+  peakRps: number;
 }
 
 export async function readReport(overlay: Locator): Promise<ReportSummary> {
@@ -369,10 +370,16 @@ export async function readReport(overlay: Locator): Promise<ReportSummary> {
       .locator('.report-stat-value')
       .textContent()) ?? '0').replace('%', '')
   );
+  const peakRps = Number(
+    ((await overlay
+      .locator('.report-stat-card', { hasText: 'Peak RPS' })
+      .locator('.report-stat-value')
+      .textContent()) ?? '0').replace(/[^0-9.]/g, '')
+  );
   const componentRows = await overlay.locator('.report-table tbody tr').count();
   const brokenSection = overlay.locator('.report-section', { hasText: 'Broken services' });
   const brokenServices = (await brokenSection.locator('.report-tags li').allTextContents()).map((t) => t.trim());
-  return { title, score, grade, successRate, componentRows, brokenServices, seed };
+  return { title, score, grade, successRate, componentRows, brokenServices, seed, peakRps };
 }
 
 export interface ObjectiveRow {

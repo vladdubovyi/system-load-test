@@ -85,6 +85,28 @@ export function renderTrafficConfigPanel(traffic: TrafficProfile): string {
         ` : ''}
       </div>
       
+      ${
+        traffic.phases && traffic.phases.length > 0
+          ? `
+        <div class="config-field">
+          <label>Traffic phases <span class="config-field-hint">(from the scenario; edit in the Scenario editor)</span></label>
+          <ol class="traffic-phases" id="traffic-phases">
+            ${[...traffic.phases]
+              .sort((a, b) => a.atSeconds - b.atSeconds)
+              .map(
+                (phase) => `
+              <li class="traffic-phase">
+                <span class="traffic-phase-at">t = ${phase.atSeconds}s</span>
+                ${phase.baseRps !== undefined ? `<span class="traffic-phase-rps">${phase.baseRps} RPS</span>` : ''}
+                ${phase.requestTypes ? `<span class="traffic-phase-mix">${Object.entries(phase.requestTypes).map(([k, v]) => `${k} ${Math.round(v * 100)}%`).join(' · ')}</span>` : ''}
+              </li>`
+              )
+              .join('')}
+          </ol>
+        </div>
+      `
+          : ''
+      }
       <div class="config-panel-actions">
         <button class="config-btn config-btn-secondary" id="traffic-reset">Reset</button>
         <button class="config-btn config-btn-primary" id="traffic-apply">Apply</button>
