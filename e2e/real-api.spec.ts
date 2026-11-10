@@ -51,7 +51,7 @@ test.describe('Live backend', () => {
     }
 
     await page.goto('/challenges');
-    await expect(page.locator('.challenge-list-item')).toHaveCount(4);
+    await expect(page.locator('.challenge-list-item')).toHaveCount(7);
   });
 
   test('component capabilities come from the API and keep Redis out of the write path', async ({ page, request }) => {

@@ -296,7 +296,143 @@ export const RATE_LIMITER_OBJECTIVES: Objectives = {
   noComponentFailures: true,
 };
 
+/**
+ * Chat messaging (product-directions.md §3.2): sends land in a durable
+ * message store, optionally buffered through a queue and a fan-out worker;
+ * history fetches are read-heavy and cacheable.
+ */
+export const CHAT_MESSAGING_FLOWS: FlowSpec[] = [
+  {
+    kind: 'send',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Chat API' },
+      { id: 'enqueue', require: { capability: 'queue' }, optional: true, label: 'Fan-out queue' },
+      { id: 'worker', require: { capability: 'compute' }, optional: true, label: 'Fan-out worker' },
+      { id: 'store', require: { capability: 'durable-store' }, terminal: true, label: 'Persist message' },
+    ],
+  },
+  {
+    kind: 'fetch',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Chat API' },
+      {
+        id: 'cache',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Conversation cache',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'db-read', require: { capability: 'durable-store' }, terminal: true, label: 'History lookup (cache miss)' },
+          ],
+        },
+      },
+      { id: 'db-direct', require: { capability: 'durable-store' }, terminal: true, label: 'History lookup' },
+    ],
+  },
+];
+
+/**
+ * Ticket booking (§3.2): every reservation must reach the relational database
+ * — a reserve that lands anywhere else is a violation. Browsing may be cached.
+ */
+export const TICKET_BOOKING_FLOWS: FlowSpec[] = [
+  {
+    kind: 'browse',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Booking API' },
+      {
+        id: 'cache',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Seat map cache',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'db-read', require: { componentType: 'database' }, terminal: true, label: 'Seat map lookup (cache miss)' },
+          ],
+        },
+      },
+      { id: 'db-direct', require: { componentType: 'database' }, terminal: true, label: 'Seat map lookup' },
+    ],
+  },
+  {
+    kind: 'reserve',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Booking API' },
+      { id: 'lock', require: { componentType: 'database' }, terminal: true, label: 'Reserve seat (row lock)' },
+    ],
+  },
+];
+
+/**
+ * Search autocomplete (§3.2): suggestions come from the search index, ideally
+ * through a hot-prefix cache; index updates travel an async pipeline into
+ * the same index.
+ */
+export const SEARCH_AUTOCOMPLETE_FLOWS: FlowSpec[] = [
+  {
+    kind: 'suggest',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Suggest API' },
+      {
+        id: 'cache',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Prefix cache',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'search-miss', require: { componentType: 'search-service' }, terminal: true, label: 'Index query (cache miss)' },
+          ],
+        },
+      },
+      { id: 'search-direct', require: { componentType: 'search-service' }, terminal: true, label: 'Index query' },
+    ],
+  },
+  {
+    kind: 'index',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Suggest API' },
+      { id: 'enqueue', require: { capability: 'queue' }, optional: true, label: 'Index queue' },
+      { id: 'worker', require: { capability: 'compute' }, optional: true, label: 'Indexing worker' },
+      { id: 'write', require: { componentType: 'search-service' }, terminal: true, label: 'Index document' },
+    ],
+  },
+];
+
+/** Floors for the D2 scenarios: calibrated 2026-11-10 (see product-directions.md §3.2a). */
+export const CHAT_MESSAGING_OBJECTIVES: Objectives = {
+  minCompletionRate: { send: 0.95, fetch: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
+export const TICKET_BOOKING_OBJECTIVES: Objectives = {
+  minCompletionRate: { browse: 0.95, reserve: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
+export const SEARCH_AUTOCOMPLETE_OBJECTIVES: Objectives = {
+  minCompletionRate: { suggest: 0.95, index: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
 const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
+  'chat-messaging': CHAT_MESSAGING_FLOWS,
+  'ticket-booking': TICKET_BOOKING_FLOWS,
+  'search-autocomplete': SEARCH_AUTOCOMPLETE_FLOWS,
   'url-shortener': URL_SHORTENER_FLOWS,
   'instagram-feed': INSTAGRAM_FEED_FLOWS,
   dropbox: DROPBOX_FLOWS,
@@ -304,6 +440,9 @@ const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
 };
 
 const OBJECTIVES_BY_SLUG: Record<string, Objectives> = {
+  'chat-messaging': CHAT_MESSAGING_OBJECTIVES,
+  'ticket-booking': TICKET_BOOKING_OBJECTIVES,
+  'search-autocomplete': SEARCH_AUTOCOMPLETE_OBJECTIVES,
   'url-shortener': URL_SHORTENER_OBJECTIVES,
   'instagram-feed': INSTAGRAM_FEED_OBJECTIVES,
   dropbox: DROPBOX_OBJECTIVES,

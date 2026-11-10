@@ -138,6 +138,53 @@ public static class FlowDefinitions
                         Step("db-read", Cap("durable-store"), "Limit lookup (cache miss)", terminal: true))),
                 Step("db-direct", Cap("durable-store"), "Limit lookup", terminal: true)),
         },
+        // D2 scenarios (docs/specs/product-directions.md §3.2)
+        "chat-messaging" => new object[]
+        {
+            Flow("send",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Chat API"),
+                Step("enqueue", Cap("queue"), "Fan-out queue", optional: true),
+                Step("worker", Cap("compute"), "Fan-out worker", optional: true),
+                Step("store", Cap("durable-store"), "Persist message", terminal: true)),
+            Flow("fetch",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Chat API"),
+                Step("cache", Cap("cache"), "Conversation cache", optional: true,
+                    branch: CacheBranch(
+                        Step("db-read", Cap("durable-store"), "History lookup (cache miss)", terminal: true))),
+                Step("db-direct", Cap("durable-store"), "History lookup", terminal: true)),
+        },
+        "ticket-booking" => new object[]
+        {
+            Flow("browse",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Booking API"),
+                Step("cache", Cap("cache"), "Seat map cache", optional: true,
+                    branch: CacheBranch(
+                        Step("db-read", Type("database"), "Seat map lookup (cache miss)", terminal: true))),
+                Step("db-direct", Type("database"), "Seat map lookup", terminal: true)),
+            Flow("reserve",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Booking API"),
+                Step("lock", Type("database"), "Reserve seat (row lock)", terminal: true)),
+        },
+        "search-autocomplete" => new object[]
+        {
+            Flow("suggest",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Suggest API"),
+                Step("cache", Cap("cache"), "Prefix cache", optional: true,
+                    branch: CacheBranch(
+                        Step("search-miss", Type("search-service"), "Index query (cache miss)", terminal: true))),
+                Step("search-direct", Type("search-service"), "Index query", terminal: true)),
+            Flow("index",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Suggest API"),
+                Step("enqueue", Cap("queue"), "Index queue", optional: true),
+                Step("worker", Cap("compute"), "Indexing worker", optional: true),
+                Step("write", Type("search-service"), "Index document", terminal: true)),
+        },
         _ => Array.Empty<object>(),
     };
 
@@ -154,6 +201,9 @@ public static class FlowDefinitions
         "instagram-feed" => Objectives(new() { ["feedLoad"] = 0.95, ["post"] = 0.95, ["like"] = 0.95 }),
         "dropbox" => Objectives(new() { ["upload"] = 0.95, ["download"] = 0.95, ["metadata"] = 0.95 }),
         "rate-limiter" => Objectives(new() { ["check"] = 0.95 }),
+        "chat-messaging" => Objectives(new() { ["send"] = 0.95, ["fetch"] = 0.95 }),
+        "ticket-booking" => Objectives(new() { ["browse"] = 0.95, ["reserve"] = 0.95 }),
+        "search-autocomplete" => Objectives(new() { ["suggest"] = 0.95, ["index"] = 0.95 }),
         _ => null,
     };
 

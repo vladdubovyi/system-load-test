@@ -279,6 +279,26 @@ The six, chosen for distinct lessons with the existing component set:
 Six scenarios reuse the 23 existing component types; **no new component
 types in D2** (that belongs with D5 if ever).
 
+### 3.2a As built (phase 2, 2026-11-10)
+
+Three scenarios shipped complete per the §3.2 checklist — seeder entry
+(`Create*Challenge`, overview copy, no video), `FlowDefinitions.cs` flows
+and floors, e2e fixture mirror with every characteristic explicit, TS flow
+presets, starter and reference blueprints, `STARTER_PRESETS` metadata,
+catalog and floor test rows, and the calibration table below (4 seeds;
+starter must lose without failures or violations, reference must win):
+
+| Slug | Lesson as built | Starter completes | Reference completes | Floors |
+|---|---|---|---|---|
+| `chat-messaging` | sends → store, optionally via queue → fan-out worker; fetch cached. Reference scales API and worker **and shards the message store across two NoSQL nodes** — one node cannot absorb 3× send bursts, and NoSQL has no scaling chips. | 0.54–0.88 | 1.00 | 0.95 / 0.95 |
+| `ticket-booking` | reserve must hit `database` (no cache on the write path); browse cached. **Uses §3.4 traffic phases**: 150 → ramp to 550 at t = 25 s → settle to 250. Spike 1.5× (2× lost the reference on one seed). Reference: API scaled, SQL replicated + sharded. | 0.56–0.66 | 1.00 | 0.95 / 0.95 |
+| `search-autocomplete` | suggest via prefix cache → `search-service`; index via queue → worker → index. `search-service` added to the mocked catalog (it was seeder-only). Reference scales API and worker. | 0.28–0.38 | ≥ 0.98 | 0.95 / 0.95 |
+
+Counts moved from 4 to 7 in `CatalogTests`, `landing.spec.ts` and
+`real-api.spec.ts`; the per-scenario e2e loop in `sandbox-scenarios.spec.ts`
+picks the new entries up automatically. The three remaining scenarios
+(`ride-dispatch`, `notification-fanout`, `payment-webhook`) are phase 3.
+
 ### 3.3 Scripted failure phases
 
 `scenario-types.ts` already declares `failureScenarios?: FailureScenario[]`

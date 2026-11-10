@@ -25,7 +25,8 @@ BreakIT is built around two commitments that shape every feature (see [`docs/spe
 
 ### Solo sandbox
 
-- **Four interview-classic scenarios**, each with requirements, traffic profile, required request flows, objectives and a calibrated reference solution: URL shortener, file storage (Dropbox), social feed (Instagram), rate limiter.
+- **Seven interview-classic scenarios**, each with requirements, traffic profile, required request flows, objectives and a calibrated reference solution: URL shortener, file storage (Dropbox), social feed (Instagram), rate limiter, chat messaging, ticket booking (with a multi-phase on-sale rush), search autocomplete.
+- **Scenario depth**: scripted failure phases ("the database goes down at t = 20 s for 15 s") and multi-phase traffic timelines are scenario data — deterministic, room-safe, and authorable in the scenario editor.
 - **23 component types** across networking, compute, storage, messaging and cross-cutting services, each with semantic *capabilities* (ingress, compute, cache, durable store, queue, traffic filter…) that flows select on.
 - **Flow correctness, not just survival.** Each request kind has a declared path (e.g. *ingress → compute → durable store*, with an optional cache branch). A request that cannot take a required step is a *violation*, distinct from a drop. Objectives set completion floors per kind and a violation ceiling; a design that stays healthy but routes writes into a cache fails outright.
 - **Design-time lint** at Play tells you which required steps your board cannot satisfy before the run proves it.

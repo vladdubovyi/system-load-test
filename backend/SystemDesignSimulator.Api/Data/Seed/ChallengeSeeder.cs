@@ -33,7 +33,10 @@ public static class ChallengeSeeder
             CreateUrlShortenerChallenge(),
             CreateDropboxChallenge(),
             CreateInstagramChallenge(),
-            CreateRateLimiterChallenge()
+            CreateRateLimiterChallenge(),
+            CreateChatMessagingChallenge(),
+            CreateTicketBookingChallenge(),
+            CreateSearchAutocompleteChallenge()
         };
 
         var challenges = new List<Challenge>(entries.Count);
@@ -116,6 +119,66 @@ public static class ChallengeSeeder
                 Simulate spike traffic and see whether your feed path stays under 200ms.
                 """,
             VideoUrl: "https://www.youtube.com/watch?v=KmAyPUv1YTI"
+        ),
+        ["chat-messaging"] = (
+            Overview: """
+                Messaging backends are the canonical fan-out problem: one send becomes many deliveries, history reads dominate, and ordering within a conversation matters.
+
+                **What interviewers look for**
+                - Durable message storage before acknowledging a send
+                - Buffering fan-out behind a queue so bursts do not stall the API
+                - Caching hot conversations for the read-heavy history path
+                - Sharding the message store by conversation
+
+                **Key concepts to practice**
+                - Write-ahead durability vs. delivery latency
+                - Queue-backed workers as a pressure valve
+                - Hot-key mitigation for group chats
+                - NoSQL partitioning strategies
+
+                Burst traffic is the test: group chats spike, and one store node will not keep up.
+                """,
+            VideoUrl: ""
+        ),
+        ["ticket-booking"] = (
+            Overview: """
+                Ticketing systems combine a read-heavy browse path with a write path that must never oversell — every reservation competes for the same hot rows while traffic ramps in minutes when a sale opens.
+
+                **What interviewers look for**
+                - Reservations that always reach the relational database (no cache on the write path)
+                - Handling the on-sale ramp without falling over
+                - Caching seat maps aggressively while keeping them honest
+                - Replication and sharding to survive the rush
+
+                **Key concepts to practice**
+                - Row-level contention and idempotent writes
+                - Multi-phase traffic: calm → rush → settle
+                - Read replicas for browse, sharding for reserve
+                - Graceful degradation under a 4× ramp
+
+                Watch the ramp: the design that survives minute one may not survive minute two.
+                """,
+            VideoUrl: ""
+        ),
+        ["search-autocomplete"] = (
+            Overview: """
+                Typeahead turns every keystroke into a query. It is the most latency-sensitive read path most products have, and it comes with an asynchronous indexing pipeline on the side.
+
+                **What interviewers look for**
+                - A hot-prefix cache in front of the search index
+                - Scaling the suggest tier for bursty keystroke traffic
+                - Index updates that arrive through a queue and a worker
+                - Keeping the index healthy while it serves queries
+
+                **Key concepts to practice**
+                - Cache hit ratio as the primary lever for latency
+                - Separating the query path from the indexing path
+                - Backpressure for indexing work
+                - Capacity planning for 2–3× bursts
+
+                Keystrokes are unforgiving: a slow suggest is a wrong suggest.
+                """,
+            VideoUrl: ""
         ),
         ["rate-limiter"] = (
             Overview: """
@@ -682,6 +745,164 @@ public static class ChallengeSeeder
         return (challenge, scenario, components);
     }
     
+    private static (Challenge, Scenario, List<string>) CreateChatMessagingChallenge()
+    {
+        var challengeId = StableId("challenge:chat-messaging");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Chat Messaging",
+            Slug = "chat-messaging",
+            Description = "Design a real-time messaging backend with fan-out and history",
+            Difficulty = "medium",
+            OverviewContent = GetChallengeContent()["chat-messaging"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:chat-messaging"),
+            ChallengeId = challengeId,
+            DurationSeconds = 45,
+            BaseRps = 220,
+            SpikeMultiplier = 3.0m,
+            SpikeChance = 0.08m,
+            ReadRatio = 0.6m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Sends must land in a durable message store",
+                    "Fan-out to recipients may be asynchronous — buffer it",
+                    "Conversation history reads dominate; cache hot conversations",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { send = 0.4, fetch = 0.6 },
+                characteristics = new { celebrityShare = 0.3, hotDataRatio = 0.9 },
+                flows = FlowDefinitions.Flows("chat-messaging"),
+                objectives = FlowDefinitions.ObjectivesFor("chat-messaging")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { availability = 35, latency = 35, scalability = 20, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "backend-service", "microservice", "worker-service",
+            "redis", "nosql-database", "message-queue", "kafka"
+        };
+
+        return (challenge, scenario, components);
+    }
+
+    private static (Challenge, Scenario, List<string>) CreateTicketBookingChallenge()
+    {
+        var challengeId = StableId("challenge:ticket-booking");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Ticket Booking",
+            Slug = "ticket-booking",
+            Description = "Design a ticketing system that survives the on-sale rush without overselling",
+            Difficulty = "hard",
+            OverviewContent = GetChallengeContent()["ticket-booking"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:ticket-booking"),
+            ChallengeId = challengeId,
+            DurationSeconds = 50,
+            BaseRps = 150,
+            SpikeMultiplier = 1.5m,
+            SpikeChance = 0.04m,
+            ReadRatio = 0.8m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Every reservation must hit the relational database — no overselling",
+                    "Browsing is read-heavy and cacheable",
+                    "Traffic ramps to nearly 4× when the sale opens, then settles",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { browse = 0.8, reserve = 0.2 },
+                characteristics = new { celebrityShare = 0.5, hotDataRatio = 0.85 },
+                // Multi-phase traffic (product-directions.md §3.4): calm → rush → settle.
+                trafficPhases = new object[]
+                {
+                    new { atSeconds = 0, baseRps = 150 },
+                    new { atSeconds = 15, baseRps = 150 },
+                    new { atSeconds = 25, baseRps = 550 },
+                    new { atSeconds = 40, baseRps = 250 },
+                },
+                flows = FlowDefinitions.Flows("ticket-booking"),
+                objectives = FlowDefinitions.ObjectivesFor("ticket-booking")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { durability = 40, availability = 30, latency = 20, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "backend-service", "microservice",
+            "redis", "database", "message-queue", "worker-service"
+        };
+
+        return (challenge, scenario, components);
+    }
+
+    private static (Challenge, Scenario, List<string>) CreateSearchAutocompleteChallenge()
+    {
+        var challengeId = StableId("challenge:search-autocomplete");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Search Autocomplete",
+            Slug = "search-autocomplete",
+            Description = "Design a typeahead service: every keystroke is a query",
+            Difficulty = "medium",
+            OverviewContent = GetChallengeContent()["search-autocomplete"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:search-autocomplete"),
+            ChallengeId = challengeId,
+            DurationSeconds = 45,
+            BaseRps = 380,
+            SpikeMultiplier = 2.5m,
+            SpikeChance = 0.1m,
+            ReadRatio = 0.9m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Suggestions come from the search index, ideally via a hot-prefix cache",
+                    "Index updates arrive asynchronously and must reach the search index",
+                    "Keystroke traffic is bursty: expect 2.5× spikes",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { suggest = 0.9, index = 0.1 },
+                characteristics = new { celebrityShare = 0.2, hotDataRatio = 0.95 },
+                flows = FlowDefinitions.Flows("search-autocomplete"),
+                objectives = FlowDefinitions.ObjectivesFor("search-autocomplete")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { latency = 45, availability = 30, scalability = 15, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "backend-service", "microservice", "worker-service",
+            "redis", "search-service", "message-queue", "kafka"
+        };
+
+        return (challenge, scenario, components);
+    }
+
     private static (Challenge, Scenario, List<string>) CreateRateLimiterChallenge()
     {
         var challengeId = StableId("challenge:rate-limiter");

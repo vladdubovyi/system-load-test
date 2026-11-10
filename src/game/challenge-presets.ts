@@ -113,6 +113,75 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: 'rl-redis:out', to: 'rl-db:in' },
     ],
   },
+  'chat-messaging': {
+    id: 'chat-messaging-starter',
+    name: 'Chat messaging starter',
+    description: 'Chat API with a conversation cache, a message store, and an async fan-out worker.',
+    components: [
+      component('cm-lb', 'load-balancer', 520, 280),
+      component('cm-api', 'backend-service', 760, 280),
+      component('cm-redis', 'redis', 1000, 160),
+      component('cm-store', 'nosql-database', 1000, 400),
+      component('cm-queue', 'message-queue', 760, 480),
+      component('cm-worker', 'worker-service', 1000, 540),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'cm-lb:in' },
+      { from: 'cm-lb:out', to: 'cm-api:in' },
+      { from: 'cm-api:out', to: 'cm-redis:in' },
+      { from: 'cm-api:out', to: 'cm-store:in' },
+      // Cache misses chain onward from Redis to the message store.
+      { from: 'cm-redis:out', to: 'cm-store:in' },
+      { from: 'cm-api:out', to: 'cm-queue:in' },
+      { from: 'cm-queue:out', to: 'cm-worker:in' },
+      // The fan-out worker persists what it processed.
+      { from: 'cm-worker:out', to: 'cm-store:in' },
+    ],
+  },
+  'ticket-booking': {
+    id: 'ticket-booking-starter',
+    name: 'Ticket booking starter',
+    description: 'Booking API with a seat-map cache in front of the relational database.',
+    components: [
+      component('tb-lb', 'load-balancer', 520, 280),
+      component('tb-api', 'backend-service', 760, 280),
+      component('tb-redis', 'redis', 1000, 180),
+      component('tb-db', 'database', 1000, 380),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'tb-lb:in' },
+      { from: 'tb-lb:out', to: 'tb-api:in' },
+      { from: 'tb-api:out', to: 'tb-redis:in' },
+      { from: 'tb-api:out', to: 'tb-db:in' },
+      // Seat-map cache misses chain onward from Redis to the database.
+      { from: 'tb-redis:out', to: 'tb-db:in' },
+    ],
+  },
+  'search-autocomplete': {
+    id: 'search-autocomplete-starter',
+    name: 'Search autocomplete starter',
+    description: 'Suggest API with a prefix cache over the search index, and an async indexing pipeline.',
+    components: [
+      component('sa-lb', 'load-balancer', 520, 280),
+      component('sa-api', 'backend-service', 760, 280),
+      component('sa-redis', 'redis', 1000, 160),
+      component('sa-search', 'search-service', 1000, 400),
+      component('sa-queue', 'message-queue', 760, 480),
+      component('sa-worker', 'worker-service', 1000, 540),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'sa-lb:in' },
+      { from: 'sa-lb:out', to: 'sa-api:in' },
+      { from: 'sa-api:out', to: 'sa-redis:in' },
+      { from: 'sa-api:out', to: 'sa-search:in' },
+      // Prefix-cache misses chain onward from Redis to the index.
+      { from: 'sa-redis:out', to: 'sa-search:in' },
+      { from: 'sa-api:out', to: 'sa-queue:in' },
+      { from: 'sa-queue:out', to: 'sa-worker:in' },
+      // The indexing worker writes into the search index.
+      { from: 'sa-worker:out', to: 'sa-search:in' },
+    ],
+  },
 };
 
 /**
@@ -189,6 +258,29 @@ const CHALLENGE_REFERENCES: Record<string, ReferenceBlueprint> = {
         { from: 'rl-redis-2:out', to: 'rl-db:in' },
       ],
     }
+  ),
+  'chat-messaging': reference(
+    'chat-messaging',
+    'Starter topology with an auto-scaled chat API and fan-out worker, and the message store sharded across two NoSQL nodes — spikes of sends would overrun one.',
+    { 'cm-api': COMPUTE, 'cm-worker': COMPUTE },
+    {
+      components: [component('cm-store-2', 'nosql-database', 1240, 400)],
+      connections: [
+        { from: 'cm-api:out', to: 'cm-store-2:in' },
+        { from: 'cm-redis:out', to: 'cm-store-2:in' },
+        { from: 'cm-worker:out', to: 'cm-store-2:in' },
+      ],
+    }
+  ),
+  'ticket-booking': reference(
+    'ticket-booking',
+    'Starter topology with an auto-scaled booking API and a replicated, sharded database for the rush.',
+    { 'tb-api': COMPUTE, 'tb-db': SQL }
+  ),
+  'search-autocomplete': reference(
+    'search-autocomplete',
+    'Starter topology with an auto-scaled suggest API and indexing worker.',
+    { 'sa-api': COMPUTE, 'sa-worker': COMPUTE }
   ),
 };
 

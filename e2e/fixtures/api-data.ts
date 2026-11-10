@@ -65,6 +65,7 @@ export const COMPONENT_DEFINITIONS: ApiComponentDefinition[] = [
   def('kafka', 'Kafka', 'messaging', 500, 1000, 250, '🔀', 'Distributed event streaming platform', 130),
   def('rate-limiter', 'Rate Limiter', 'infrastructure', 2000, 50, 60, '🚦', 'Controls request rate to prevent abuse'),
   def('auth-service', 'Auth Service', 'infrastructure', 800, 100, 180, '🔐', 'Authentication and authorization service', 150),
+  def('search-service', 'Search Service', 'storage', 300, 100, 250, '🔎', 'Full-text search engine (Elasticsearch)', 150),
 ];
 
 export interface ApiChallenge {
@@ -227,6 +228,134 @@ export const CHALLENGES: ApiChallenge[] = [
     },
     allowedComponents: ['load-balancer', 'rate-limiter', 'backend-service', 'redis', 'database'],
   },
+  {
+    id: '55555555-5555-4555-8555-555555555555',
+    name: 'Chat Messaging',
+    slug: 'chat-messaging',
+    description: 'Design a real-time messaging backend with fan-out and history',
+    overviewContent: 'Messaging systems test fan-out writes, ordering and read-your-own-writes.',
+    videoUrl: '',
+    difficulty: 'medium',
+    createdAt: '2026-01-05T00:00:00Z',
+    scenario: {
+      id: 'sc-chat-messaging',
+      durationSeconds: 45,
+      baseRps: 220,
+      spikeMultiplier: 3.0,
+      spikeChance: 0.08,
+      readRatio: 0.6,
+      scenarioConfig: {
+        requirements: [
+          'Sends must land in a durable message store',
+          'Fan-out to recipients may be asynchronous — buffer it',
+          'Conversation history reads dominate; cache hot conversations',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { send: 0.4, fetch: 0.6 },
+        characteristics: { celebrityShare: 0.3, hotDataRatio: 0.9 },
+      },
+      scoringWeights: { availability: 35, latency: 35, scalability: 20, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'backend-service',
+      'microservice',
+      'worker-service',
+      'redis',
+      'nosql-database',
+      'message-queue',
+      'kafka',
+    ],
+  },
+  {
+    id: '66666666-6666-4666-8666-666666666666',
+    name: 'Ticket Booking',
+    slug: 'ticket-booking',
+    description: 'Design a ticketing system that survives the on-sale rush without overselling',
+    overviewContent: 'Booking systems test contention on hot rows and traffic that ramps in minutes.',
+    videoUrl: '',
+    difficulty: 'hard',
+    createdAt: '2026-01-06T00:00:00Z',
+    scenario: {
+      id: 'sc-ticket-booking',
+      durationSeconds: 50,
+      baseRps: 150,
+      spikeMultiplier: 1.5,
+      spikeChance: 0.04,
+      readRatio: 0.8,
+      scenarioConfig: {
+        requirements: [
+          'Every reservation must hit the relational database — no overselling',
+          'Browsing is read-heavy and cacheable',
+          'Traffic ramps to nearly 4× when the sale opens, then settles',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { browse: 0.8, reserve: 0.2 },
+        characteristics: { celebrityShare: 0.5, hotDataRatio: 0.85 },
+        trafficPhases: [
+          { atSeconds: 0, baseRps: 150 },
+          { atSeconds: 15, baseRps: 150 },
+          { atSeconds: 25, baseRps: 550 },
+          { atSeconds: 40, baseRps: 250 },
+        ],
+      },
+      scoringWeights: { durability: 40, availability: 30, latency: 20, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'backend-service',
+      'microservice',
+      'redis',
+      'database',
+      'message-queue',
+      'worker-service',
+    ],
+  },
+  {
+    id: '77777777-7777-4777-8777-777777777777',
+    name: 'Search Autocomplete',
+    slug: 'search-autocomplete',
+    description: 'Design a typeahead service: every keystroke is a query',
+    overviewContent: 'Autocomplete is read-heavy and latency-bound; indexing is an async pipeline.',
+    videoUrl: '',
+    difficulty: 'medium',
+    createdAt: '2026-01-07T00:00:00Z',
+    scenario: {
+      id: 'sc-search-autocomplete',
+      durationSeconds: 45,
+      baseRps: 380,
+      spikeMultiplier: 2.5,
+      spikeChance: 0.1,
+      readRatio: 0.9,
+      scenarioConfig: {
+        requirements: [
+          'Suggestions come from the search index, ideally via a hot-prefix cache',
+          'Index updates arrive asynchronously and must reach the search index',
+          'Keystroke traffic is bursty: expect 2.5× spikes',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { suggest: 0.9, index: 0.1 },
+        characteristics: { celebrityShare: 0.2, hotDataRatio: 0.95 },
+      },
+      scoringWeights: { latency: 45, availability: 30, scalability: 15, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'backend-service',
+      'microservice',
+      'worker-service',
+      'redis',
+      'search-service',
+      'message-queue',
+      'kafka',
+    ],
+  },
 ];
 
 /**
@@ -259,6 +388,24 @@ export const STARTER_PRESETS: Record<string, { components: number; belts: number
     // Includes the Redis → SQL Database belt that carries cache misses.
     belts: 6,
     labels: ['Load Balancer', 'Rate Limiter', 'Backend Service', 'Redis Cache', 'SQL Database'],
+  },
+  'chat-messaging': {
+    components: 6,
+    // Includes the Redis → NoSQL (cache miss) and Worker → NoSQL (fan-out) belts.
+    belts: 8,
+    labels: ['Load Balancer', 'Backend Service', 'Redis Cache', 'NoSQL Database', 'Message Queue', 'Worker Service'],
+  },
+  'ticket-booking': {
+    components: 4,
+    // Includes the Redis → SQL Database belt that carries cache misses.
+    belts: 5,
+    labels: ['Load Balancer', 'Backend Service', 'Redis Cache', 'SQL Database'],
+  },
+  'search-autocomplete': {
+    components: 6,
+    // Includes the Redis → Search (cache miss) and Worker → Search (index) belts.
+    belts: 8,
+    labels: ['Load Balancer', 'Backend Service', 'Redis Cache', 'Search Service', 'Message Queue', 'Worker Service'],
   },
 };
 

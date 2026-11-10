@@ -22,6 +22,9 @@ public class CatalogTests : IClassFixture<ApiFactory>
     [InlineData("instagram-feed", 3)]
     [InlineData("dropbox", 3)]
     [InlineData("rate-limiter", 1)]
+    [InlineData("chat-messaging", 2)]
+    [InlineData("ticket-booking", 2)]
+    [InlineData("search-autocomplete", 2)]
     public async Task Seeded_challenges_serve_flows_and_objectives(string slug, int flowCount)
     {
         using var client = _factory.CreateClient();
@@ -48,7 +51,7 @@ public class CatalogTests : IClassFixture<ApiFactory>
         using var client = _factory.CreateClient();
         var challenges = await client.GetFromJsonAsync<JsonElement>("/api/challenges");
 
-        Assert.Equal(4, challenges.GetArrayLength());
+        Assert.Equal(7, challenges.GetArrayLength());
         foreach (var challenge in challenges.EnumerateArray())
         {
             var config = challenge.GetProperty("scenario").GetProperty("scenarioConfig");

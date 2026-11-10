@@ -106,6 +106,12 @@ public class FlowDefinitionsTests
     [InlineData("dropbox", "upload", 0.95)]
     [InlineData("dropbox", "download", 0.95)]
     [InlineData("dropbox", "metadata", 0.95)]
+    [InlineData("chat-messaging", "send", 0.95)]
+    [InlineData("chat-messaging", "fetch", 0.95)]
+    [InlineData("ticket-booking", "browse", 0.95)]
+    [InlineData("ticket-booking", "reserve", 0.95)]
+    [InlineData("search-autocomplete", "suggest", 0.95)]
+    [InlineData("search-autocomplete", "index", 0.95)]
     [InlineData("rate-limiter", "check", 0.95)]
     public void Completion_floors_match_the_frontend_calibration(string slug, string kind, double floor)
     {

@@ -1,4 +1,5 @@
 import { expect, test } from './fixtures/test';
+import { CHALLENGES } from './fixtures/api-data';
 
 test.describe('Landing page', () => {
   test('renders the hero and primary calls to action', async ({ page }) => {
@@ -25,7 +26,7 @@ test.describe('Landing page', () => {
 
     await expect(page).toHaveURL(/\/challenges$/);
     await expect(page.getByRole('heading', { name: 'Challenges' })).toBeVisible();
-    await expect(page.locator('.challenge-list-item')).toHaveCount(4);
+    await expect(page.locator('.challenge-list-item')).toHaveCount(CHALLENGES.length);
     expect(await page.evaluate(() => (window as unknown as { __spaMarker?: boolean }).__spaMarker)).toBe(true);
     expect(api.calls('/api/challenges', 'GET')).toHaveLength(1);
   });
