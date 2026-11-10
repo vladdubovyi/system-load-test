@@ -191,6 +191,38 @@ test.describe('Interview mode', () => {
     await second.context.close();
   });
 
+  test('interview participants cannot open the scenario document at all', async ({
+    page,
+    browser,
+    hub,
+  }) => {
+    // §4.1: open mode offers the read-only panel; interview mode removes it,
+    // and a mode switch closes a panel that was already open.
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    const room = await host.shareRoom();
+    const second = await openSecondPerson(browser, hub);
+    const guest = new SandboxPage(second.page);
+    await guest.gotoRoomLink(room.participantLink);
+
+    await second.page.locator('#btn-scenario').click();
+    await expect(second.page.locator('#scenario-editor')).toBeVisible();
+
+    await host.shareButton.click();
+    await host.roomDialog.locator('#room-setting-mode').selectOption('interview');
+    await host.roomDialog.locator('#room-close').click();
+
+    await expect(second.page.locator('#scenario-editor')).toHaveCount(0);
+    await expect(second.page.locator('#btn-scenario')).toBeHidden();
+
+    // Switching back to open reveals it again.
+    await host.shareButton.click();
+    await host.roomDialog.locator('#room-setting-mode').selectOption('open');
+    await host.roomDialog.locator('#room-close').click();
+    await expect(second.page.locator('#btn-scenario')).toBeVisible();
+    await second.context.close();
+  });
+
   test('an unedited catalog scenario shows the host a public-scenario banner until the first Apply', async ({
     page,
     browser,

@@ -1,37 +1,57 @@
 # BreakIT roadmap
 
-Work planned for the next stretch of development (well over 20 hours of real product work).
+Summary of intent. Specs under `docs/specs/` hold the detail and the "as
+built" notes; this file says what is done and what is on the table.
 
-## Proper frontend ↔ backend communication
+## Done
 
-- Make the Vite app rely on the ASP.NET API for challenges and components end-to-end (no silent stale fallbacks in normal flows).
-- Align types, error handling, CORS, and env config (`VITE_API_URL`) so local and deployed FE/BE stay in sync.
-- Harden API client retries/timeouts.
+- **Flow correctness** (`flow-correctness.md`): capability model, declared
+  request flows, flow interpreter, violations distinct from drops, objectives
+  with completion floors and a violation ceiling, design-time lint, request
+  inspector, objective-driven report.
+- **Flow authoring** (`flow-authoring.md`): one scenario document (request
+  mix, roles, flows, objectives), the in-app editor with Apply, flows and
+  calibrated floors for all four scenarios, legacy routing removed.
+- **Anonymous collaborative rooms with interview mode**
+  (`interview-platform.md`, build order 1–7 plus §4.1): database-free and
+  account-free backend, seeded determinism and reference solutions,
+  per-entity sync with per-person undo, rooms over one SignalR hub, room-wide
+  deterministic runs, room settings, server-side scenario projection and the
+  opaque run-time flow bundle, host notes and the PDF record.
 
-## More scenarios
+## Constraints every direction keeps
 
-- Add new interview-style challenges beyond the current seeded set (URL shortener, file storage, feed, rate limiter).
-- Richer traffic patterns, failure modes, and scoring per scenario.
-- Scenario content (overview, requirements, allowed components) editable via the backend.
+Free to use. Zero personal data: no accounts, no storage in the browser, no
+server-side persistence, no analytics. Anything that needs a database or a
+person's identity is parked (`interview-platform.md` §10).
 
-## Edge-case testing
+## Candidate directions (not yet chosen)
 
-- Automated tests for simulation edge cases (spikes, cache stampedes, cascading failures, saturation at 100%).
-- API tests for challenge/component endpoints.
-- Frontend regression coverage for connect mode, undo/redo, and sandbox routing.
+Proposed 2026-11-09; the owner picks. Each is sized for a few weeks of
+focused work and keeps the constraints above.
 
-## Production-like test environment
-
-- Staging (or docker-compose) stack that mirrors production: API + PostgreSQL + frontend build with real env vars.
-- Smoke checks against that environment before release.
-- Clear secrets handling (no `.env` in git; platform env vars only).
-
-## UI / UX fixes
-
-- Polish landing, challenges browser, and sandbox chrome under the **BreakIT** brand.
-- Fix navigation, scrolling, empty/loading/error states, and mobile layout gaps.
-- Tighten simulation controls and feedback so failures and bottlenecks are obvious.
+1. **Portable artifacts without a server** — boards and scenarios encoded in
+   the URL fragment (compressed), JSON export/import, "permalink to my
+   design"; the deterministic event log as a self-contained replay file.
+2. **Scenario depth and breadth** — more interview classics (messaging,
+   ticket booking, dispatch, autocomplete, notifications, payments), scripted
+   failure phases (region outage, cache stampede, hot shard), multi-phase
+   traffic timelines; each with flows, objectives, a reference and
+   calibration.
+3. **Coaching layer** — explain the verdict with trace-backed evidence,
+   same-seed A/B comparison of two boards, guided walkthroughs and a hint
+   ladder per scenario, concept cards attached to lint messages.
+4. **Interview host tooling** — local-only rubric form folded into the PDF,
+   phase timer, one-click failure drills, local participant labels (§11 Q6),
+   local session replay from seed + event log.
+5. **Engine fidelity** — latency percentiles from a queueing model, retries,
+   timeouts and backoff, circuit breakers and backpressure, replication lag,
+   multi-zone topology and partition semantics, cost over time. Requires
+   re-calibrating every floor.
+6. **Reach and accessibility** — tablet layout, keyboard-only editing,
+   colour-blind-safe request palette, onboarding tour, PWA offline solo mode,
+   one-command self-hosting, scenario packs contributed via pull request.
 
 ## Tracking
 
-Open GitHub issues from this list as work starts; keep this file as the summary of intent.
+Open GitHub issues from the chosen direction; keep this file as the summary.

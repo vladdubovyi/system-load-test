@@ -824,8 +824,12 @@ function dropTagOnComponent(componentId: string, tagId: string): void {
   pushHistory();
 }
 
-// Scenario editor (docs/specs/flow-authoring.md §3.1)
+// Scenario editor (docs/specs/flow-authoring.md §3.1). For open-mode room
+// participants it is a read-only document view (interview-platform.md §4.1);
+// interview-mode participants cannot open it at all.
 function openScenarioEditor(): void {
+  if (room !== null && room.role === 'participant' && room.settings.mode === 'interview') return;
+  const readOnly = room !== null && room.role === 'participant';
   closeScenarioEditor();
   const container = document.createElement('div');
   container.id = 'scenario-editor-container';
@@ -843,7 +847,7 @@ function openScenarioEditor(): void {
   mountScenarioEditor(
     container,
     getActiveScenarioDocument(),
-    { overridden: getActiveScenarioOverride() !== null },
+    { overridden: getActiveScenarioOverride() !== null, readOnly },
     {
       onApply: (doc) => {
         setActiveScenarioOverride(doc);
@@ -2146,9 +2150,18 @@ function renderRoomChrome(): void {
     share.textContent = room ? `🔗 Room ${room.joinCode ?? ''}`.trim() : '🔗 Share';
     share.classList.toggle('in-room', room !== null);
   }
-  // In a room only the host edits the scenario (§4.1); participants receive it.
+  // §4.1: only the host edits the scenario; open-mode participants get a
+  // read-only view, interview-mode participants cannot open it at all.
   const scenario = document.getElementById('btn-scenario');
-  if (scenario) scenario.hidden = room?.role === 'participant';
+  if (scenario) {
+    scenario.hidden =
+      room !== null && room.role === 'participant' && room.settings.mode === 'interview';
+    const viewer = room?.role === 'participant';
+    scenario.textContent = viewer ? '📄 Scenario' : '✎ Scenario';
+    scenario.title = viewer
+      ? 'Read the scenario document the host applied'
+      : "Edit this challenge's flows, objectives and roles";
+  }
   const reference = document.getElementById('btn-reference');
   if (reference) reference.hidden = room?.role === 'participant';
   const notes = document.getElementById('btn-notes');
@@ -2337,6 +2350,9 @@ function installScenarioProjection(projection: {
   // Selecting a challenge clears the overrides; restore the room's.
   setActiveScenarioOverride(projection.scenarioOverride);
   setActiveTrafficOverride(state.customTrafficConfig);
+  // A read-only scenario view would now show a stale (or, after a switch to
+  // interview mode, a withheld) document; close it (§4.1).
+  closeScenarioEditor();
   rerenderConfigPalette();
   hideLintPanel();
   invalidateBoardSnapshot();

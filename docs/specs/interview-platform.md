@@ -326,6 +326,16 @@ participants can read the scenario document in a read-only panel. In
 `interview` mode they cannot open it at all. The solo sandbox is unchanged,
 except that Save is gone.
 
+**As built (2026-11-09).** Open-mode participants get a 📄 *Scenario*
+button that opens the same panel with the JSON read-only and no Apply,
+Validate or Reset; it closes whenever a new projection arrives (a host
+Apply, a mode switch), and in interview mode the button is hidden and the
+panel cannot be opened. Tested in `e2e/rooms.spec.ts` ("read-only panel")
+and `e2e/rooms-interview.spec.ts` ("cannot open the scenario document").
+There is no in-sandbox challenge selector to lock: switching challenges
+means navigating to `/challenges`, which is a full page load that leaves
+the room.
+
 ### 4.2 Switching modes mid-room
 
 Switching `open → interview` re-projects immediately. Participant clients

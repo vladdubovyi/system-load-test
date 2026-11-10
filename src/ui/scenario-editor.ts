@@ -19,6 +19,12 @@ export interface ScenarioEditorCallbacks {
 export interface ScenarioEditorOptions {
   /** True when the shown document is a session override rather than the challenge's. */
   overridden: boolean;
+  /**
+   * Viewer, not editor (docs/specs/interview-platform.md §4.1): open-mode
+   * room participants read the scenario document, so the JSON is read-only
+   * and Apply, Validate and Reset do not exist.
+   */
+  readOnly?: boolean;
 }
 
 function escapeHtml(value: string): string {
@@ -30,25 +36,35 @@ function escapeHtml(value: string): string {
 }
 
 export function renderScenarioEditor(doc: ScenarioDocument, options: ScenarioEditorOptions): string {
+  const flag = options.readOnly
+    ? ' <span class="scenario-editor-flag">read-only</span>'
+    : options.overridden
+      ? ' <span class="scenario-editor-flag">edited</span>'
+      : '';
+  const help = options.readOnly
+    ? 'The scenario as the host applied it: request mix, roles (tags), flows and objectives. Copy the JSON to keep it.'
+    : `Request mix, roles (tags), flows and objectives for this challenge.
+          <strong>Apply</strong> uses the document for your next runs in this session; copy the JSON to keep it.`;
   return `
     <div class="scenario-editor" id="scenario-editor" role="dialog" aria-labelledby="scenario-editor-title">
       <div class="config-panel-header">
-        <h3 id="scenario-editor-title">Scenario${options.overridden ? ' <span class="scenario-editor-flag">edited</span>' : ''}</h3>
-        <button class="config-panel-close" id="scenario-close" type="button" aria-label="Close scenario editor">×</button>
+        <h3 id="scenario-editor-title">Scenario${flag}</h3>
+        <button class="config-panel-close" id="scenario-close" type="button" aria-label="Close scenario ${options.readOnly ? 'document' : 'editor'}">×</button>
       </div>
       <div class="config-panel-body scenario-editor-body">
-        <p class="scenario-editor-help">
-          Request mix, roles (tags), flows and objectives for this challenge.
-          <strong>Apply</strong> uses the document for your next runs in this session; copy the JSON to keep it.
-        </p>
-        <textarea id="scenario-json" class="scenario-json" spellcheck="false" aria-label="Scenario document (JSON)">${escapeHtml(JSON.stringify(doc, null, 2))}</textarea>
+        <p class="scenario-editor-help">${help}</p>
+        <textarea id="scenario-json" class="scenario-json" spellcheck="false" ${options.readOnly ? 'readonly ' : ''}aria-label="Scenario document (JSON)">${escapeHtml(JSON.stringify(doc, null, 2))}</textarea>
         <ul class="scenario-editor-errors" id="scenario-errors" aria-live="polite"></ul>
       </div>
-      <div class="config-panel-actions scenario-editor-actions">
+      ${
+        options.readOnly
+          ? ''
+          : `<div class="config-panel-actions scenario-editor-actions">
         <button class="config-btn config-btn-secondary" id="scenario-reset" type="button" title="Discard the applied document and return to the challenge definition">Reset</button>
         <button class="config-btn config-btn-secondary" id="scenario-validate" type="button">Validate</button>
         <button class="config-btn config-btn-primary" id="scenario-apply" type="button">Apply</button>
-      </div>
+      </div>`
+      }
     </div>
   `;
 }

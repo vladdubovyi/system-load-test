@@ -248,7 +248,9 @@ test.describe('Rooms', () => {
     const second = await openSecondPerson(browser, hub);
     const guest = new SandboxPage(second.page);
     await guest.gotoRoomLink(room.participantLink);
-    await expect(second.page.locator('#btn-scenario')).toBeHidden();
+    // §4.1: participants may read the scenario, so the button is there, but
+    // the document opens without editing controls (see the test below).
+    await expect(second.page.locator('#btn-scenario')).toBeVisible();
     await expect(page.locator('#btn-scenario')).toBeVisible();
 
     await host.openScenarioEditor();
@@ -261,6 +263,49 @@ test.describe('Rooms', () => {
 
     await guest.component('Microservice').click();
     await expect(guest.tagChip('room-role')).toBeVisible();
+    await second.context.close();
+  });
+
+  test('open-mode participants read the scenario in a read-only panel', async ({
+    page,
+    browser,
+    hub,
+  }) => {
+    // §4.1: "In open mode, participants can read the scenario document in a
+    // read-only panel." There is no Apply, Validate or Reset for them.
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    const room = await host.shareRoom();
+    await host.openScenarioEditor();
+    const doc = await host.scenarioDocument();
+    await host.setScenarioDocument({ ...doc, requestTypes: { read: 0.5, create: 0.5 } });
+    await page.locator('#scenario-apply').click();
+
+    const second = await openSecondPerson(browser, hub);
+    const guest = new SandboxPage(second.page);
+    await guest.gotoRoomLink(room.participantLink);
+
+    await second.page.locator('#btn-scenario').click();
+    const panel = second.page.locator('#scenario-editor');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText('read-only');
+    await expect(guest.scenarioJson).toHaveJSProperty('readOnly', true);
+    expect((await guest.scenarioDocument()).requestTypes).toEqual({ read: 0.5, create: 0.5 });
+    await expect(panel.locator('#scenario-apply')).toHaveCount(0);
+    await expect(panel.locator('#scenario-validate')).toHaveCount(0);
+    await expect(panel.locator('#scenario-reset')).toHaveCount(0);
+
+    // The host applying a new document closes the stale view; reopening
+    // shows the fresh one.
+    await host.openScenarioEditor();
+    await host.setScenarioDocument({ ...doc, requestTypes: { read: 0.6, create: 0.4 } });
+    await page.locator('#scenario-apply').click();
+    await expect(panel).toHaveCount(0);
+    await second.page.locator('#btn-scenario').click();
+    expect((await guest.scenarioDocument()).requestTypes).toEqual({ read: 0.6, create: 0.4 });
+
+    await second.page.locator('#scenario-close').click();
+    await expect(panel).toHaveCount(0);
     await second.context.close();
   });
 
