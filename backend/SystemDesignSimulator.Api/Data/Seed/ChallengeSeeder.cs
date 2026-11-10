@@ -36,7 +36,10 @@ public static class ChallengeSeeder
             CreateRateLimiterChallenge(),
             CreateChatMessagingChallenge(),
             CreateTicketBookingChallenge(),
-            CreateSearchAutocompleteChallenge()
+            CreateSearchAutocompleteChallenge(),
+            CreateRideDispatchChallenge(),
+            CreateNotificationFanoutChallenge(),
+            CreatePaymentWebhookChallenge()
         };
 
         var challenges = new List<Challenge>(entries.Count);
@@ -177,6 +180,66 @@ public static class ChallengeSeeder
                 - Capacity planning for 2–3× bursts
 
                 Keystrokes are unforgiving: a slow suggest is a wrong suggest.
+                """,
+            VideoUrl: ""
+        ),
+        ["ride-dispatch"] = (
+            Overview: """
+                Dispatch systems take a flood of driver location pings and must still answer "who is nearest?" quickly and correctly. The two paths want different things: location writes can be lossy, matches cannot.
+
+                **What interviewers look for**
+                - Treating position updates as a stream, not as durable writes
+                - A hot in-memory index of driver positions
+                - Keeping the match path strict while the write path sheds load
+                - Capacity for rush hour, when both paths double
+
+                **Key concepts to practice**
+                - Separating lossy telemetry from must-complete requests
+                - Queues as buffers for write floods
+                - Cache as the system of record for ephemeral state
+                - Planning for a traffic ramp, not just spikes
+
+                Rush hour arrives at 22 seconds. Design for it.
+                """,
+            VideoUrl: ""
+        ),
+        ["notification-fanout"] = (
+            Overview: """
+                A notification pipeline is pure asynchrony: an event arrives, gets logged, and a worker fans it out to delivery channels. The design question is what happens when the worker falls behind.
+
+                **What interviewers look for**
+                - A durable event log between the API and the workers
+                - Workers that scale independently of the API
+                - What a degraded worker does to delivery latency and loss
+                - Separating the delivery pipeline from status reads
+
+                **Key concepts to practice**
+                - Buffering as a contract, not an optimization
+                - Consumer-side capacity and parallelism
+                - Degradation drills: half a worker, not zero
+                - Read paths that stay fast while the pipeline strains
+
+                At 15 seconds the delivery worker loses half its capacity for 12 seconds. Your pipeline should not notice.
+                """,
+            VideoUrl: ""
+        ),
+        ["payment-webhook"] = (
+            Overview: """
+                Payment providers deliver webhooks in storms and retry anything you drop, so the ingress must be rate-limited and every accepted event must reach the ledger exactly once.
+
+                **What interviewers look for**
+                - A rate limiter in front of the API, always
+                - Idempotency keys so retries do not double-charge
+                - Queue-and-worker settlement so the ledger is written at its own pace
+                - A relational ledger that survives degradation
+
+                **Key concepts to practice**
+                - Admission control vs. capacity
+                - Idempotent writes and duplicate detection
+                - Decoupling ingress bursts from database throughput
+                - Replication and sharding as headroom, not just scale
+
+                At 20 seconds the ledger runs at half capacity for 10 seconds. Headroom is the whole lesson.
                 """,
             VideoUrl: ""
         ),
@@ -898,6 +961,190 @@ public static class ChallengeSeeder
         {
             "load-balancer", "api-gateway", "backend-service", "microservice", "worker-service",
             "redis", "search-service", "message-queue", "kafka"
+        };
+
+        return (challenge, scenario, components);
+    }
+
+    private static (Challenge, Scenario, List<string>) CreateRideDispatchChallenge()
+    {
+        var challengeId = StableId("challenge:ride-dispatch");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Ride Dispatch",
+            Slug = "ride-dispatch",
+            Description = "Design a dispatch backend: lossy location pings, strict driver matching, and a rush hour",
+            Difficulty = "hard",
+            OverviewContent = GetChallengeContent()["ride-dispatch"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:ride-dispatch"),
+            ChallengeId = challengeId,
+            DurationSeconds = 50,
+            BaseRps = 220,
+            SpikeMultiplier = 2.0m,
+            SpikeChance = 0.06m,
+            ReadRatio = 0.3m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Location pings land in a hot position cache — a stale position is tolerable, a lost match is not",
+                    "Matches read the position cache and fall back to the trip store",
+                    "Rush hour more than doubles the load for a quarter of a minute",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { locationUpdate = 0.7, match = 0.3 },
+                characteristics = new { celebrityShare = 0.1, hotDataRatio = 0.9 },
+                // Multi-phase traffic (product-directions.md §3.4): steady → rush hour → evening.
+                trafficPhases = new object[]
+                {
+                    new { atSeconds = 0, baseRps = 220 },
+                    new { atSeconds = 12, baseRps = 220 },
+                    new { atSeconds = 22, baseRps = 480 },
+                    new { atSeconds = 38, baseRps = 300 },
+                },
+                flows = FlowDefinitions.Flows("ride-dispatch"),
+                objectives = FlowDefinitions.ObjectivesFor("ride-dispatch")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { availability = 35, latency = 35, scalability = 20, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "backend-service", "microservice", "worker-service",
+            "redis", "nosql-database", "database", "message-queue", "kafka"
+        };
+
+        return (challenge, scenario, components);
+    }
+
+    private static (Challenge, Scenario, List<string>) CreateNotificationFanoutChallenge()
+    {
+        var challengeId = StableId("challenge:notification-fanout");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Notification Fan-out",
+            Slug = "notification-fanout",
+            Description = "Design an async notification pipeline that keeps delivering when a worker degrades",
+            Difficulty = "medium",
+            OverviewContent = GetChallengeContent()["notification-fanout"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:notification-fanout"),
+            ChallengeId = challengeId,
+            DurationSeconds = 50,
+            BaseRps = 150,
+            SpikeMultiplier = 2.0m,
+            SpikeChance = 0.06m,
+            ReadRatio = 0.15m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Every event is logged to a queue before a worker fans it out to a delivery channel",
+                    "Status reads are cacheable and must stay fast while the pipeline strains",
+                    "At 15 s the delivery worker runs at half capacity for 12 s — deliveries must still arrive",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { @event = 0.85, status = 0.15 },
+                characteristics = new { celebrityShare = 0.2, hotDataRatio = 0.9 },
+                // Scripted failure phase (product-directions.md §3.3): a degraded consumer.
+                failureScenarios = new object[]
+                {
+                    new
+                    {
+                        id = "worker-degraded",
+                        label = "Worker degraded",
+                        atSeconds = 15,
+                        target = new { componentType = "worker-service" },
+                        type = "capacity",
+                        durationSeconds = 12,
+                    },
+                },
+                flows = FlowDefinitions.Flows("notification-fanout"),
+                objectives = FlowDefinitions.ObjectivesFor("notification-fanout")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { availability = 40, latency = 25, scalability = 25, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "backend-service", "microservice", "worker-service",
+            "kafka", "message-queue", "pubsub", "redis", "nosql-database"
+        };
+
+        return (challenge, scenario, components);
+    }
+
+    private static (Challenge, Scenario, List<string>) CreatePaymentWebhookChallenge()
+    {
+        var challengeId = StableId("challenge:payment-webhook");
+        var challenge = new Challenge
+        {
+            Id = challengeId,
+            Name = "Payment Webhooks",
+            Slug = "payment-webhook",
+            Description = "Design webhook ingestion for a payments provider: rate-limited, idempotent, ledger-backed",
+            Difficulty = "hard",
+            OverviewContent = GetChallengeContent()["payment-webhook"].Overview,
+            VideoUrl = null,
+        };
+
+        var scenario = new Scenario
+        {
+            Id = StableId("scenario:payment-webhook"),
+            ChallengeId = challengeId,
+            DurationSeconds = 45,
+            BaseRps = 240,
+            SpikeMultiplier = 2.0m,
+            SpikeChance = 0.06m,
+            ReadRatio = 0.35m,
+            ScenarioConfig = JsonSerializer.Serialize(new
+            {
+                requirements = new[]
+                {
+                    "Every request passes a rate limiter before it reaches the API",
+                    "Webhooks and charges are recorded in the relational ledger; a cache may hold idempotency keys",
+                    "Webhook storms double the load, and at 20 s one ledger node runs at half capacity for 10 s",
+                },
+                drainDuration = 10,
+                pattern = "spike",
+                requestTypes = new { webhook = 0.65, charge = 0.35 },
+                characteristics = new { celebrityShare = 0.3, hotDataRatio = 0.8 },
+                // Scripted failure phase (product-directions.md §3.3): a degraded ledger.
+                failureScenarios = new object[]
+                {
+                    new
+                    {
+                        id = "ledger-degraded",
+                        label = "Ledger degraded",
+                        atSeconds = 20,
+                        target = new { componentType = "database" },
+                        type = "capacity",
+                        durationSeconds = 10,
+                    },
+                },
+                flows = FlowDefinitions.Flows("payment-webhook"),
+                objectives = FlowDefinitions.ObjectivesFor("payment-webhook")
+            }),
+            ScoringWeights = JsonSerializer.Serialize(new { durability = 40, availability = 30, latency = 20, cost = 10 })
+        };
+
+        var components = new List<string>
+        {
+            "load-balancer", "api-gateway", "rate-limiter", "backend-service", "microservice", "worker-service",
+            "message-queue", "kafka", "redis", "database"
         };
 
         return (challenge, scenario, components);

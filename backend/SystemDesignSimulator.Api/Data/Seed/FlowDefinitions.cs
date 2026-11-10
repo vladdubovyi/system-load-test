@@ -185,6 +185,57 @@ public static class FlowDefinitions
                 Step("worker", Cap("compute"), "Indexing worker", optional: true),
                 Step("write", Type("search-service"), "Index document", terminal: true)),
         },
+        // D2 phase 3 (product-directions.md §3.2a): ride dispatch, notification fan-out, payment webhooks
+        "ride-dispatch" => new object[]
+        {
+            Flow("locationUpdate",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Dispatch API"),
+                Step("stream", Cap("queue"), "Location stream", optional: true),
+                Step("worker", Cap("compute"), "Location worker", optional: true),
+                Step("position", Cap("cache"), "Driver position cache", terminal: true)),
+            Flow("match",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Dispatch API"),
+                Step("nearby", Cap("cache"), "Nearby-driver lookup", optional: true,
+                    branch: CacheBranch(
+                        Step("trip-read", Cap("durable-store"), "Trip store lookup (cache miss)", terminal: true))),
+                Step("trip-direct", Cap("durable-store"), "Trip store lookup", terminal: true)),
+        },
+        "notification-fanout" => new object[]
+        {
+            Flow("event",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Notification API"),
+                Step("log", Cap("queue"), "Event log"),
+                Step("worker", Cap("compute"), "Delivery worker"),
+                Step("channel", Cap("queue"), "Delivery channel", terminal: true)),
+            Flow("status",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("service", Cap("compute"), "Notification API"),
+                Step("cache", Cap("cache"), "Status cache", optional: true,
+                    branch: CacheBranch(
+                        Step("status-read", Cap("durable-store"), "Status lookup (cache miss)", terminal: true))),
+                Step("status-direct", Cap("durable-store"), "Status lookup", terminal: true)),
+        },
+        "payment-webhook" => new object[]
+        {
+            Flow("webhook",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("limiter", Cap("traffic-filter"), "Rate limiter"),
+                Step("service", Cap("compute"), "Payments API"),
+                Step("enqueue", Cap("queue"), "Webhook queue", optional: true),
+                Step("worker", Cap("compute"), "Settlement worker", optional: true),
+                Step("ledger", Type("database"), "Record in ledger", terminal: true)),
+            Flow("charge",
+                Step("ingress", Cap("ingress"), "Ingress"),
+                Step("limiter", Cap("traffic-filter"), "Rate limiter"),
+                Step("service", Cap("compute"), "Payments API"),
+                Step("idempotency", Cap("cache"), "Idempotency key", optional: true,
+                    branch: CacheBranch(
+                        Step("charge-write", Type("database"), "Write charge (new key)", terminal: true))),
+                Step("charge-direct", Type("database"), "Write charge", terminal: true)),
+        },
         _ => Array.Empty<object>(),
     };
 
@@ -204,6 +255,9 @@ public static class FlowDefinitions
         "chat-messaging" => Objectives(new() { ["send"] = 0.95, ["fetch"] = 0.95 }),
         "ticket-booking" => Objectives(new() { ["browse"] = 0.95, ["reserve"] = 0.95 }),
         "search-autocomplete" => Objectives(new() { ["suggest"] = 0.95, ["index"] = 0.95 }),
+        "ride-dispatch" => Objectives(new() { ["locationUpdate"] = 0.9, ["match"] = 0.95 }),
+        "notification-fanout" => Objectives(new() { ["event"] = 0.95, ["status"] = 0.95 }),
+        "payment-webhook" => Objectives(new() { ["webhook"] = 0.95, ["charge"] = 0.95 }),
         _ => null,
     };
 

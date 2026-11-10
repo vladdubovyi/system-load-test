@@ -66,6 +66,7 @@ export const COMPONENT_DEFINITIONS: ApiComponentDefinition[] = [
   def('rate-limiter', 'Rate Limiter', 'infrastructure', 2000, 50, 60, '🚦', 'Controls request rate to prevent abuse'),
   def('auth-service', 'Auth Service', 'infrastructure', 800, 100, 180, '🔐', 'Authentication and authorization service', 150),
   def('search-service', 'Search Service', 'storage', 300, 100, 250, '🔎', 'Full-text search engine (Elasticsearch)', 150),
+  def('pubsub', 'Pub/Sub', 'messaging', 600, 1000, 150, '📣', 'Publish/subscribe delivery channel (SNS, Pub/Sub)', 150),
 ];
 
 export interface ApiChallenge {
@@ -356,6 +357,158 @@ export const CHALLENGES: ApiChallenge[] = [
       'kafka',
     ],
   },
+  {
+    id: '88888888-8888-4888-8888-888888888888',
+    name: 'Ride Dispatch',
+    slug: 'ride-dispatch',
+    description: 'Design a dispatch backend: lossy location pings, strict driver matching, and a rush hour',
+    overviewContent: 'Dispatch separates lossy telemetry writes from matches that must complete, and plans for a ramp.',
+    videoUrl: '',
+    difficulty: 'hard',
+    createdAt: '2026-01-08T00:00:00Z',
+    scenario: {
+      id: 'sc-ride-dispatch',
+      durationSeconds: 50,
+      baseRps: 220,
+      spikeMultiplier: 2.0,
+      spikeChance: 0.06,
+      readRatio: 0.3,
+      scenarioConfig: {
+        requirements: [
+          'Location pings land in a hot position cache — a stale position is tolerable, a lost match is not',
+          'Matches read the position cache and fall back to the trip store',
+          'Rush hour more than doubles the load for a quarter of a minute',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { locationUpdate: 0.7, match: 0.3 },
+        characteristics: { celebrityShare: 0.1, hotDataRatio: 0.9 },
+        trafficPhases: [
+          { atSeconds: 0, baseRps: 220 },
+          { atSeconds: 12, baseRps: 220 },
+          { atSeconds: 22, baseRps: 480 },
+          { atSeconds: 38, baseRps: 300 },
+        ],
+      },
+      scoringWeights: { availability: 35, latency: 35, scalability: 20, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'backend-service',
+      'microservice',
+      'worker-service',
+      'redis',
+      'nosql-database',
+      'database',
+      'message-queue',
+      'kafka',
+    ],
+  },
+  {
+    id: '99999999-9999-4999-8999-999999999999',
+    name: 'Notification Fan-out',
+    slug: 'notification-fanout',
+    description: 'Design an async notification pipeline that keeps delivering when a worker degrades',
+    overviewContent: 'A notification pipeline is pure asynchrony; the question is what a degraded worker does.',
+    videoUrl: '',
+    difficulty: 'medium',
+    createdAt: '2026-01-09T00:00:00Z',
+    scenario: {
+      id: 'sc-notification-fanout',
+      durationSeconds: 50,
+      baseRps: 150,
+      spikeMultiplier: 2.0,
+      spikeChance: 0.06,
+      readRatio: 0.15,
+      scenarioConfig: {
+        requirements: [
+          'Every event is logged to a queue before a worker fans it out to a delivery channel',
+          'Status reads are cacheable and must stay fast while the pipeline strains',
+          'At 15 s the delivery worker runs at half capacity for 12 s — deliveries must still arrive',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { event: 0.85, status: 0.15 },
+        characteristics: { celebrityShare: 0.2, hotDataRatio: 0.9 },
+        failureScenarios: [
+          {
+            id: 'worker-degraded',
+            label: 'Worker degraded',
+            atSeconds: 15,
+            target: { componentType: 'worker-service' },
+            type: 'capacity',
+            durationSeconds: 12,
+          },
+        ],
+      },
+      scoringWeights: { availability: 40, latency: 25, scalability: 25, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'backend-service',
+      'microservice',
+      'worker-service',
+      'kafka',
+      'message-queue',
+      'pubsub',
+      'redis',
+      'nosql-database',
+    ],
+  },
+  {
+    id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    name: 'Payment Webhooks',
+    slug: 'payment-webhook',
+    description: 'Design webhook ingestion for a payments provider: rate-limited, idempotent, ledger-backed',
+    overviewContent: 'Webhooks arrive in storms and retry what you drop: admission control and idempotency.',
+    videoUrl: '',
+    difficulty: 'hard',
+    createdAt: '2026-01-10T00:00:00Z',
+    scenario: {
+      id: 'sc-payment-webhook',
+      durationSeconds: 45,
+      baseRps: 240,
+      spikeMultiplier: 2.0,
+      spikeChance: 0.06,
+      readRatio: 0.35,
+      scenarioConfig: {
+        requirements: [
+          'Every request passes a rate limiter before it reaches the API',
+          'Webhooks and charges are recorded in the relational ledger; a cache may hold idempotency keys',
+          'Webhook storms double the load, and at 20 s one ledger node runs at half capacity for 10 s',
+        ],
+        drainDuration: 10,
+        pattern: 'spike',
+        requestTypes: { webhook: 0.65, charge: 0.35 },
+        characteristics: { celebrityShare: 0.3, hotDataRatio: 0.8 },
+        failureScenarios: [
+          {
+            id: 'ledger-degraded',
+            label: 'Ledger degraded',
+            atSeconds: 20,
+            target: { componentType: 'database' },
+            type: 'capacity',
+            durationSeconds: 10,
+          },
+        ],
+      },
+      scoringWeights: { durability: 40, availability: 30, latency: 20, cost: 10 },
+    },
+    allowedComponents: [
+      'load-balancer',
+      'api-gateway',
+      'rate-limiter',
+      'backend-service',
+      'microservice',
+      'worker-service',
+      'message-queue',
+      'kafka',
+      'redis',
+      'database',
+    ],
+  },
 ];
 
 /**
@@ -406,6 +559,24 @@ export const STARTER_PRESETS: Record<string, { components: number; belts: number
     // Includes the Redis → Search (cache miss) and Worker → Search (index) belts.
     belts: 8,
     labels: ['Load Balancer', 'Backend Service', 'Redis Cache', 'Search Service', 'Message Queue', 'Worker Service'],
+  },
+  'ride-dispatch': {
+    components: 4,
+    // Includes the Redis → NoSQL belt that carries nearby-driver cache misses.
+    belts: 5,
+    labels: ['Load Balancer', 'Backend Service', 'Redis Cache', 'NoSQL Database'],
+  },
+  'notification-fanout': {
+    components: 7,
+    // API → Kafka → Worker → Pub/Sub, plus the cached status path with its miss belt.
+    belts: 8,
+    labels: ['Load Balancer', 'Backend Service', 'Kafka', 'Worker Service', 'Pub/Sub', 'Redis Cache', 'NoSQL Database'],
+  },
+  'payment-webhook': {
+    components: 7,
+    // Limiter → API; settlement via queue and worker; charges direct and via the idempotency cache.
+    belts: 9,
+    labels: ['Load Balancer', 'Rate Limiter', 'Backend Service', 'Message Queue', 'Worker Service', 'Redis Cache', 'SQL Database'],
   },
 };
 

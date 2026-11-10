@@ -30,7 +30,8 @@ person's identity is parked (`interview-platform.md` §10).
 Tech spec for all six: [docs/specs/product-directions.md](./docs/specs/product-directions.md)
 (2026-11-10). Execution order: D1 portable artifacts → D2 scenarios → D3
 coaching → D4 host tooling → D5 engine fidelity, with D6 reach phases
-interleaved.
+interleaved. **Done:** D1 (links, files, replays) and D2 (scripted drills,
+traffic phases, ten scenarios) — 2026-11-10. **Next:** D3 coaching.
 
 1. **Portable artifacts without a server** — boards and scenarios encoded in
    the URL fragment (compressed), JSON export/import, "permalink to my

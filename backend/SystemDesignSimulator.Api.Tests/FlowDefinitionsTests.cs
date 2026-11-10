@@ -112,6 +112,12 @@ public class FlowDefinitionsTests
     [InlineData("ticket-booking", "reserve", 0.95)]
     [InlineData("search-autocomplete", "suggest", 0.95)]
     [InlineData("search-autocomplete", "index", 0.95)]
+    [InlineData("ride-dispatch", "locationUpdate", 0.9)]
+    [InlineData("ride-dispatch", "match", 0.95)]
+    [InlineData("notification-fanout", "event", 0.95)]
+    [InlineData("notification-fanout", "status", 0.95)]
+    [InlineData("payment-webhook", "webhook", 0.95)]
+    [InlineData("payment-webhook", "charge", 0.95)]
     [InlineData("rate-limiter", "check", 0.95)]
     public void Completion_floors_match_the_frontend_calibration(string slug, string kind, double floor)
     {

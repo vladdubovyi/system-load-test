@@ -429,7 +429,151 @@ export const SEARCH_AUTOCOMPLETE_OBJECTIVES: Objectives = {
   noComponentFailures: true,
 };
 
+/**
+ * Ride dispatch (§3.2, phase 3): location pings are lossy telemetry that land
+ * in a hot position cache (optionally via a stream and a worker); matches are
+ * strict reads that may be served from the same cache and fall back to the
+ * trip store.
+ */
+export const RIDE_DISPATCH_FLOWS: FlowSpec[] = [
+  {
+    kind: 'locationUpdate',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Dispatch API' },
+      { id: 'stream', require: { capability: 'queue' }, optional: true, label: 'Location stream' },
+      { id: 'worker', require: { capability: 'compute' }, optional: true, label: 'Location worker' },
+      { id: 'position', require: { capability: 'cache' }, terminal: true, label: 'Driver position cache' },
+    ],
+  },
+  {
+    kind: 'match',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Dispatch API' },
+      {
+        id: 'nearby',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Nearby-driver lookup',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'trip-read', require: { capability: 'durable-store' }, terminal: true, label: 'Trip store lookup (cache miss)' },
+          ],
+        },
+      },
+      { id: 'trip-direct', require: { capability: 'durable-store' }, terminal: true, label: 'Trip store lookup' },
+    ],
+  },
+];
+
+/**
+ * Notification fan-out (§3.2, phase 3): an event must be logged to a queue
+ * and fanned out by a worker into a delivery channel — skipping the buffer
+ * is a violation. Status reads are cacheable.
+ */
+export const NOTIFICATION_FANOUT_FLOWS: FlowSpec[] = [
+  {
+    kind: 'event',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Notification API' },
+      { id: 'log', require: { capability: 'queue' }, label: 'Event log' },
+      { id: 'worker', require: { capability: 'compute' }, label: 'Delivery worker' },
+      { id: 'channel', require: { capability: 'queue' }, terminal: true, label: 'Delivery channel' },
+    ],
+  },
+  {
+    kind: 'status',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Notification API' },
+      {
+        id: 'cache',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Status cache',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'status-read', require: { capability: 'durable-store' }, terminal: true, label: 'Status lookup (cache miss)' },
+          ],
+        },
+      },
+      { id: 'status-direct', require: { capability: 'durable-store' }, terminal: true, label: 'Status lookup' },
+    ],
+  },
+];
+
+/**
+ * Payment webhooks (§3.2, phase 3): every request passes a traffic filter
+ * first; webhooks may settle through a queue and a worker, charges may check
+ * an idempotency cache; everything accepted is recorded in the relational
+ * ledger.
+ */
+export const PAYMENT_WEBHOOK_FLOWS: FlowSpec[] = [
+  {
+    kind: 'webhook',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'limiter', require: { capability: 'traffic-filter' }, label: 'Rate limiter' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Payments API' },
+      { id: 'enqueue', require: { capability: 'queue' }, optional: true, label: 'Webhook queue' },
+      { id: 'worker', require: { capability: 'compute' }, optional: true, label: 'Settlement worker' },
+      { id: 'ledger', require: { componentType: 'database' }, terminal: true, label: 'Record in ledger' },
+    ],
+  },
+  {
+    kind: 'charge',
+    steps: [
+      { id: 'ingress', require: { capability: 'ingress' }, label: 'Ingress' },
+      { id: 'limiter', require: { capability: 'traffic-filter' }, label: 'Rate limiter' },
+      { id: 'service', require: { capability: 'compute' }, label: 'Payments API' },
+      {
+        id: 'idempotency',
+        require: { capability: 'cache' },
+        optional: true,
+        label: 'Idempotency key',
+        branch: {
+          probability: 'cacheHitRatio',
+          onHit: 'complete',
+          onMiss: [
+            { id: 'charge-write', require: { componentType: 'database' }, terminal: true, label: 'Write charge (new key)' },
+          ],
+        },
+      },
+      { id: 'charge-direct', require: { componentType: 'database' }, terminal: true, label: 'Write charge' },
+    ],
+  },
+];
+
+/** Floors for the phase-3 scenarios: calibrated 2026-11-10 (see product-directions.md §3.2b). */
+export const RIDE_DISPATCH_OBJECTIVES: Objectives = {
+  // Location pings are lossy by design; matches are not.
+  minCompletionRate: { locationUpdate: 0.9, match: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
+export const NOTIFICATION_FANOUT_OBJECTIVES: Objectives = {
+  minCompletionRate: { event: 0.95, status: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
+export const PAYMENT_WEBHOOK_OBJECTIVES: Objectives = {
+  minCompletionRate: { webhook: 0.95, charge: 0.95 },
+  maxViolationRate: 0,
+  noComponentFailures: true,
+};
+
 const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
+  'ride-dispatch': RIDE_DISPATCH_FLOWS,
+  'notification-fanout': NOTIFICATION_FANOUT_FLOWS,
+  'payment-webhook': PAYMENT_WEBHOOK_FLOWS,
   'chat-messaging': CHAT_MESSAGING_FLOWS,
   'ticket-booking': TICKET_BOOKING_FLOWS,
   'search-autocomplete': SEARCH_AUTOCOMPLETE_FLOWS,
@@ -440,6 +584,9 @@ const FLOWS_BY_SLUG: Record<string, FlowSpec[]> = {
 };
 
 const OBJECTIVES_BY_SLUG: Record<string, Objectives> = {
+  'ride-dispatch': RIDE_DISPATCH_OBJECTIVES,
+  'notification-fanout': NOTIFICATION_FANOUT_OBJECTIVES,
+  'payment-webhook': PAYMENT_WEBHOOK_OBJECTIVES,
   'chat-messaging': CHAT_MESSAGING_OBJECTIVES,
   'ticket-booking': TICKET_BOOKING_OBJECTIVES,
   'search-autocomplete': SEARCH_AUTOCOMPLETE_OBJECTIVES,

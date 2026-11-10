@@ -51,6 +51,7 @@ const FALLBACK_CAPABILITIES: Record<string, readonly Capability[]> = {
   'message-queue': ['queue'],
   kafka: ['queue'],
   'pub-sub': ['queue'],
+  pubsub: ['queue'],
 };
 
 /** Last-resort mapping for registry types unknown to the fallback table. */

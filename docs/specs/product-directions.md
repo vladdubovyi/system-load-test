@@ -299,6 +299,48 @@ Counts moved from 4 to 7 in `CatalogTests`, `landing.spec.ts` and
 picks the new entries up automatically. The three remaining scenarios
 (`ride-dispatch`, `notification-fanout`, `payment-webhook`) are phase 3.
 
+### 3.2b As built (phase 3, 2026-11-10)
+
+The last three scenarios, each on a depth mechanism, same checklist, same
+4-seed calibration (starter must lose with no failures or violations;
+reference must win):
+
+| Slug | Lesson as built | Starter completes | Reference completes | Floors |
+|---|---|---|---|---|
+| `ride-dispatch` | location pings land in the Redis position cache (optionally via stream + worker); matches read the cache and fall back to the NoSQL trip store. **Traffic phases**: 220 → ramp to 480 at t = 22 s → 300 at t = 38 s. Reference: auto-scaled dispatch API. | 0.52–0.65 (both kinds) | 1.00 | 0.90 / 0.95 — pings are lossy by design, matches are not |
+| `notification-fanout` | event → Kafka log (required) → delivery worker (required) → Pub/Sub channel; status reads cached over NoSQL. **Scripted drill**: the worker at half capacity from t = 15 s for 12 s. Reference: auto-scaled API and worker **plus a second worker on the same log**. `pubsub` joined the mocked catalog. | event 0.80–0.89, status 0.90–0.95 | 1.00 | 0.95 / 0.95 |
+| `payment-webhook` | every request through the rate limiter (skipping it is a violation); webhooks settle via queue + worker into the relational ledger, charges check an idempotency cache first. **Scripted drill**: one ledger node at half capacity from t = 20 s for 10 s. Reference: auto-scaled API and worker, ledger split across two replicated, sharded database nodes. | 0.68–0.82 (both kinds) | 1.00 | 0.95 / 0.95 |
+
+Two calibration lessons worth keeping:
+
+- **A buffered `capacity` drill is invisible to the numbers.** Payment
+  webhooks were first authored at 180 rps with 3.5× storms; measured
+  with and without the drill, the starter's completion was identical to
+  three decimals — a 500-deep queue plus the drain period absorbs a
+  10-second half-capacity ledger entirely, and the starter's fate hinged
+  on whether a storm happened early (it *won* on seed 1). The retune makes
+  the single API the starter's steady bottleneck (240 rps, 2.0× storms,
+  chance 0.06) so it loses decisively on every seed, and the drill's role
+  is pedagogical: it shows in the HUD and the report, and it is the thing
+  the reference's second ledger node is for.
+- **Redundancy cannot absorb a `shutdown` drill**, because routing picks
+  uniformly among *usable* belts and a shut-down target is not `failed` —
+  half the traffic still goes to it and dies on arrival. Both built-in
+  drills therefore use `capacity`, where the degraded target keeps working
+  and a twin takes the slack. A §3.3 refinement for D5: exclude targets at
+  zero capacity from "usable".
+
+Counts moved from 7 to 10 (`CatalogTests`, `real-api.spec.ts`, README,
+landing copy). Tests: `e2e/scenario-pack.spec.ts` (3: the rush-hour phases
+in the Traffic panel and the peak RPS they produce; the worker drill firing
+on schedule with its banner, report section and objective row; the ledger
+drill in the report and a lint-then-"Architecture failed" run without the
+rate limiter), the generic per-scenario loop ×3, and the backend catalog and
+floor rows. The `'pub-sub'` key in `capabilities.ts`' fallback map was dead
+(the type is `pubsub`); the correct key is added beside it.
+
+**D2 is complete.**
+
 ### 3.3 Scripted failure phases
 
 `scenario-types.ts` already declares `failureScenarios?: FailureScenario[]`

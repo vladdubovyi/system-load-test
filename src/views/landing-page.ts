@@ -37,7 +37,7 @@ export function renderLandingPage(): string {
         <section class="landing-features">
           <article class="feature-card">
             <h3>Interview-ready challenges</h3>
-            <p>URL shortener, feeds, file storage, rate limiting, chat, ticket booking, search autocomplete — each with requirements, required request flows, and a hands-on sandbox.</p>
+            <p>URL shortener, feeds, file storage, rate limiting, chat, ticket booking, search autocomplete, ride dispatch, notification fan-out, payment webhooks — each with requirements, required request flows, scripted drills, and a hands-on sandbox.</p>
           </article>
           <article class="feature-card">
             <h3>See traffic, not just boxes</h3>

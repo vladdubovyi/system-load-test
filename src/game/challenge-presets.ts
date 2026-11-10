@@ -182,6 +182,76 @@ const CHALLENGE_PRESETS: Record<string, PresetBlueprint> = {
       { from: 'sa-worker:out', to: 'sa-search:in' },
     ],
   },
+  'ride-dispatch': {
+    id: 'ride-dispatch-starter',
+    name: 'Ride dispatch starter',
+    description: 'Dispatch API writing positions to a hot cache and matching against the trip store.',
+    components: [
+      component('rd-lb', 'load-balancer', 520, 280),
+      component('rd-api', 'backend-service', 760, 280),
+      component('rd-redis', 'redis', 1000, 180),
+      component('rd-trips', 'nosql-database', 1000, 380),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'rd-lb:in' },
+      { from: 'rd-lb:out', to: 'rd-api:in' },
+      { from: 'rd-api:out', to: 'rd-redis:in' },
+      { from: 'rd-api:out', to: 'rd-trips:in' },
+      // Nearby-driver cache misses chain onward from Redis to the trip store.
+      { from: 'rd-redis:out', to: 'rd-trips:in' },
+    ],
+  },
+  'notification-fanout': {
+    id: 'notification-fanout-starter',
+    name: 'Notification fan-out starter',
+    description: 'Notification API logging events to Kafka for one delivery worker, with a cached status store.',
+    components: [
+      component('nf-lb', 'load-balancer', 500, 280),
+      component('nf-api', 'backend-service', 720, 280),
+      component('nf-log', 'kafka', 940, 180),
+      component('nf-worker', 'worker-service', 1160, 180),
+      component('nf-channel', 'pubsub', 1380, 180),
+      component('nf-redis', 'redis', 940, 400),
+      component('nf-status', 'nosql-database', 1160, 400),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'nf-lb:in' },
+      { from: 'nf-lb:out', to: 'nf-api:in' },
+      { from: 'nf-api:out', to: 'nf-log:in' },
+      { from: 'nf-log:out', to: 'nf-worker:in' },
+      { from: 'nf-worker:out', to: 'nf-channel:in' },
+      { from: 'nf-api:out', to: 'nf-redis:in' },
+      { from: 'nf-api:out', to: 'nf-status:in' },
+      // Status-cache misses chain onward from Redis to the status store.
+      { from: 'nf-redis:out', to: 'nf-status:in' },
+    ],
+  },
+  'payment-webhook': {
+    id: 'payment-webhook-starter',
+    name: 'Payment webhooks starter',
+    description: 'Rate limiter in front of the payments API; settlement through a queue and worker into the ledger.',
+    components: [
+      component('pw-lb', 'load-balancer', 480, 280),
+      component('pw-limit', 'rate-limiter', 680, 280),
+      component('pw-api', 'backend-service', 900, 280),
+      component('pw-queue', 'message-queue', 1120, 160),
+      component('pw-worker', 'worker-service', 1340, 160),
+      component('pw-redis', 'redis', 1120, 400),
+      component('pw-ledger', 'database', 1340, 400),
+    ],
+    connections: [
+      { from: `${SOURCE_ID}:out`, to: 'pw-lb:in' },
+      { from: 'pw-lb:out', to: 'pw-limit:in' },
+      { from: 'pw-limit:out', to: 'pw-api:in' },
+      { from: 'pw-api:out', to: 'pw-queue:in' },
+      { from: 'pw-queue:out', to: 'pw-worker:in' },
+      { from: 'pw-worker:out', to: 'pw-ledger:in' },
+      { from: 'pw-api:out', to: 'pw-redis:in' },
+      { from: 'pw-api:out', to: 'pw-ledger:in' },
+      // Idempotency-cache misses chain onward from Redis to the ledger.
+      { from: 'pw-redis:out', to: 'pw-ledger:in' },
+    ],
+  },
 };
 
 /**
@@ -281,6 +351,36 @@ const CHALLENGE_REFERENCES: Record<string, ReferenceBlueprint> = {
     'search-autocomplete',
     'Starter topology with an auto-scaled suggest API and indexing worker.',
     { 'sa-api': COMPUTE, 'sa-worker': COMPUTE }
+  ),
+  'ride-dispatch': reference(
+    'ride-dispatch',
+    'Starter topology with an auto-scaled dispatch API for the rush hour; positions stay in Redis, matches fall back to a sharded-free NoSQL trip store.',
+    { 'rd-api': COMPUTE }
+  ),
+  'notification-fanout': reference(
+    'notification-fanout',
+    'Starter topology with auto-scaled API and delivery workers, plus a second worker consuming the same log — half a worker is not a lost delivery.',
+    { 'nf-api': COMPUTE, 'nf-worker': COMPUTE, 'nf-worker-2': COMPUTE },
+    {
+      components: [component('nf-worker-2', 'worker-service', 1160, 60)],
+      connections: [
+        { from: 'nf-log:out', to: 'nf-worker-2:in' },
+        { from: 'nf-worker-2:out', to: 'nf-channel:in' },
+      ],
+    }
+  ),
+  'payment-webhook': reference(
+    'payment-webhook',
+    'Starter topology with auto-scaled API and settlement worker, and the ledger split by merchant across two replicated, sharded database nodes — one degraded node is headroom, not an outage.',
+    { 'pw-api': COMPUTE, 'pw-worker': COMPUTE, 'pw-ledger': SQL, 'pw-ledger-2': SQL },
+    {
+      components: [component('pw-ledger-2', 'database', 1340, 520)],
+      connections: [
+        { from: 'pw-worker:out', to: 'pw-ledger-2:in' },
+        { from: 'pw-api:out', to: 'pw-ledger-2:in' },
+        { from: 'pw-redis:out', to: 'pw-ledger-2:in' },
+      ],
+    }
   ),
 };
 

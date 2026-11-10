@@ -43,7 +43,10 @@ test.describe('Live backend', () => {
       'chat-messaging',
       'dropbox',
       'instagram-feed',
+      'notification-fanout',
+      'payment-webhook',
       'rate-limiter',
+      'ride-dispatch',
       'search-autocomplete',
       'ticket-booking',
       'url-shortener',
@@ -54,7 +57,7 @@ test.describe('Live backend', () => {
     }
 
     await page.goto('/challenges');
-    await expect(page.locator('.challenge-list-item')).toHaveCount(7);
+    await expect(page.locator('.challenge-list-item')).toHaveCount(10);
   });
 
   test('component capabilities come from the API and keep Redis out of the write path', async ({ page, request }) => {
