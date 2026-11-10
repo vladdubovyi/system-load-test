@@ -1,6 +1,7 @@
 import type { ConveyorBelt, PlacedComponent } from './types';
 import type { FlowSpec, FlowStep, TagDefinition } from './flow-types';
 import { describeSelector, matchPendingStep, selectorMatches, validateFlows } from './flows';
+import { ruleIdForSelector } from './concepts';
 
 export interface LintOptions {
   /** Spawn weights; kinds with traffic but no flow are reported (flow-authoring §5). */
@@ -32,6 +33,8 @@ export interface FlowLintIssue {
   /** Components where the flow gets stuck (the lint frontier). */
   componentIds: string[];
   message: string;
+  /** Stable rule id; `conceptFor(ruleId)` attaches the concept card (product-directions §4.4). */
+  ruleId: string;
 }
 
 function componentOfPort(portId: string): string {
@@ -131,6 +134,7 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph, tags?: readonly TagDefiniti
         record(`stuck:${step.id}:${component.id}`, {
           stepId: step.id,
           componentIds: [component.id],
+          ruleId: ruleIdForSelector(step.require),
           message: `${spec.kind} requests need ${describeSelector(step.require, tags)} after "${component.label}", but ${connectedPhrase(graph, component)}.`,
         });
         return;
@@ -141,6 +145,7 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph, tags?: readonly TagDefiniti
     record(`end:${component.id}`, {
       stepId: null,
       componentIds: [component.id],
+      ruleId: 'flow-ended',
       message: `${spec.kind} requests run out of flow steps at "${component.label}" without completing.`,
     });
   };
@@ -158,6 +163,7 @@ function lintFlow(spec: FlowSpec, graph: BoardGraph, tags?: readonly TagDefiniti
       record(`arrive:${next?.id ?? 'end'}:${component.id}`, {
         stepId: next?.id ?? null,
         componentIds: [component.id],
+        ruleId: next ? ruleIdForSelector(next.require) : 'flow-ended',
         message: next
           ? `${spec.kind} requests need ${describeSelector(next.require, tags)} but arrive at "${component.label}" instead.`
           : `${spec.kind} requests arrive at "${component.label}" after their flow has ended.`,
@@ -215,6 +221,7 @@ export function lintBoard(
     stepId: null,
     componentIds: [],
     message,
+    ruleId: 'invalid-flow',
   }));
 
   // Traffic the engine cannot route: there is no heuristic fallback any
@@ -227,6 +234,7 @@ export function lintBoard(
         stepId: null,
         componentIds: [],
         message: `Request kind "${kind}" has no flow — every ${kind} request will fail as a flow violation. Add a flow in the scenario editor or remove the kind from the traffic mix.`,
+        ruleId: 'no-flow',
       });
     }
   }
@@ -239,6 +247,7 @@ export function lintBoard(
       componentIds: [],
       message:
         'Nothing is connected to Incoming Requests — wire the source to a load balancer or API gateway.',
+      ruleId: 'no-entry',
     });
     return issues;
   }

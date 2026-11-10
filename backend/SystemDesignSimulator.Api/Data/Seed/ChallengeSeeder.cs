@@ -651,6 +651,13 @@ public static class ChallengeSeeder
                 // slug the frontend's legacy fallback keyed on (§6.1).
                 characteristics = new { celebrityShare = 0.82, hotDataRatio = 0.97 },
                 // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "reads-first", after = "always", text = "Reads dwarf writes here. Put the cache on the read path and let misses chain on to the database." },
+                    new { id = "which-queue", after = "loss", text = "Watch which queue fills first under a spike — the service tier or the database — and scale the one that saturates." },
+                    new { id = "persist", after = "violation", text = "Creates must reach a durable store. A cache can be warmed on the way, but it cannot persist anything." },
+                },
                 flows = FlowDefinitions.Flows("url-shortener"),
                 objectives = FlowDefinitions.ObjectivesFor("url-shortener")
             }),
@@ -714,6 +721,13 @@ public static class ChallengeSeeder
                 requestTypes = new { upload = 0.2, download = 0.5, metadata = 0.3 },
                 characteristics = new { fileSize = "10MB-500MB", avgFileSize = 50 },
                 // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "split-paths", after = "always", text = "Keep metadata (relational) and blobs (object storage) on separate paths — they scale differently." },
+                    new { id = "absorb-uploads", after = "loss", text = "Uploads pile up on the API during bursts. Let the queue and worker absorb them and drain at their own pace." },
+                    new { id = "blob-home", after = "violation", text = "Blobs end in object storage and metadata in the database. A worker that writes nowhere finishes nothing." },
+                },
                 flows = FlowDefinitions.Flows("dropbox"),
                 objectives = FlowDefinitions.ObjectivesFor("dropbox")
             }),
@@ -780,6 +794,13 @@ public static class ChallengeSeeder
                 requestTypes = new { feedLoad = 0.85, post = 0.05, like = 0.10 },
                 characteristics = new { hotDataRatio = 0.9 },
                 // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "edge-first", after = "always", text = "Feed loads should mostly be served from the edge. Size the service tier for what the CDN misses, not for everything." },
+                    new { id = "feed-service", after = "loss", text = "The feed service is what spikes overload. Give it headroom with auto-scaling before adding anything else." },
+                    new { id = "writes-durable", after = "violation", text = "Posts and likes must land in a durable store, not in a cache." },
+                },
                 flows = FlowDefinitions.Flows("instagram-feed"),
                 objectives = FlowDefinitions.ObjectivesFor("instagram-feed")
             }),
@@ -843,6 +864,13 @@ public static class ChallengeSeeder
                 pattern = "spike",
                 requestTypes = new { send = 0.4, fetch = 0.6 },
                 characteristics = new { celebrityShare = 0.3, hotDataRatio = 0.9 },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "persist-sends", after = "always", text = "Sends must persist; fan-out can be asynchronous through a queue and a worker." },
+                    new { id = "shard-store", after = "loss", text = "One NoSQL node cannot absorb 3× send bursts. Shard the message store across two nodes." },
+                    new { id = "cache-not-store", after = "violation", text = "A message that ends in the cache was never persisted." },
+                },
                 flows = FlowDefinitions.Flows("chat-messaging"),
                 objectives = FlowDefinitions.ObjectivesFor("chat-messaging")
             }),
@@ -901,6 +929,13 @@ public static class ChallengeSeeder
                     new { atSeconds = 25, baseRps = 550 },
                     new { atSeconds = 40, baseRps = 250 },
                 },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "lock-row", after = "always", text = "Browsing may be cached; a reservation must lock a row in the relational database." },
+                    new { id = "before-the-rush", after = "loss", text = "The on-sale ramp nearly quadruples load at 25 seconds. Scale the API before it, not after." },
+                    new { id = "oversell", after = "violation", text = "A reservation that lands anywhere but the database can oversell the seat." },
+                },
                 flows = FlowDefinitions.Flows("ticket-booking"),
                 objectives = FlowDefinitions.ObjectivesFor("ticket-booking")
             }),
@@ -951,6 +986,13 @@ public static class ChallengeSeeder
                 pattern = "spike",
                 requestTypes = new { suggest = 0.9, index = 0.1 },
                 characteristics = new { celebrityShare = 0.2, hotDataRatio = 0.95 },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "prefix-cache", after = "always", text = "Keystrokes hit the prefix cache first; the index answers the misses." },
+                    new { id = "suggest-tier", after = "loss", text = "Scale the suggest tier — keystroke bursts are 2.5× and latency is the product." },
+                    new { id = "index-path", after = "violation", text = "Index updates must reach the search index. A queue with no worker behind it is a dead end." },
+                },
                 flows = FlowDefinitions.Flows("search-autocomplete"),
                 objectives = FlowDefinitions.ObjectivesFor("search-autocomplete")
             }),
@@ -1008,6 +1050,13 @@ public static class ChallengeSeeder
                     new { atSeconds = 12, baseRps = 220 },
                     new { atSeconds = 22, baseRps = 480 },
                     new { atSeconds = 38, baseRps = 300 },
+                },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "two-paths", after = "always", text = "Location pings are lossy telemetry; matches are not. Design the two paths differently." },
+                    new { id = "rush-hour", after = "loss", text = "Rush hour arrives at 22 seconds and one dispatch API cannot carry 480 rps. Auto-scale it." },
+                    new { id = "positions-cache", after = "violation", text = "Positions live in the cache; matches read it and fall back to the trip store." },
                 },
                 flows = FlowDefinitions.Flows("ride-dispatch"),
                 objectives = FlowDefinitions.ObjectivesFor("ride-dispatch")
@@ -1072,6 +1121,13 @@ public static class ChallengeSeeder
                         durationSeconds = 12,
                     },
                 },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "log-first", after = "always", text = "Log every event to the queue before any worker touches it." },
+                    new { id = "second-worker", after = "loss", text = "A half-capacity worker at 15 seconds stalls delivery. A second worker on the same log keeps it flowing." },
+                    new { id = "buffer-contract", after = "violation", text = "Skipping the log is a violation: the buffer is the contract, not an optimization." },
+                },
                 flows = FlowDefinitions.Flows("notification-fanout"),
                 objectives = FlowDefinitions.ObjectivesFor("notification-fanout")
             }),
@@ -1135,6 +1191,13 @@ public static class ChallengeSeeder
                         durationSeconds = 10,
                     },
                 },
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "front-door", after = "always", text = "The rate limiter is the front door for every request — webhooks and charges alike." },
+                    new { id = "ledger-headroom", after = "loss", text = "The ledger is the bottleneck. Split it across two replicated, sharded nodes so a degraded one is headroom, not an outage." },
+                    new { id = "ledger-home", after = "violation", text = "Webhooks and charges end in the relational ledger — never in a cache or a queue." },
+                },
                 flows = FlowDefinitions.Flows("payment-webhook"),
                 objectives = FlowDefinitions.ObjectivesFor("payment-webhook")
             }),
@@ -1188,6 +1251,13 @@ public static class ChallengeSeeder
                 requestTypes = new { check = 1.0 },
                 characteristics = new { },
                 // Flow correctness (docs/specs/flow-authoring.md §2.1)
+                // Hint ladder (product-directions.md §4.4), revealed one rung at a time on the report.
+                hints = new object[]
+                {
+                    new { id = "limiter-first", after = "always", text = "Every check passes the limiter first; the API comes after it, never beside it." },
+                    new { id = "second-counter", after = "loss", text = "One Redis takes every counter lookup during a 5× spike. A second counter cache halves the pressure." },
+                    new { id = "no-bypass", after = "violation", text = "A check that skips the limiter is a violation — the limiter is the whole lesson." },
+                },
                 flows = FlowDefinitions.Flows("rate-limiter"),
                 objectives = FlowDefinitions.ObjectivesFor("rate-limiter")
             }),

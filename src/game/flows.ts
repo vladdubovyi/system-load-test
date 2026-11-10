@@ -1,14 +1,7 @@
 import { getCapabilities } from './capabilities';
 import type { Capability } from './capabilities';
 import { getComponentDef } from './component-catalog';
-import type {
-  FlowSpec,
-  FlowStep,
-  NodeSelector,
-  Objectives,
-  ScenarioDocument,
-  TagDefinition,
-} from './flow-types';
+import type { FlowSpec, FlowStep, NodeSelector, Objectives, ScenarioDocument, TagDefinition, ScenarioHint } from './flow-types';
 import { isCapability } from './capabilities';
 
 /**
@@ -284,6 +277,31 @@ export function validateTrafficPhases(phases: ScenarioDocument['trafficPhases'])
   return problems;
 }
 
+/** Hint ladder (product-directions.md §4.4): ids, a known `after`, non-empty text. */
+export function validateHints(hints: unknown): string[] {
+  if (hints === undefined) return [];
+  if (!Array.isArray(hints)) return ['"hints" must be an array of { id, after, text }.'];
+  const problems: string[] = [];
+  const ids = new Set<string>();
+  hints.forEach((hint, index) => {
+    const h = hint as Partial<ScenarioHint> | null;
+    if (!h || typeof h !== 'object') {
+      problems.push(`Hint ${index + 1} must be an object with id, after and text.`);
+      return;
+    }
+    if (typeof h.id !== 'string' || h.id.length === 0) problems.push(`Hint ${index + 1} needs a non-empty "id".`);
+    else if (ids.has(h.id)) problems.push(`Hint id "${h.id}" is used more than once.`);
+    else ids.add(h.id);
+    if (h.after !== 'always' && h.after !== 'loss' && h.after !== 'violation') {
+      problems.push(`Hint "${h.id ?? index + 1}": "after" must be "always", "loss" or "violation".`);
+    }
+    if (typeof h.text !== 'string' || h.text.trim().length === 0 || h.text.length > 500) {
+      problems.push(`Hint "${h.id ?? index + 1}" needs "text" of 1–500 characters.`);
+    }
+  });
+  return problems;
+}
+
 export function validateScenarioDocument(doc: ScenarioDocument): string[] {
   const problems: string[] = [];
   const flows = doc.flows ?? [];
@@ -320,6 +338,7 @@ export function validateScenarioDocument(doc: ScenarioDocument): string[] {
   }
   problems.push(...validateFailureScenarios(doc.failureScenarios));
   problems.push(...validateTrafficPhases(doc.trafficPhases));
+  problems.push(...validateHints(doc.hints));
 
   if (
     objectives.maxViolationRate !== undefined &&

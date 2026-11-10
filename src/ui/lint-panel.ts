@@ -1,4 +1,5 @@
 import type { FlowLintIssue } from '../game/flow-validator';
+import { conceptFor } from '../game/concepts';
 
 /**
  * Floating panel listing design-check warnings from the flow lint. Shown when
@@ -19,6 +20,7 @@ function escapeHtml(value: string): string {
 
 export function showLintPanel(host: HTMLElement, issues: FlowLintIssue[]): void {
   hideLintPanel();
+  shownRules.clear();
   if (issues.length === 0) return;
 
   panel = document.createElement('aside');
@@ -38,6 +40,7 @@ export function showLintPanel(host: HTMLElement, issues: FlowLintIssue[]): void 
         <li class="lint-issue">
           ${issue.kind ? `<span class="lint-kind">${escapeHtml(issue.kind)}</span>` : ''}
           <span class="lint-message">${escapeHtml(issue.message)}</span>
+          ${conceptHtml(issue)}
         </li>`
         )
         .join('')}
@@ -48,6 +51,15 @@ export function showLintPanel(host: HTMLElement, issues: FlowLintIssue[]): void 
   `;
   panel.querySelector('.lint-close')?.addEventListener('click', hideLintPanel);
   host.appendChild(panel);
+}
+
+/** The concept card behind a rule (product-directions §4.4), once per distinct rule in the panel. */
+const shownRules = new Set<string>();
+function conceptHtml(issue: FlowLintIssue): string {
+  const card = conceptFor(issue.ruleId);
+  if (!card || shownRules.has(card.id)) return '';
+  shownRules.add(card.id);
+  return `<aside class="lint-concept"><span class="lint-concept-title">${escapeHtml(card.title)}</span> <span class="lint-concept-body">${escapeHtml(card.body)}</span></aside>`;
 }
 
 export function hideLintPanel(): void {

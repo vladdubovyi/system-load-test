@@ -1,5 +1,5 @@
 import type { Challenge, FailureScenario, ScoringPriorities, TrafficPhase, TrafficProfile } from './scenario-types';
-import type { FlowSpec, Objectives, ScenarioDocument, TagDefinition } from './flow-types';
+import type { FlowSpec, Objectives, ScenarioDocument, TagDefinition, ScenarioHint } from './flow-types';
 import { getPresetFlows, getPresetObjectives } from './flow-presets';
 import { validateFlows } from './flows';
 import { SCENARIO } from './types';
@@ -30,6 +30,8 @@ export interface RuntimeScenario {
   tags?: TagDefinition[];
   /** Scripted failure phases (product-directions.md §3.3). */
   failureScenarios?: FailureScenario[];
+  /** Hint ladder (product-directions.md §4.4). */
+  hints?: ScenarioHint[];
   /** Multi-phase traffic timeline (product-directions.md §3.4). */
   trafficPhases?: TrafficPhase[];
 }
@@ -117,6 +119,7 @@ export function getActiveScenarioDocument(): ScenarioDocument {
   };
   if (scenario.failureScenarios) doc.failureScenarios = structuredClone(scenario.failureScenarios);
   if (scenario.trafficPhases) doc.trafficPhases = structuredClone(scenario.trafficPhases);
+  if (scenario.hints) doc.hints = structuredClone(scenario.hints);
   return doc;
 }
 
@@ -156,6 +159,7 @@ function applyScenarioOverride(base: RuntimeScenario, doc: ScenarioDocument): Ru
     tags: doc.tags ?? base.tags,
     failureScenarios: doc.failureScenarios ?? base.failureScenarios,
     trafficPhases: doc.trafficPhases ?? base.trafficPhases,
+    hints: doc.hints ?? base.hints,
   };
 }
 
@@ -228,6 +232,7 @@ function buildScenarioFromChallenge(challenge: Challenge): RuntimeScenario {
     scoringPriorities: challenge.scenario.scoringPriorities,
     tags: challenge.scenario.tags,
     failureScenarios: challenge.scenario.failureScenarios,
+    hints: challenge.scenario.hints,
     trafficPhases: traffic.phases,
     celebrityShare:
       typeof characteristics.celebrityShare === 'number'

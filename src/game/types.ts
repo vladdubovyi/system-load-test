@@ -93,6 +93,8 @@ export interface RequestEvent {
   beltId?: string;
   /** Human readable detail such as the next hop or a drop reason. */
   detail?: string;
+  /** For `violated` events: the rule the request tripped (product-directions §4.4). */
+  ruleId?: string;
 }
 
 export interface Request {

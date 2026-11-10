@@ -1,4 +1,4 @@
-import type { FlowSpec, NodeSelector, Objectives, TagDefinition } from './flow-types';
+import type { FlowSpec, NodeSelector, Objectives, TagDefinition, ScenarioHint } from './flow-types';
 
 export interface ScenarioDefinition {
   id: string;
@@ -11,6 +11,8 @@ export interface ScenarioDefinition {
   allowedComponents: string[];
   scoringPriorities: ScoringPriorities;
   failureScenarios?: FailureScenario[];
+  /** Hint ladder (product-directions.md §4.4). */
+  hints?: ScenarioHint[];
   referenceArchitecture?: ReferenceArchitecture;
   /** Required request flows (docs/specs/flow-correctness.md); falls back to flow-presets by slug. */
   flows?: FlowSpec[];

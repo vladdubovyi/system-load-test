@@ -1549,6 +1549,8 @@ function presentReport(report: SimulationReport): void {
       onExportRun: () => exportSnapshotFile(runFile),
       examplesFor: exampleRequestsFor,
       hideFlowDetails: flowDetailsHidden(),
+      // §4.4: the ladder paraphrases flows — host-only in interview mode.
+      hints: flowDetailsHidden() ? [] : (getActiveScenario().hints ?? []),
       pinning: {
         pinned: pinnedRun ? { report: pinnedRun.report, seed: pinnedRun.seed } : null,
         onPin: () => {

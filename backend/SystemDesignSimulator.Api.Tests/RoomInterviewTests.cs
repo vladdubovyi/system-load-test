@@ -119,6 +119,8 @@ public class RoomInterviewTests : IClassFixture<ApiFactory>, IAsyncLifetime
         Assert.False(challenge.Value.TryGetProperty("overviewContent", out _));
         Assert.False(Has(config, "flows"));
         Assert.False(Has(config, "objectives"));
+        // §4.4: hints paraphrase flows and are host-only.
+        Assert.False(Has(config, "hints"));
         Assert.False(challenge.Value.TryGetProperty("videoUrl", out _));
         Assert.False(scenario.TryGetProperty("scoringWeights", out _));
 

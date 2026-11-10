@@ -48,6 +48,7 @@ import {
 } from './component-taxonomy';
 import { getCapabilities } from './capabilities';
 import { allSteps, describeSelector, matchPendingStep, selectorMatches } from './flows';
+import { ruleIdForSelector } from './concepts';
 import { baseRpsAt, requestTypesAt, sortPhases } from './traffic-phases';
 import type { TrafficPhase } from './scenario-types';
 import type { ScriptedFailureState } from './types';
@@ -1328,7 +1329,9 @@ export class SimulationEngine {
     step: FlowStep | null,
     reason: string
   ): void {
-    this.logEvent(request, this.componentEvent('violated', component, { detail: reason }));
+    const violation = this.componentEvent('violated', component, { detail: reason });
+    violation.ruleId = ruleIdForSelector(step ? step.require : null);
+    this.logEvent(request, violation);
     this.finishRequest(request, 'violated');
     this.totalViolated += 1;
     this.bump(this.violatedByKind, request.kind);

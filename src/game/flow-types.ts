@@ -42,6 +42,15 @@ export interface ScenarioDocument {
   failureScenarios?: FailureScenario[];
   /** Multi-phase traffic timeline (product-directions.md §3.4). */
   trafficPhases?: TrafficPhase[];
+  /** Hint ladder, revealed one at a time on the report (product-directions.md §4.4). */
+  hints?: ScenarioHint[];
+}
+
+/** One rung of a scenario's hint ladder; `after` says when it applies. */
+export interface ScenarioHint {
+  id: string;
+  after: 'always' | 'loss' | 'violation';
+  text: string;
 }
 
 export interface FlowBranch {

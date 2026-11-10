@@ -33,7 +33,9 @@ test.describe('Scenario pack: ride dispatch, notification fan-out, payment webho
     await sandbox.goto('notification-fanout');
     await expect(sandbox.title).toHaveText('Notification Fan-out');
 
-    await sandbox.setSpeed(20);
+    // Speed 5: the drill fires at t = 15 s (3 s of wall time) and lasts 12 s
+    // (2.4 s) — long enough for the banner to be observed reliably.
+    await sandbox.setSpeed(5);
     await sandbox.playButton.click();
     const banner = page.locator('#scripted-banner');
     await expect(banner).toBeVisible({ timeout: 20_000 });

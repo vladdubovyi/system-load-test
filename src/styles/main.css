@@ -3161,3 +3161,34 @@ body.sandbox-mode #app {
 .compare-board-changes { margin-top: 12px; }
 .compare-board-changes h4 { margin: 0 0 6px; font-size: 0.9rem; }
 .compare-board-changes ul { margin: 0; padding-left: 18px; }
+
+/* ── Concept cards and hint ladder (product-directions.md §4.4) ─────────── */
+.lint-concept,
+.why-concept {
+  display: block;
+  margin-top: 6px;
+  padding: 6px 10px;
+  border-left: 3px solid var(--accent, #38bdf8);
+  background: var(--surface-2, rgba(148, 163, 184, 0.1));
+  border-radius: 4px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.lint-concept-title,
+.why-concept-title {
+  font-weight: 700;
+  margin-right: 4px;
+}
+.report-hints .report-hint-count {
+  margin-left: 8px;
+  font-size: 0.8rem;
+  font-weight: 400;
+  opacity: 0.75;
+}
+.report-hint-list {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+.report-hint {
+  margin: 4px 0;
+}

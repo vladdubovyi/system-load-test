@@ -41,6 +41,7 @@ export function mapChallengeFromApi(item: any): Challenge {
       objectives: config.objectives == null ? undefined : stripNulls(config.objectives),
       tags: config.tags == null ? undefined : stripNulls(config.tags),
       failureScenarios: config.failureScenarios == null ? undefined : stripNulls(config.failureScenarios),
+      hints: config.hints == null ? undefined : stripNulls(config.hints),
     },
   };
 }

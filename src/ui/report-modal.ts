@@ -1,6 +1,8 @@
 import type { ObjectiveResult, Request, SimulationReport } from '../game/types';
 import { describeRequestState, renderRequestTimeline } from './request-inspector';
 import { compareReports, type RunComparison } from '../game/run-compare';
+import { applicableHints, conceptFor } from '../game/concepts';
+import type { ScenarioHint } from '../game/flow-types';
 import { formatCost, formatSeconds } from '../game/report';
 import { downloadReportPdf, type ReportPdfExtras } from '../game/report-pdf';
 import { getActiveScenario } from '../game/scenario-runtime';
@@ -230,6 +232,7 @@ export function renderReportModal(report: SimulationReport): string {
           </section>
 
           ${objectivesSection(report)}
+          <div id="report-hints-slot"></div>
           ${scriptedSection(report)}
           ${flowStatsSection(report)}
 
@@ -328,6 +331,8 @@ export interface ReportModalOptions {
   examplesFor?: (objective: ObjectiveResult) => Request[];
   /** Interview participants: example traces render, flow reasons do not (§6.2). */
   hideFlowDetails?: boolean;
+  /** The scenario's hint ladder (§4.4); the caller withholds it from interview participants. */
+  hints?: ScenarioHint[];
   /** Same-seed A/B comparison (§4.3): the pinned run A, held in the tab by the caller. */
   pinning?: {
     pinned: PinnedRun | null;
@@ -363,6 +368,7 @@ export function mountReportModal(
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
   bindPinning(report, options.pinning);
+  mountHints(report, options.hints ?? []);
   document.querySelectorAll<HTMLButtonElement>('#report-overlay .objective-why').forEach((button) => {
     button.addEventListener('click', () => {
       const id = button.dataset.why ?? '';
@@ -449,9 +455,11 @@ function renderWhyDrawer(objective: ObjectiveResult, examples: Request[], hideFl
         </article>`;
     })
     .join('');
+  const card = hideFlowDetails ? null : conceptFor(conceptRuleFor(objective, shown));
   return `
     <li class="objective-why-drawer" data-for="${escapeHtml(objective.id)}">
       <p class="why-rule">${escapeHtml(ruleFor(objective, shown))}</p>
+      ${card ? `<aside class="why-concept"><span class="why-concept-title">${escapeHtml(card.title)}</span> <span class="why-concept-body">${escapeHtml(card.body)}</span></aside>` : ''}
       ${shown.length > 0 ? `<p class="why-intro">${shown.length === 1 ? 'An example request' : `${shown.length} example requests`} from this run:</p><div class="why-examples">${items}</div>` : '<p class="why-intro">No example requests were kept for this outcome.</p>'}
     </li>`;
 }
@@ -573,4 +581,49 @@ function renderComparePanel(cmp: RunComparison, boardChanges: string[]): string 
         ${changes}
       </div>
     </section>`;
+}
+
+/** Which concept card explains this objective's failure (product-directions §4.4). */
+function conceptRuleFor(objective: ObjectiveResult, examples: Request[]): string {
+  if (objective.id === 'failures') return 'failure:overload';
+  if (objective.id === 'scripted-failures') return 'scripted:collateral';
+  const first = examples[0];
+  if (first?.state === 'violated' || objective.id === 'violations') {
+    const violated = (first ?? examples.find((r) => r.state === 'violated'))?.events.find((e) => e.kind === 'violated');
+    return violated?.ruleId ?? 'flow-ended';
+  }
+  if (first?.state === 'dropped') return 'drop:queue-full';
+  return 'inflight:slow';
+}
+
+// ── Hint ladder (product-directions.md §4.4) ───────────────────────────────
+
+function mountHints(report: SimulationReport, hints: ScenarioHint[]): void {
+  const slot = document.getElementById('report-hints-slot');
+  if (!slot) return;
+  const ladder = applicableHints(hints, { lost: report.outcome === 'lost', violated: report.totalViolated > 0 });
+  if (ladder.length === 0) {
+    slot.remove();
+    return;
+  }
+  let shown = 0;
+  slot.outerHTML = `
+    <section class="report-section report-hints" id="report-hints">
+      <h3>Hints <span class="report-hint-count" id="report-hint-count">0 of ${ladder.length} shown</span></h3>
+      <ol class="report-hint-list" id="report-hint-list"></ol>
+      <button class="btn btn-secondary" id="report-hint-next" type="button">💡 Show a hint</button>
+    </section>`;
+  const list = document.getElementById('report-hint-list');
+  const count = document.getElementById('report-hint-count');
+  const next = document.getElementById('report-hint-next') as HTMLButtonElement | null;
+  next?.addEventListener('click', () => {
+    if (shown >= ladder.length) return;
+    const hint = ladder[shown++];
+    list?.insertAdjacentHTML('beforeend', `<li class="report-hint" data-hint="${escapeHtml(hint.id)}">${escapeHtml(hint.text)}</li>`);
+    if (count) count.textContent = `Hint ${shown} of ${ladder.length}`;
+    if (next && shown >= ladder.length) {
+      next.disabled = true;
+      next.textContent = 'No more hints';
+    }
+  });
 }

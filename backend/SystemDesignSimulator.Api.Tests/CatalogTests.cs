@@ -49,6 +49,25 @@ public class CatalogTests : IClassFixture<ApiFactory>
     }
 
     [Fact]
+    public async Task Every_seeded_challenge_ships_a_hint_ladder()
+    {
+        // product-directions.md §4.4: hints are authored content, at least two per scenario.
+        using var client = _factory.CreateClient();
+        var challenges = await client.GetFromJsonAsync<JsonElement>("/api/challenges");
+        foreach (var challenge in challenges.EnumerateArray())
+        {
+            var config = challenge.GetProperty("scenario").GetProperty("scenarioConfig");
+            Assert.True(config.TryGetProperty("hints", out var hints), $"{challenge.GetProperty("slug")} has no hints");
+            Assert.True(hints.GetArrayLength() >= 2, $"{challenge.GetProperty("slug")} has fewer than two hints");
+            foreach (var hint in hints.EnumerateArray())
+            {
+                Assert.Contains(hint.GetProperty("after").GetString(), new[] { "always", "loss", "violation" });
+                Assert.False(string.IsNullOrWhiteSpace(hint.GetProperty("text").GetString()));
+            }
+        }
+    }
+
+    [Fact]
     public async Task The_challenge_list_carries_flows_too()
     {
         using var client = _factory.CreateClient();

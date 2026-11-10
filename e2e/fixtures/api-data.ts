@@ -123,6 +123,11 @@ export const CHALLENGES: ApiChallenge[] = [
         // fallback) so interview-mode projections, which withhold the slug,
         // keep the same cache hit ratio. Mirrors ChallengeSeeder.cs.
         characteristics: { celebrityShare: 0.82, hotDataRatio: 0.97 },
+        hints: [
+          { id: 'reads-first', after: 'always', text: 'Reads dwarf writes here. Put the cache on the read path and let misses chain on to the database.' },
+          { id: 'which-queue', after: 'loss', text: 'Watch which queue fills first under a spike — the service tier or the database — and scale the one that saturates.' },
+          { id: 'persist', after: 'violation', text: 'Creates must reach a durable store. A cache can be warmed on the way, but it cannot persist anything.' },
+        ],
       },
       scoringWeights: { availability: 40, latency: 30, scalability: 20, cost: 10 },
     },
@@ -150,6 +155,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'gradual',
         requestTypes: { upload: 0.2, download: 0.5, metadata: 0.3 },
         characteristics: { fileSize: '10MB-500MB', avgFileSize: 50 },
+        hints: [
+          { id: 'split-paths', after: 'always', text: 'Keep metadata (relational) and blobs (object storage) on separate paths — they scale differently.' },
+          { id: 'absorb-uploads', after: 'loss', text: 'Uploads pile up on the API during bursts. Let the queue and worker absorb them and drain at their own pace.' },
+          { id: 'blob-home', after: 'violation', text: 'Blobs end in object storage and metadata in the database. A worker that writes nowhere finishes nothing.' },
+        ],
       },
       scoringWeights: { durability: 35, storageEfficiency: 25, bandwidth: 20, cost: 20 },
     },
@@ -187,6 +197,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { feedLoad: 0.85, post: 0.05, like: 0.1 },
         characteristics: { hotDataRatio: 0.9 },
+        hints: [
+          { id: 'edge-first', after: 'always', text: 'Feed loads should mostly be served from the edge. Size the service tier for what the CDN misses, not for everything.' },
+          { id: 'feed-service', after: 'loss', text: 'The feed service is what spikes overload. Give it headroom with auto-scaling before adding anything else.' },
+          { id: 'writes-durable', after: 'violation', text: 'Posts and likes must land in a durable store, not in a cache.' },
+        ],
       },
       scoringWeights: { latency: 35, availability: 30, throughput: 25, cost: 10 },
     },
@@ -224,6 +239,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { check: 1.0 },
         characteristics: {},
+        hints: [
+          { id: 'limiter-first', after: 'always', text: 'Every check passes the limiter first; the API comes after it, never beside it.' },
+          { id: 'second-counter', after: 'loss', text: 'One Redis takes every counter lookup during a 5× spike. A second counter cache halves the pressure.' },
+          { id: 'no-bypass', after: 'violation', text: 'A check that skips the limiter is a violation — the limiter is the whole lesson.' },
+        ],
       },
       scoringWeights: { latency: 40, accuracy: 30, throughput: 20, cost: 10 },
     },
@@ -255,6 +275,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { send: 0.4, fetch: 0.6 },
         characteristics: { celebrityShare: 0.3, hotDataRatio: 0.9 },
+        hints: [
+          { id: 'persist-sends', after: 'always', text: 'Sends must persist; fan-out can be asynchronous through a queue and a worker.' },
+          { id: 'shard-store', after: 'loss', text: 'One NoSQL node cannot absorb 3× send bursts. Shard the message store across two nodes.' },
+          { id: 'cache-not-store', after: 'violation', text: 'A message that ends in the cache was never persisted.' },
+        ],
       },
       scoringWeights: { availability: 35, latency: 35, scalability: 20, cost: 10 },
     },
@@ -296,6 +321,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { browse: 0.8, reserve: 0.2 },
         characteristics: { celebrityShare: 0.5, hotDataRatio: 0.85 },
+        hints: [
+          { id: 'lock-row', after: 'always', text: 'Browsing may be cached; a reservation must lock a row in the relational database.' },
+          { id: 'before-the-rush', after: 'loss', text: 'The on-sale ramp nearly quadruples load at 25 seconds. Scale the API before it, not after.' },
+          { id: 'oversell', after: 'violation', text: 'A reservation that lands anywhere but the database can oversell the seat.' },
+        ],
         trafficPhases: [
           { atSeconds: 0, baseRps: 150 },
           { atSeconds: 15, baseRps: 150 },
@@ -342,6 +372,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { suggest: 0.9, index: 0.1 },
         characteristics: { celebrityShare: 0.2, hotDataRatio: 0.95 },
+        hints: [
+          { id: 'prefix-cache', after: 'always', text: 'Keystrokes hit the prefix cache first; the index answers the misses.' },
+          { id: 'suggest-tier', after: 'loss', text: 'Scale the suggest tier — keystroke bursts are 2.5× and latency is the product.' },
+          { id: 'index-path', after: 'violation', text: 'Index updates must reach the search index. A queue with no worker behind it is a dead end.' },
+        ],
       },
       scoringWeights: { latency: 45, availability: 30, scalability: 15, cost: 10 },
     },
@@ -383,6 +418,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { locationUpdate: 0.7, match: 0.3 },
         characteristics: { celebrityShare: 0.1, hotDataRatio: 0.9 },
+        hints: [
+          { id: 'two-paths', after: 'always', text: 'Location pings are lossy telemetry; matches are not. Design the two paths differently.' },
+          { id: 'rush-hour', after: 'loss', text: 'Rush hour arrives at 22 seconds and one dispatch API cannot carry 480 rps. Auto-scale it.' },
+          { id: 'positions-cache', after: 'violation', text: 'Positions live in the cache; matches read it and fall back to the trip store.' },
+        ],
         trafficPhases: [
           { atSeconds: 0, baseRps: 220 },
           { atSeconds: 12, baseRps: 220 },
@@ -431,6 +471,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { event: 0.85, status: 0.15 },
         characteristics: { celebrityShare: 0.2, hotDataRatio: 0.9 },
+        hints: [
+          { id: 'log-first', after: 'always', text: 'Log every event to the queue before any worker touches it.' },
+          { id: 'second-worker', after: 'loss', text: 'A half-capacity worker at 15 seconds stalls delivery. A second worker on the same log keeps it flowing.' },
+          { id: 'buffer-contract', after: 'violation', text: 'Skipping the log is a violation: the buffer is the contract, not an optimization.' },
+        ],
         failureScenarios: [
           {
             id: 'worker-degraded',
@@ -483,6 +528,11 @@ export const CHALLENGES: ApiChallenge[] = [
         pattern: 'spike',
         requestTypes: { webhook: 0.65, charge: 0.35 },
         characteristics: { celebrityShare: 0.3, hotDataRatio: 0.8 },
+        hints: [
+          { id: 'front-door', after: 'always', text: 'The rate limiter is the front door for every request — webhooks and charges alike.' },
+          { id: 'ledger-headroom', after: 'loss', text: 'The ledger is the bottleneck. Split it across two replicated, sharded nodes so a degraded one is headroom, not an outage.' },
+          { id: 'ledger-home', after: 'violation', text: 'Webhooks and charges end in the relational ledger — never in a cache or a queue.' },
+        ],
         failureScenarios: [
           {
             id: 'ledger-degraded',

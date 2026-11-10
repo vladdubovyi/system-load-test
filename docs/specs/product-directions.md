@@ -570,6 +570,44 @@ reasons do not (§6.2 consistency).
   flows); the projection already strips `hints` because the whitelist
   never admitted it — add the guard assertion anyway.
 
+### 4.4a As built (phase 3, 2026-11-10)
+
+- **Hints are scenario data.** `ScenarioDocument.hints` (`{ id, after:
+  'always' | 'loss' | 'violation', text }`) is validated by `validateHints`,
+  layered like every other document field (document over catalog), mapped
+  from `scenarioConfig.hints`, and editable in the scenario editor. All ten
+  seeded scenarios carry a three-rung ladder (one `always`, one `loss`, one
+  `violation`) in the seeder and the e2e fixture; `CatalogTests` requires at
+  least two rungs per scenario. The report shows a **Hints** section
+  (`#report-hints`) when any rung applies to the run — `applicableHints`
+  filters by outcome and violations — with *Show a hint* revealing one rung
+  at a time and a "Hint n of N" counter; the button reads *No more hints*
+  at the end. The ladder is withheld from interview participants twice over:
+  the projection whitelist never admitted `hints` (now asserted in
+  `RoomInterviewTests`), and the sandbox passes no hints when
+  `hideFlowDetails` is on.
+- **Concept cards** live in `src/game/concepts.ts`: a static map from a
+  stable rule id to a title and a short body. Lint issues now carry
+  `ruleId` — `missing:<capability>`, `missing-type:<type>`, `missing-tag`,
+  `flow-ended`, `invalid-flow`, `no-flow`, `no-entry` — derived from the
+  selector a step could not satisfy (`ruleIdForSelector`); the engine stamps
+  the same id on `violated` request events. The lint panel shows each
+  distinct card once beneath its first issue (`.lint-concept`); the Why?
+  drawer shows the card behind the objective (`.why-concept`): the violated
+  event's rule, `drop:queue-full`, `inflight:slow`, `failure:overload` or
+  `scripted:collateral`, and none when `hideFlowDetails` is on. Cards in
+  the lint panel are not separately gated: a participant only sees the lint
+  when the host has chosen to send them the flows (§6.3).
+- **Tests.** `concepts.test.ts` (6: every lint issue on three broken boards
+  resolves to a card, violation→card mapping, ladder validation, layering,
+  applicable-hint selection), `e2e/hints.spec.ts` (3: the ladder on a lost
+  starter run revealed rung by rung to "No more hints"; a store-less board's
+  lint panel and Why? drawer both show the durable-store card; an interview
+  participant's report has neither hints nor cards while the host's has
+  the ladder), plus the two backend guards.
+
+**D3 is complete.**
+
 ### 4.5 Phases, tests, risks
 
 Phase 1: Why? drawer + finished-request ring buffer (unit: buffer caps and
