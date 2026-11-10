@@ -3130,3 +3130,34 @@ body.sandbox-mode #app {
   margin: 0;
   padding: 0;
 }
+
+/* ── Same-seed A/B comparison panel (product-directions.md §4.3) ────────── */
+.report-compare .report-compare-seeds {
+  margin-left: 8px;
+  font-size: 0.8rem;
+  font-weight: 400;
+  opacity: 0.75;
+}
+.compare-table th[scope='row'] {
+  text-align: left;
+  font-weight: 500;
+}
+.compare-table .compare-group th {
+  padding-top: 10px;
+  text-align: left;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+.compare-table td.is-better {
+  font-weight: 700;
+  color: var(--success, #22c55e);
+}
+.compare-table .ok { color: var(--success, #22c55e); }
+.compare-table .bad { color: var(--danger, #f87171); }
+.compare-missing { opacity: 0.5; }
+.compare-note { margin: 0; }
+.compare-board-changes { margin-top: 12px; }
+.compare-board-changes h4 { margin: 0 0 6px; font-size: 0.9rem; }
+.compare-board-changes ul { margin: 0; padding-left: 18px; }

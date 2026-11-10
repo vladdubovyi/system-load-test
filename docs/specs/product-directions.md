@@ -518,6 +518,44 @@ reasons do not (§6.2 consistency).
   only ("Replay same traffic" is one click away). Nothing persists; both
   pins die with the tab.
 
+### 4.3a As built (phase 2, 2026-11-10)
+
+- **One pin, "this run" is always B.** The report footer gains *📌 Pin as A*
+  and *⇄ Compare to A*. Pinning stores the report, its seed and the board
+  **as designed** in tab memory (`pinnedRun` in `sandbox-app.ts`); the
+  button then reads *Pinned as A ✓*. The spec's "A and B" collapses to a
+  single pin because the report being viewed is always the second side;
+  pinning another run replaces A. A new challenge clears the pin; nothing
+  is written anywhere (the e2e asserts empty storage).
+- **Compare** is enabled whenever a pin exists and the report on screen is
+  not A itself. Same seed → a panel (`#report-compare-panel`) with three
+  aligned groups: headline metrics (score, grade, success rate, completed,
+  dropped, violations, availability, broken services, cost — the better
+  side highlighted where a direction exists), objectives by id
+  (`.compare-objective[data-objective]`, ✓/✕ with the measured value), and
+  per-kind request flows (`.compare-flow[data-kind]`), followed by **Board
+  changes since A** in words. Different seed → the panel explains that the
+  numbers would not be like for like and points at *Replay same traffic*;
+  no table is drawn.
+- **Board changes** come from `summarizeBoardChanges` in the new pure
+  module `src/game/run-compare.ts`: components added/removed by label
+  (`+1 Redis Cache`), configuration chips toggled per component via the
+  existing badge labels (`Backend Service: +H-scale, +Reactive`), and the
+  net change in connections. Two facts shaped it: the starter's database
+  already carries the reference's chips (`buildReferenceComponentConfigs`
+  tunes it), so a database line rarely appears; and the board at report
+  time still holds the engine's scale-out instances, which are not design
+  changes — comparisons use `designBoard()`, the live board with instances,
+  their belts and configs stripped (`isScalePrimary`).
+- **Tests.** `run-compare.test.ts` (2: worded changes for the rate-limiter
+  starter→reference and an identical-board no-op; aligned objectives, flows
+  and metrics for the url-shortener starter vs reference on one seed, with
+  seed mismatch flagged), `e2e/compare.spec.ts` (2: pin the starter at seed
+  4242, load the reference, compare — ✕→✓ on create completion, higher
+  score, flow rows, H-scale lines without instance counts, empty storage;
+  and a different-seed refusal pointing at Replay same traffic). Phase 3
+  (hints and concept cards) is not started.
+
 ### 4.4 Hints and concept cards
 
 - Scenario documents gain `hints?: { id: string; after: 'loss' | 'violation' | 'always'; text: string }[]`

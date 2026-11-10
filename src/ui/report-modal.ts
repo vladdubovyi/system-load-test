@@ -1,5 +1,6 @@
 import type { ObjectiveResult, Request, SimulationReport } from '../game/types';
 import { describeRequestState, renderRequestTimeline } from './request-inspector';
+import { compareReports, type RunComparison } from '../game/run-compare';
 import { formatCost, formatSeconds } from '../game/report';
 import { downloadReportPdf, type ReportPdfExtras } from '../game/report-pdf';
 import { getActiveScenario } from '../game/scenario-runtime';
@@ -301,6 +302,8 @@ export function renderReportModal(report: SimulationReport): string {
           <button class="btn btn-secondary" id="report-download" type="button">⬇ Download PDF</button>
           <button class="btn btn-secondary" id="report-copy-link" type="button" title="Copy a link that replays this exact run — board, scenario, traffic and seed">🔗 Copy run link</button>
           <button class="btn btn-secondary" id="report-export-run" type="button" title="Download this run as a file: board, scenario, traffic, seed and every intervention">⬇ Export run file</button>
+          <button class="btn btn-secondary" id="report-pin" type="button" title="Keep this run as A to compare the next one against — in this tab only">📌 Pin as A</button>
+          <button class="btn btn-secondary" id="report-compare" type="button" title="Compare this run with the pinned run A, like for like" disabled>⇄ Compare to A</button>
           <button class="btn btn-secondary" id="report-replay-seed" type="button" title="Run the same board against the same traffic">↺ Replay same traffic</button>
           <button class="btn btn-primary" id="report-replay" type="button">▶ Run again</button>
         </footer>
@@ -325,6 +328,19 @@ export interface ReportModalOptions {
   examplesFor?: (objective: ObjectiveResult) => Request[];
   /** Interview participants: example traces render, flow reasons do not (§6.2). */
   hideFlowDetails?: boolean;
+  /** Same-seed A/B comparison (§4.3): the pinned run A, held in the tab by the caller. */
+  pinning?: {
+    pinned: PinnedRun | null;
+    onPin: () => void;
+    /** Board changes between A's board and this run's board, in words. */
+    boardChanges: () => string[];
+  };
+}
+
+/** A run pinned for comparison: the report and the seed it ran on. */
+export interface PinnedRun {
+  report: SimulationReport;
+  seed: number;
 }
 
 export function mountReportModal(
@@ -346,6 +362,7 @@ export function mountReportModal(
 
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
+  bindPinning(report, options.pinning);
   document.querySelectorAll<HTMLButtonElement>('#report-overlay .objective-why').forEach((button) => {
     button.addEventListener('click', () => {
       const id = button.dataset.why ?? '';
@@ -437,4 +454,123 @@ function renderWhyDrawer(objective: ObjectiveResult, examples: Request[], hideFl
       <p class="why-rule">${escapeHtml(ruleFor(objective, shown))}</p>
       ${shown.length > 0 ? `<p class="why-intro">${shown.length === 1 ? 'An example request' : `${shown.length} example requests`} from this run:</p><div class="why-examples">${items}</div>` : '<p class="why-intro">No example requests were kept for this outcome.</p>'}
     </li>`;
+}
+
+// ── Same-seed A/B comparison (product-directions.md §4.3) ─────────────────
+
+function bindPinning(report: SimulationReport, pinning: ReportModalOptions['pinning']): void {
+  const pin = document.getElementById('report-pin') as HTMLButtonElement | null;
+  const compare = document.getElementById('report-compare') as HTMLButtonElement | null;
+  if (!pin || !compare) return;
+  if (!pinning) {
+    pin.remove();
+    compare.remove();
+    return;
+  }
+  const markPinned = (): void => {
+    pin.textContent = 'Pinned as A ✓';
+    pin.disabled = true;
+    compare.disabled = true;
+  };
+  if (pinning.pinned?.report === report) {
+    markPinned();
+  } else {
+    compare.disabled = pinning.pinned === null;
+  }
+  pin.addEventListener('click', () => {
+    pinning.onPin();
+    markPinned();
+    document.getElementById('report-compare-panel')?.remove();
+  });
+  compare.addEventListener('click', () => {
+    const existing = document.getElementById('report-compare-panel');
+    if (existing) {
+      existing.remove();
+      compare.setAttribute('aria-expanded', 'false');
+      return;
+    }
+    const pinned = pinning.pinned;
+    if (!pinned) return;
+    const comparison = compareReports(pinned.report, report);
+    const body = document.querySelector('#report-overlay .report-body');
+    body?.insertAdjacentHTML('beforeend', renderComparePanel(comparison, comparison.sameSeed ? pinning.boardChanges() : []));
+    compare.setAttribute('aria-expanded', 'true');
+    document.getElementById('report-compare-panel')?.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+function objectiveCell(o: { met: boolean; actual: string } | null): string {
+  if (!o) return '<span class="compare-missing">—</span>';
+  return `<span class="${o.met ? 'ok' : 'bad'}">${o.met ? '✓' : '✕'}</span> ${escapeHtml(o.actual)}`;
+}
+
+function flowCell(f: { spawned: number; completed: number; dropped: number; violated: number } | null): string {
+  if (!f) return '<span class="compare-missing">—</span>';
+  return `${f.completed.toLocaleString()} / ${f.spawned.toLocaleString()} completed · ${f.dropped.toLocaleString()} dropped · ${f.violated.toLocaleString()} violated`;
+}
+
+function renderComparePanel(cmp: RunComparison, boardChanges: string[]): string {
+  if (!cmp.sameSeed) {
+    return `
+      <section class="report-section report-compare" id="report-compare-panel">
+        <h3>Compared to A</h3>
+        <p class="compare-note">A ran a different seed (${cmp.seedA}) from this run (${cmp.seedB}), so the numbers would not be like for like. Open A's board and use <strong>Replay same traffic</strong>, or pin this run and replay it with your next change.</p>
+      </section>`;
+  }
+  const side = (better: 'a' | 'b' | null, which: 'a' | 'b'): string => (better === which ? ' is-better' : '');
+  const metrics = cmp.metrics
+    .map(
+      (m) => `
+        <tr class="compare-metric" data-metric="${escapeHtml(m.id)}">
+          <th scope="row">${escapeHtml(m.label)}</th>
+          <td class="compare-a${side(m.better, 'a')}">${escapeHtml(m.a)}</td>
+          <td class="compare-b${side(m.better, 'b')}">${escapeHtml(m.b)}</td>
+        </tr>`
+    )
+    .join('');
+  const objectives = cmp.objectives
+    .map(
+      (o) => `
+        <tr class="compare-objective" data-objective="${escapeHtml(o.id)}">
+          <th scope="row">${escapeHtml(o.label)}</th>
+          <td class="compare-a">${objectiveCell(o.a)}</td>
+          <td class="compare-b">${objectiveCell(o.b)}</td>
+        </tr>`
+    )
+    .join('');
+  const flows = cmp.flows
+    .map(
+      (f) => `
+        <tr class="compare-flow" data-kind="${escapeHtml(f.kind)}">
+          <th scope="row">${escapeHtml(f.kind)}</th>
+          <td class="compare-a">${flowCell(f.a)}</td>
+          <td class="compare-b">${flowCell(f.b)}</td>
+        </tr>`
+    )
+    .join('');
+  const changes =
+    boardChanges.length > 0
+      ? `<ul>${boardChanges.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul>`
+      : '<p>No board changes — same design, same traffic, same result.</p>';
+  return `
+    <section class="report-section report-compare" id="report-compare-panel">
+      <h3>Compared to A <span class="report-compare-seeds">same seed ${cmp.seedA}</span></h3>
+      <div class="report-table-wrap">
+        <table class="report-table compare-table">
+          <thead><tr><th></th><th>A</th><th>This run</th></tr></thead>
+          <tbody>
+            <tr class="compare-group"><th colspan="3">Headline</th></tr>
+            ${metrics}
+            <tr class="compare-group"><th colspan="3">Objectives</th></tr>
+            ${objectives}
+            <tr class="compare-group"><th colspan="3">Request flows</th></tr>
+            ${flows}
+          </tbody>
+        </table>
+      </div>
+      <div class="compare-board-changes">
+        <h4>Board changes since A</h4>
+        ${changes}
+      </div>
+    </section>`;
 }

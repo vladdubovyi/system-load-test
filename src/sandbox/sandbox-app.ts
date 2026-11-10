@@ -30,6 +30,7 @@ import {
   setRunFlowBundle,
 } from '../game/scenario-runtime';
 import { mapChallengeFromApi } from '../api/client';
+import { summarizeBoardChanges } from '../game/run-compare';
 import {
   MAX_FRAGMENT_CHARS,
   boardFragment,
@@ -1548,6 +1549,13 @@ function presentReport(report: SimulationReport): void {
       onExportRun: () => exportSnapshotFile(runFile),
       examplesFor: exampleRequestsFor,
       hideFlowDetails: flowDetailsHidden(),
+      pinning: {
+        pinned: pinnedRun ? { report: pinnedRun.report, seed: pinnedRun.seed } : null,
+        onPin: () => {
+          pinnedRun = { report, seed: report.seed, board: designBoard() };
+        },
+        boardChanges: () => (pinnedRun ? summarizeBoardChanges(pinnedRun.board, designBoard()) : []),
+      },
     }
   );
   renderRoomChrome();
@@ -2935,6 +2943,32 @@ function applySpeed(speed: 1 | 5 | 20 | 100): void {
 // ── Portable snapshots (docs/specs/product-directions.md §2) ────────────────
 
 /**
+ * Same-seed A/B comparison (product-directions.md §4.3): the run pinned as
+ * A — report, seed and the board as run. Tab memory only; a new challenge
+ * clears it.
+ */
+let pinnedRun: { report: SimulationReport; seed: number; board: BoardState } | null = null;
+
+/**
+ * The board as designed: the live board without the scale-out instances
+ * (and their belts and configs) the engine spawns during a run. Pins and
+ * comparisons describe design changes, not what auto-scaling did.
+ */
+function designBoard(): BoardState {
+  const board = snapshotBoard(liveBoard());
+  const keep = new Set(board.components.filter((c) => !c.scaleGroupId || isScalePrimary(c)).map((c) => c.id));
+  const owner = (portId: string): string => portId.slice(0, portId.lastIndexOf(':'));
+  board.components = board.components.filter((c) => keep.has(c.id));
+  board.belts = board.belts.filter(
+    (b) => (owner(b.fromPortId) === SOURCE_ID || keep.has(owner(b.fromPortId))) && keep.has(owner(b.toPortId))
+  );
+  for (const id of [...board.componentConfigs.keys()]) {
+    if (!keep.has(id)) board.componentConfigs.delete(id);
+  }
+  return board;
+}
+
+/**
  * Load a `#board=` snapshot: scenario, overrides, traffic, board, and — for
  * run links — the pinned seed. A snapshot that fails to decode leaves the
  * sandbox exactly as a plain visit would, with one toast; the fragment is
@@ -3181,6 +3215,7 @@ export function destroySandboxApp(): void {
 }
 
 async function initSandbox(challengeSlug?: string, loadReferencePreset = true): Promise<void> {
+  pinnedRun = null;
   state.pinnedSeed = parseSeed(new URLSearchParams(window.location.search).get('seed'));
   state.lastSeed = null;
   try {
