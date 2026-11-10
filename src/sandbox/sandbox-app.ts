@@ -132,7 +132,7 @@ import {
   effectiveReportVisibility,
 } from '../rooms/room-client';
 import { clearHostNotes, getHostNotes, toggleHostNotes } from '../rooms/host-notes';
-import type { SimulationReport, SimulationSnapshot } from '../game/types';
+import type { ObjectiveResult, SimulationReport, SimulationSnapshot } from '../game/types';
 import {
   clearRemoteCursors,
   closeRoomDialog,
@@ -1501,6 +1501,33 @@ function showRunReport(): void {
   presentReport(report);
 }
 
+/**
+ * Example requests behind a failed objective (product-directions.md §4.2):
+ * violated requests when the kind died on a flow step, dropped ones when it
+ * was shed under load, otherwise whatever was still in flight at the end.
+ */
+function exampleRequestsFor(objective: ObjectiveResult): Request[] {
+  const engine = state.engine;
+  if (!engine) return [];
+  const snap = engine.getSnapshot();
+  const forKind = (kind: string): Request[] => {
+    const violated = snap.violatedByKind[kind] ?? 0;
+    const dropped = snap.droppedByKind[kind] ?? 0;
+    if (violated > 0 && violated >= dropped) return engine.getExampleRequests(kind, 'violated');
+    if (dropped > 0) return engine.getExampleRequests(kind, 'dropped');
+    return engine.getUnfinishedRequests(kind);
+  };
+  if (objective.id.startsWith('completion:')) {
+    return forKind(objective.id.slice('completion:'.length));
+  }
+  if (objective.id === 'violations') {
+    const kind = Object.entries(snap.violatedByKind).sort((a, b) => b[1] - a[1])[0]?.[0];
+    return kind ? engine.getExampleRequests(kind, 'violated') : [];
+  }
+  // Survival and drill objectives: what the broken components dropped.
+  return Object.keys(snap.droppedByKind).flatMap((kind) => engine.getExampleRequests(kind, 'dropped'));
+}
+
 function presentReport(report: SimulationReport): void {
   const hostHolds =
     room?.role === 'host' && effectiveReportVisibility(room.settings) === 'hostOnly' && !room.reportReleased;
@@ -1519,6 +1546,8 @@ function presentReport(report: SimulationReport): void {
       onRelease: hostHolds ? () => void releaseHeldReport() : undefined,
       onCopyRunLink: () => void copySnapshotLink(runSnapshot),
       onExportRun: () => exportSnapshotFile(runFile),
+      examplesFor: exampleRequestsFor,
+      hideFlowDetails: flowDetailsHidden(),
     }
   );
   renderRoomChrome();

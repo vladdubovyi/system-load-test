@@ -66,6 +66,14 @@ const SOURCE_ID = '__source__';
 const IDLE_LOAD_THRESHOLD = 15;
 /** How many completed/dropped requests stay inspectable after they finish. */
 const FINISHED_ARCHIVE_LIMIT = 400;
+/**
+ * Example requests for the coaching drawer (product-directions.md §4.2):
+ * finished requests are reservoir-sampled per (kind, end state) so one
+ * outcome cannot evict another's examples. Sampling draws from its own seeded
+ * generator, never the engine's, so the run itself is untouched and the same
+ * seed picks the same examples.
+ */
+export const EXAMPLE_POOL_LIMIT = 50;
 
 let nextRequestId = 1;
 
@@ -423,6 +431,9 @@ export class SimulationEngine {
   private readonly scenario: RuntimeScenario;
   private beltTravelTime = new Map<string, number>();
   private finishedRequests: Request[] = [];
+  private examplePool = new Map<string, Request[]>();
+  private exampleSeen = new Map<string, number>();
+  private exampleRng: Rng = createRng(1);
   private pendingRecoveries: { componentId: string; at: number }[] = [];
   /**
    * Every random draw in a run comes from this generator (spec §8). It is
@@ -1004,6 +1015,7 @@ export class SimulationEngine {
     this.resetRequestCounters();
     this.requests = [];
     this.finishedRequests = [];
+    this.resetExamples();
     this.pendingRecoveries = [];
     this.peakRps = 0;
     this.spikeEvents = 0;
@@ -1027,6 +1039,7 @@ export class SimulationEngine {
     this.time = 0;
     this.requests = [];
     this.finishedRequests = [];
+    this.resetExamples();
     this.pendingRecoveries = [];
     this.restoreInitialTopology();
     this.resetStates();
@@ -1239,6 +1252,48 @@ export class SimulationEngine {
     if (this.finishedRequests.length > FINISHED_ARCHIVE_LIMIT) {
       this.finishedRequests.splice(0, this.finishedRequests.length - FINISHED_ARCHIVE_LIMIT);
     }
+    this.sampleExample(request);
+  }
+
+  private resetExamples(): void {
+    this.examplePool.clear();
+    this.exampleSeen.clear();
+    // Decorrelated from the main stream; deterministic for the seed.
+    this.exampleRng = createRng((this.getSeed() ^ 0x5bd1e995) >>> 0);
+  }
+
+  /** Reservoir sampling per (kind, end state): every finished request has an equal chance of being kept. */
+  private sampleExample(request: Request): void {
+    const key = `${request.kind}:${request.state}`;
+    const seen = (this.exampleSeen.get(key) ?? 0) + 1;
+    this.exampleSeen.set(key, seen);
+    let pool = this.examplePool.get(key);
+    if (!pool) {
+      pool = [];
+      this.examplePool.set(key, pool);
+    }
+    if (pool.length < EXAMPLE_POOL_LIMIT) {
+      pool.push(request);
+      return;
+    }
+    const slot = Math.floor(this.exampleRng.next() * seen);
+    if (slot < EXAMPLE_POOL_LIMIT) pool[slot] = request;
+  }
+
+  /** Sampled finished requests of one kind and end state, for the coaching drawer (§4.2). */
+  getExampleRequests(kind: string, state: 'done' | 'dropped' | 'violated'): Request[] {
+    return [...(this.examplePool.get(`${kind}:${state}`) ?? [])];
+  }
+
+  /** Requests neither completed nor dropped — what "still in flight" means at the end of a run. */
+  getUnfinishedRequests(kind?: string): Request[] {
+    return this.requests.filter(
+      (r) =>
+        r.state !== 'done' &&
+        r.state !== 'dropped' &&
+        r.state !== 'violated' &&
+        (kind === undefined || r.kind === kind)
+    );
   }
 
   private finishRequest(request: Request, state: 'done' | 'dropped' | 'violated'): void {

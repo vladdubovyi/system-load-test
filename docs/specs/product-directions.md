@@ -470,6 +470,42 @@ requests are inspectable. Memory-capped, cleared on reset. Interview
 participants: the drawer obeys `hideFlowDetails` — examples render, step
 reasons do not (§6.2 consistency).
 
+### 4.2a As built (phase 1, 2026-11-10)
+
+- **Engine.** `SimulationEngine` keeps a reservoir of up to
+  `EXAMPLE_POOL_LIMIT = 50` finished requests per `(kind, end state)`
+  bucket, sampled on archive with **its own seeded generator**
+  (`createRng(seed ^ 0x5bd1e995)`), so the main random stream — and every
+  calibrated floor — is untouched, and the same seed yields the same
+  examples. Accessors: `getExampleRequests(kind, state)` and
+  `getUnfinishedRequests(kind?)` (what "still in flight" means at the end).
+  Pools reset with the run. The pre-existing global `finishedRequests`
+  ring (400, for `getRequest`) is unchanged.
+- **Report.** Every *unmet* objective row carries a **Why?** button
+  (`.objective-why`, `aria-expanded`); met rows have none. Clicking inserts
+  a drawer row (`.objective-why-drawer[data-for]`) right under it with the
+  engine rule in one sentence (violated / dropped / still in flight /
+  component failure / scripted drill) and up to three example requests
+  rendered with the inspector's own timeline (`renderRequestTimeline`,
+  exported from `request-inspector.ts`), each headed by id, kind and the
+  inspector's end-state label. Clicking again closes it.
+- **Choosing examples** (`exampleRequestsFor` in `sandbox-app.ts`): a
+  `completion:<kind>` row shows violated requests of that kind when
+  violations outnumber drops, else dropped ones, else whatever was still in
+  flight; the `violations` row shows the most-violated kind; survival and
+  drill rows show dropped requests across kinds. The drawer passes
+  `hideFlowDetails` through the same inspector context, so interview
+  participants see journeys without flow reasons — in practice their
+  reports rarely carry an unmet row at all, since the authored objectives
+  never reach them (§6.2).
+- **Tests.** `examples.test.ts` (3: cap and determinism per bucket with the
+  run unperturbed, violated-request sampling on a store-less board,
+  unfinished requests), `e2e/coaching.spec.ts` (2: a flow-violation loss
+  opens the rule and three "Flow violation" traces naming the durable
+  store, and toggles; a capacity loss opens the drop rule and three
+  "queue full" traces with no violation wording). Phases 2 (A/B compare)
+  and 3 (hints, concept cards) are not started.
+
 ### 4.3 Same-seed A/B comparison
 
 - The report modal gains **Pin this run** (session memory, max 2 pinned:

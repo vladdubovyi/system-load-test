@@ -1,4 +1,5 @@
-import type { SimulationReport } from '../game/types';
+import type { ObjectiveResult, Request, SimulationReport } from '../game/types';
+import { describeRequestState, renderRequestTimeline } from './request-inspector';
 import { formatCost, formatSeconds } from '../game/report';
 import { downloadReportPdf, type ReportPdfExtras } from '../game/report-pdf';
 import { getActiveScenario } from '../game/scenario-runtime';
@@ -43,6 +44,7 @@ function objectivesSection(report: SimulationReport): string {
             <span class="objective-target">${escapeHtml(objective.target)}</span>
             <span class="objective-actual">${escapeHtml(objective.actual)}</span>
             <span class="objective-cause">${escapeHtml(objective.cause ?? '')}</span>
+            ${objective.met ? '' : `<button class="objective-why" type="button" data-why="${escapeHtml(objective.id)}" aria-expanded="false" title="Why did this fail? See the rule and example requests">Why?</button>`}
           </li>
         `
           )
@@ -316,6 +318,13 @@ export interface ReportModalOptions {
   onCopyRunLink?: () => void;
   /** Download this run as a file, interventions included (§2.6). */
   onExportRun?: () => void;
+  /**
+   * Coaching drawer (product-directions.md §4.2): example requests behind a
+   * failed objective. Absent → the Why? drawer shows the rule only.
+   */
+  examplesFor?: (objective: ObjectiveResult) => Request[];
+  /** Interview participants: example traces render, flow reasons do not (§6.2). */
+  hideFlowDetails?: boolean;
 }
 
 export function mountReportModal(
@@ -337,6 +346,23 @@ export function mountReportModal(
 
   document.getElementById('report-close')?.addEventListener('click', close);
   document.getElementById('report-dismiss')?.addEventListener('click', close);
+  document.querySelectorAll<HTMLButtonElement>('#report-overlay .objective-why').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.why ?? '';
+      const row = button.closest('li');
+      const open = document.querySelector(`#report-overlay .objective-why-drawer[data-for="${CSS.escape(id)}"]`);
+      if (open) {
+        open.remove();
+        button.setAttribute('aria-expanded', 'false');
+        return;
+      }
+      const objective = report.objectives.find((o) => o.id === id);
+      if (!row || !objective) return;
+      const examples = options.examplesFor?.(objective) ?? [];
+      row.insertAdjacentHTML('afterend', renderWhyDrawer(objective, examples, options.hideFlowDetails === true));
+      button.setAttribute('aria-expanded', 'true');
+    });
+  });
   const copyLink = document.getElementById('report-copy-link');
   if (options.onCopyRunLink) copyLink?.addEventListener('click', options.onCopyRunLink);
   else copyLink?.remove();
@@ -372,4 +398,43 @@ export function mountReportModal(
   document.getElementById('report-overlay')?.addEventListener('click', (e) => {
     if ((e.target as HTMLElement).id === 'report-overlay') close();
   });
+}
+
+// ── Coaching drawer (product-directions.md §4.2) ───────────────────────────
+
+/** The engine rule behind an outcome, in one sentence. */
+function ruleFor(objective: ObjectiveResult, examples: Request[]): string {
+  if (objective.id === 'failures') {
+    return 'A component fails when its queue stays full for 1.8 seconds while it cannot process anything — the components around it then drop what they send.';
+  }
+  if (objective.id === 'scripted-failures') {
+    return 'A scripted drill degrades its target on schedule; the objective fails when some other component breaks while the drill is active.';
+  }
+  const state = examples[0]?.state;
+  if (state === 'violated' || objective.id === 'violations') {
+    return 'A request is violated when no connected component satisfies its next required flow step; it ends there instead of taking a wrong path.';
+  }
+  if (state === 'dropped') {
+    return 'A request is dropped when it arrives at a component whose queue is full, or when nothing downstream can take it.';
+  }
+  return 'Requests still queued or traveling when the run ends count as neither completed nor dropped — the path works, but too slowly.';
+}
+
+function renderWhyDrawer(objective: ObjectiveResult, examples: Request[], hideFlowDetails: boolean): string {
+  const shown = examples.slice(0, 3);
+  const items = shown
+    .map((request) => {
+      const ctx = { now: request.finishedAt ?? request.spawnedAt, paused: false, running: false, hideFlowDetails };
+      return `
+        <article class="why-example">
+          <header class="why-example-header">Request <span class="ri-id">#${request.id}</span> <span class="ri-pill ri-pill-${escapeHtml(request.kind)}">${escapeHtml(request.kind)}</span> · ${escapeHtml(describeRequestState(request, ctx))}</header>
+          ${renderRequestTimeline(request, ctx)}
+        </article>`;
+    })
+    .join('');
+  return `
+    <li class="objective-why-drawer" data-for="${escapeHtml(objective.id)}">
+      <p class="why-rule">${escapeHtml(ruleFor(objective, shown))}</p>
+      ${shown.length > 0 ? `<p class="why-intro">${shown.length === 1 ? 'An example request' : `${shown.length} example requests`} from this run:</p><div class="why-examples">${items}</div>` : '<p class="why-intro">No example requests were kept for this outcome.</p>'}
+    </li>`;
 }

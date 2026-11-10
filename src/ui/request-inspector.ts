@@ -249,6 +249,20 @@ function signatureFor(request: Request, ctx: RequestInspectorContext): string {
   return `${request.id}:${request.state}:${request.events.length}:${liveBucket}:${ctx.paused ? 'p' : 'r'}:${ctx.running ? 1 : 0}`;
 }
 
+/**
+ * One request's journey as a standalone timeline, for surfaces other than
+ * the inspector panel (the report's coaching drawer, product-directions §4.2).
+ * Honors `ctx.hideFlowDetails` exactly like the live panel.
+ */
+export function renderRequestTimeline(request: Request, ctx: RequestInspectorContext): string {
+  return `<ol class="ri-timeline">${renderTimeline(buildTimeline(request, ctx), ctx)}</ol>`;
+}
+
+/** The request's end-state label as the inspector words it ("Dropped", "Flow violation" / "Failed"). */
+export function describeRequestState(request: Request, ctx: RequestInspectorContext): string {
+  return describeState(request, ctx).label;
+}
+
 export function mountRequestInspector(host: HTMLElement, onClose: () => void): void {
   unmountRequestInspector();
   onCloseHandler = onClose;
