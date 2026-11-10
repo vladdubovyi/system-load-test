@@ -25,10 +25,12 @@ Free to use. Zero personal data: no accounts, no storage in the browser, no
 server-side persistence, no analytics. Anything that needs a database or a
 person's identity is parked (`interview-platform.md` §10).
 
-## Candidate directions (not yet chosen)
+## Directions (specified, executing in order)
 
-Proposed 2026-11-09; the owner picks. Each is sized for a few weeks of
-focused work and keeps the constraints above.
+Tech spec for all six: [docs/specs/product-directions.md](./docs/specs/product-directions.md)
+(2026-11-10). Execution order: D1 portable artifacts → D2 scenarios → D3
+coaching → D4 host tooling → D5 engine fidelity, with D6 reach phases
+interleaved.
 
 1. **Portable artifacts without a server** — boards and scenarios encoded in
    the URL fragment (compressed), JSON export/import, "permalink to my
