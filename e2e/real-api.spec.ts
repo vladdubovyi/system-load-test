@@ -40,9 +40,12 @@ test.describe('Live backend', () => {
     expect(apiResponse.ok()).toBe(true);
     const challenges = (await apiResponse.json()) as { slug: string; scenario: { scenarioConfig: { flows?: unknown[] } } }[];
     expect(challenges.map((c) => c.slug).sort()).toEqual([
+      'chat-messaging',
       'dropbox',
       'instagram-feed',
       'rate-limiter',
+      'search-autocomplete',
+      'ticket-booking',
       'url-shortener',
     ]);
     // Every seeded challenge carries flows in its scenario config.
