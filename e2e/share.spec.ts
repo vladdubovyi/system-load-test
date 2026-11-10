@@ -163,3 +163,142 @@ test.describe('Snapshot links', () => {
       .not.toContain('pwned');
   });
 });
+
+/**
+ * D1 phase 3 (product-directions.md §2.5–§2.6): the file carrier. Export and
+ * import are plain JSON files; in a room an import is an ordinary gesture; a
+ * run file carries the room run's tick-stamped events so a solo tab can
+ * replay the exact run, interventions included.
+ */
+test.describe('Snapshot files', () => {
+  test('export and import a board file; the import is one undo step', async ({ page, context }) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    await sandbox.placeComponent('redis', 820, 540);
+    await sandbox.shareButton.click();
+    const download = page.waitForEvent('download');
+    await page.locator('#snapshot-export').click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(/^breakit-board-url-shortener-\d{4}-\d{2}-\d{2}\.json$/);
+    const path = await file.path();
+    expect(path).toBeTruthy();
+
+    const other = await context.newPage();
+    const fresh = new SandboxPage(other);
+    await fresh.goto('url-shortener');
+    await expect(fresh.components).toHaveCount(STARTER.components);
+    await fresh.shareButton.click();
+    await other.locator('#snapshot-file').setInputFiles(path!);
+    await expect(fresh.boardToast).toContainText(/imported/i);
+    await expect(fresh.components).toHaveCount(STARTER.components + 1);
+    await other.locator('#room-close').click();
+
+    // Importing replaced the board as one gesture: a single undo brings the
+    // previous board back, and redo restores the import.
+    await other.keyboard.press('Control+z');
+    await expect(fresh.components).toHaveCount(STARTER.components);
+    await other.keyboard.press('Control+Shift+z');
+    await expect(fresh.components).toHaveCount(STARTER.components + 1);
+    await other.close();
+  });
+
+  test('a malformed file is refused and the board is untouched', async ({ page }, testInfo) => {
+    const sandbox = new SandboxPage(page);
+    await sandbox.goto('url-shortener');
+    const bad = testInfo.outputPath('not-a-board.json');
+    const { writeFileSync } = await import('node:fs');
+    writeFileSync(bad, '{"v":1,"kind":"board","board":"nope"}');
+    await sandbox.shareButton.click();
+    await page.locator('#snapshot-file').setInputFiles(bad);
+    await expect(sandbox.boardToast).toContainText(/board file/i);
+    await expect(sandbox.components).toHaveCount(STARTER.components);
+  });
+
+  test('in a room an import is a gesture: refused without the pen, broadcast with it', async ({
+    page,
+    browser,
+    hub,
+  }) => {
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    // A file with one extra component, made before the room exists.
+    await host.placeComponent('redis', 820, 540);
+    await host.shareButton.click();
+    const download = page.waitForEvent('download');
+    await page.locator('#snapshot-export').click();
+    const path = (await (await download).path())!;
+    await page.locator('#room-close').click();
+    await host.loadStarter();
+    await expect(host.components).toHaveCount(STARTER.components);
+
+    const room = await host.shareRoom();
+    const guestContext = await browser.newContext({ viewport: { width: 1600, height: 900 } });
+    await new ApiMock(guestContext).install();
+    await hub.install(guestContext);
+    const guestPage = await guestContext.newPage();
+    const guest = new SandboxPage(guestPage);
+    await guest.gotoRoomLink(room.participantLink);
+
+    await host.shareButton.click();
+    await host.roomDialog.locator('#room-setting-pen').selectOption('single');
+    await host.roomDialog.locator('#room-close').click();
+    await expect(guest.roomPresence.locator('#room-presence-flags')).toContainText('Single pen');
+
+    // Without the pen the import is refused on both boards.
+    await guest.shareButton.click();
+    await guestPage.locator('#snapshot-file').setInputFiles(path);
+    await expect(guest.boardToast).toContainText('holds the pen');
+    await expect(guest.components).toHaveCount(STARTER.components);
+    await expect(host.components).toHaveCount(STARTER.components);
+    await guestPage.locator('#room-close').click();
+
+    // The host holds the pen: the import lands everywhere as one change.
+    await host.shareButton.click();
+    await page.locator('#snapshot-file').setInputFiles(path);
+    await expect(host.boardToast).toContainText(/imported/i);
+    await expect(host.components).toHaveCount(STARTER.components + 1);
+    await expect(guest.components).toHaveCount(STARTER.components + 1);
+    await guestContext.close();
+  });
+
+  test('a run file replays a room run with its failure event, tick for tick', async ({
+    page,
+    context,
+  }) => {
+    const host = new SandboxPage(page);
+    await host.goto('url-shortener');
+    await host.shareRoom();
+
+    // A room run with an intervention: pause, kill a component, resume.
+    await host.playButton.click();
+    await expect.poll(() => host.engineStatus()).toBe('running');
+    await host.playButton.click();
+    await expect(host.playButton).toHaveText(/Resume/);
+    await page.locator('#btn-failure').click();
+    await page.locator('#failure-component').selectOption({ index: 1 });
+    await page.locator('#failure-inject').click();
+    await host.playButton.click();
+    await host.setSpeed(100);
+    await expect(host.reportOverlay).toBeVisible({ timeout: 90_000 });
+    const original = await readFlowStats(host.reportOverlay);
+
+    const download = page.waitForEvent('download');
+    await host.reportOverlay.locator('#report-export-run').click();
+    const file = await download;
+    expect(file.suggestedFilename()).toMatch(/^breakit-run-url-shortener-\d{4}-\d{2}-\d{2}\.json$/);
+    const path = (await file.path())!;
+
+    // A solo tab imports the run file and presses Play: same seed, same
+    // failure at the same tick, same numbers.
+    const other = await context.newPage();
+    const solo = new SandboxPage(other);
+    await solo.goto('url-shortener');
+    await solo.shareButton.click();
+    await other.locator('#snapshot-file').setInputFiles(path);
+    await expect(solo.boardToast).toContainText(/imported/i);
+    await other.locator('#room-close').click();
+    const replayed = await solo.runToReport();
+    expect(await readFlowStats(replayed)).toEqual(original);
+    await other.close();
+  });
+});

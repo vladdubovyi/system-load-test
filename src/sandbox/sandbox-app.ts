@@ -35,7 +35,12 @@ import {
   boardFragment,
   decodeSnapshot,
   encodeSnapshot,
+  parseSnapshotFile,
+  serializeSnapshot,
+  snapshotFileName,
   type BoardSnapshotV1,
+  type ReplayEvent,
+  type RunReplayV1,
 } from '../share/snapshot';
 import { BoardRenderer } from '../ui/board-renderer';
 import { AnnotationRenderer } from '../ui/annotation-renderer';
@@ -1477,6 +1482,7 @@ function presentReport(report: SimulationReport): void {
   // (scale instances are already dropped); capture it so a link copied later
   // still reproduces this run even if the board is edited afterwards.
   const runSnapshot = buildSnapshot('run', report.seed);
+  const runFile = runFileFor(report, runSnapshot);
   mountReportModal(
     report,
     () => renderRoomChrome(),
@@ -1486,6 +1492,7 @@ function presentReport(report: SimulationReport): void {
       pdfExtras: roomPdfExtras,
       onRelease: hostHolds ? () => void releaseHeldReport() : undefined,
       onCopyRunLink: () => void copySnapshotLink(runSnapshot),
+      onExportRun: () => exportSnapshotFile(runFile),
     }
   );
   renderRoomChrome();
@@ -1524,6 +1531,9 @@ function startSimulation(seed?: number): void {
 
   const runSeed = seed ?? state.pinnedSeed ?? randomSeed();
   state.lastSeed = runSeed;
+  soloTick = 0;
+  pendingReplay = room ? [] : [...(replayEvents ?? [])];
+  if (!room) lastRunEvents = replayEvents ? [...replayEvents] : [];
   state.engine = new SimulationEngine(
     state.components,
     state.belts,
@@ -1610,8 +1620,17 @@ function runSimulationLoop(): void {
       }
     } else {
       while (state.simAccumulator >= SIM_STEP) {
+        // Replaying a run file (§2.6): interventions apply at their ticks,
+        // before the tick, exactly as a room run applies them.
+        if (pendingReplay.length > 0) applyReplayEventsAt(soloTick);
+        if (!state.engine || !isSimRunning()) break;
         state.engine.tick(SIM_STEP);
+        soloTick++;
         state.simAccumulator -= SIM_STEP;
+      }
+      if (!state.engine) {
+        state.animFrame = null;
+        return;
       }
     }
 
@@ -1785,6 +1804,7 @@ function pushHistory(): void {
   const diff = diffBoards(lastCommittedBoard, liveBoard());
   if (isEmptyDiff(diff)) return;
   roomSend(diff);
+  if (!importingSnapshot) replayEvents = null;
 
   // Trim redo entries if we're not at the end
   state.history = state.history.slice(0, state.historyIndex + 1);
@@ -2122,6 +2142,8 @@ function roomDialogCallbacks(): RoomDialogCallbacks {
     onReleaseReport: () => void releaseHeldReport(),
     onFreshRoom: () => void startFreshInterviewRoom(),
     onCopySnapshot: (kind) => void copySnapshotLink(buildSnapshot(kind, state.lastSeed)),
+    onExportSnapshot: () => exportSnapshotFile(buildSnapshot('board', null)),
+    onImportSnapshot: (file) => void importSnapshotFile(file),
   };
 }
 
@@ -2298,6 +2320,7 @@ async function createRoomSession(): Promise<void> {
     };
     hideRoomBanner();
     setRoomFragment(room.credential);
+    replayEvents = null;
   } catch (error) {
     roomError = roomErrorMessage(error);
     await client.dispose();
@@ -2335,6 +2358,7 @@ async function joinRoomSession(credential: RoomCredential): Promise<RoomJoined |
       heldReport: null,
     };
     roomError = null;
+    replayEvents = null;
     return joined;
   } catch (error) {
     roomError = roomErrorMessage(error);
@@ -2565,7 +2589,7 @@ function roomPublishScenario(doc: ScenarioDocument | null): void {
  * that arrive from a room. In a room the replacement is itself a gesture and
  * is mirrored unless it came from the room.
  */
-function installBoard(board: BoardState, options: { broadcast: boolean }): void {
+function installBoard(board: BoardState, options: { broadcast: boolean; asGesture?: boolean }): void {
   if (options.broadcast && inRoomRun() && isSimRunning()) {
     // The board is locked for everyone during a run; Reset and friends stop it first.
     if (!ensureCanRun()) return;
@@ -2590,6 +2614,15 @@ function installBoard(board: BoardState, options: { broadcast: boolean }): void 
   mountBoard();
   annotationRenderer.updateProblemFrame();
   updateStatus();
+  // A replaced board invalidates any armed replay (product-directions §2.6);
+  // an import that carries one re-arms it after this returns.
+  replayEvents = null;
+  if (options.asGesture) {
+    // An import is one undoable gesture: pushHistory diffs against the
+    // committed board, records it, and mirrors it to the room.
+    pushHistory();
+    return;
+  }
   seedHistory();
   if (options.broadcast && previous) {
     roomSend(diffBoards(previous, liveBoard()));
@@ -2622,9 +2655,13 @@ interface RoomRunState {
   lastReportAt: number;
   /** The server already announced the end; do not announce it again. */
   serverEnded: boolean;
+  /** Every event applied so far, in order — the run file's intervention log (§2.6). */
+  applied: ReplayEvent[];
 }
 
 let roomRun: RoomRunState | null = null;
+/** The last finished run's interventions, for exporting after the run (§2.6). */
+let lastRunEvents: ReplayEvent[] = [];
 
 function inRoomRun(): boolean {
   return room !== null && roomRun !== null;
@@ -2653,6 +2690,7 @@ function beginRoomRun(started: RunStarted, resume?: { lastTick: number; events: 
     pendingStamps: [],
     lastReportAt: 0,
     serverEnded: false,
+    applied: [],
   };
   hideRoomBanner();
   // §6.2: the opaque flow bundle drives the engine for this run only. It is
@@ -2709,6 +2747,7 @@ function applyRoomEventsAt(tick: number): void {
     .sort((a, b) => a.seq - b.seq);
   for (const evt of due) {
     roomRun.events.delete(evt.seq);
+    roomRun.applied.push({ seq: evt.seq, kind: evt.kind, payload: evt.payload, applyAtTick: evt.applyAtTick! });
     applyRoomEvent(evt);
     if (!roomRun) return;
   }
@@ -2787,6 +2826,7 @@ function finishRoomRun(status: 'won' | 'lost' | 'idle'): void {
   setRunFlowBundle(null);
   const run = roomRun;
   roomRun = null;
+  lastRunEvents = run.applied;
   if (!room || run.serverEnded) return;
   if (run.controller) {
     room.client.reportTick(run.tick, run.pendingStamps);
@@ -2866,6 +2906,101 @@ async function mountFromSnapshot(token: string, fallbackSlug?: string): Promise<
   updateStatus();
   // The snapshot is loaded; later edits belong to this tab, not the link.
   setRoomFragment(null);
+}
+
+/**
+ * Interventions armed from a run file (§2.6), applied by the solo loop at
+ * their ticks. Only engine-affecting kinds are replayed: pause, resume and
+ * speed are wall-clock controls that never changed the original run's
+ * results. Any board change disarms the replay — it would no longer
+ * reproduce anything.
+ */
+let replayEvents: ReplayEvent[] | null = null;
+let pendingReplay: ReplayEvent[] = [];
+let soloTick = 0;
+/** True while an import's own pushHistory runs, so it does not disarm the replay it is about to arm. */
+let importingSnapshot = false;
+
+function applyReplayEventsAt(tick: number): void {
+  while (pendingReplay.length > 0 && pendingReplay[0].applyAtTick <= tick) {
+    const evt = pendingReplay.shift()!;
+    if (evt.kind !== 'failure' && evt.kind !== 'stop') continue;
+    applyRoomEvent({ seq: evt.seq, kind: evt.kind, payload: evt.payload, from: 'replay', applyAtTick: evt.applyAtTick });
+    if (!state.engine || !isSimRunning()) return;
+  }
+}
+
+/** Save text as a download; nothing leaves the browser except to the user's disk. */
+function downloadTextFile(name: string, text: string): void {
+  const blob = new Blob([text], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = name;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportSnapshotFile(snapshot: BoardSnapshotV1 | RunReplayV1): void {
+  downloadTextFile(snapshotFileName(snapshot.kind, snapshot.scenarioSlug), serializeSnapshot(snapshot));
+}
+
+/** The last run as a run file: the board as run, its seed, and every intervention. */
+function runFileFor(report: SimulationReport, board: BoardSnapshotV1): RunReplayV1 {
+  const events = roomRun?.applied ?? lastRunEvents;
+  const run: RunReplayV1 = { ...board, kind: 'run', seed: report.seed };
+  if (events.length > 0) run.events = events.map((e) => ({ ...e }));
+  return run;
+}
+
+/**
+ * Import a board or run file (§2.5). Solo, it replaces the board as one undo
+ * step and installs the file's scenario, traffic and (for a run) seed and
+ * interventions. In a room it is an ordinary gesture — refused without the
+ * pen, mirrored as one diff with it — and only the host's import changes the
+ * room's scenario; traffic follows the who-can-run rule.
+ */
+async function importSnapshotFile(file: File): Promise<void> {
+  let snapshot: BoardSnapshotV1 | RunReplayV1;
+  try {
+    snapshot = parseSnapshotFile(await file.text());
+  } catch (error) {
+    showBoardToast(error instanceof Error ? error.message : 'That file is not a BreakIT board file.');
+    return;
+  }
+  if (inRoomRun() && isSimRunning()) {
+    showBoardToast('Stop the run before importing a board.');
+    return;
+  }
+  if (room && !ensureCanEdit()) return;
+
+  if (!room || room.role === 'host') {
+    setActiveScenarioOverride(snapshot.scenario ?? null);
+    roomPublishScenario(snapshot.scenario ?? null);
+  }
+  if (!room || canRun()) applyTrafficConfig(snapshot.traffic ?? null);
+
+  importingSnapshot = true;
+  try {
+    installBoard(entitiesToBoard(snapshot.board as WireEntity[]), { broadcast: true, asGesture: true });
+  } finally {
+    importingSnapshot = false;
+  }
+  rerenderConfigPalette();
+
+  let what = 'Board imported.';
+  if (!room && snapshot.kind === 'run' && snapshot.seed) {
+    state.pinnedSeed = snapshot.seed;
+    const events = 'events' in snapshot ? (snapshot.events ?? []) : [];
+    replayEvents = events.length > 0 ? events : null;
+    what = replayEvents
+      ? 'Run imported — press Play to replay it, interventions included.'
+      : 'Run imported — press Play to replay it with the same seed.';
+  }
+  showBoardToast(what);
+  renderRoomChrome();
 }
 
 /** The current tab's state as a snapshot document. */

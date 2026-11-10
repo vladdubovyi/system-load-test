@@ -49,6 +49,10 @@ export interface RoomDialogCallbacks {
   onFreshRoom: () => void;
   /** Copy a snapshot link for the current board, or the last run (product-directions §2). */
   onCopySnapshot: (kind: 'board' | 'run') => void;
+  /** Download the current board as a snapshot file (§2.5). */
+  onExportSnapshot: () => void;
+  /** Load a snapshot file; in a room this is an ordinary board gesture (§2.5). */
+  onImportSnapshot: (file: File) => void;
 }
 
 function escapeHtml(value: string): string {
@@ -126,6 +130,11 @@ function renderSnapshotSection(model: RoomViewModel): string {
       <div class="config-panel-actions room-actions">
         <button class="config-btn config-btn-secondary" id="snapshot-copy-board" type="button" title="Copy a link to this board, with its scenario and traffic">🔗 Copy board link</button>
         <button class="config-btn config-btn-secondary" id="snapshot-copy-run" type="button" ${model.hasRunSeed ? 'title="Copy a link that replays the last run, seed and all"' : 'disabled title="Run the simulation first — a run link carries its seed"'}>🔗 Copy run link</button>
+      </div>
+      <div class="config-panel-actions room-actions">
+        <button class="config-btn config-btn-secondary" id="snapshot-export" type="button" title="Download this board as a file (no size limit)">⬇ Export file</button>
+        <button class="config-btn config-btn-secondary" id="snapshot-import" type="button" title="Load a board or run file into this sandbox">⬆ Import file</button>
+        <input id="snapshot-file" type="file" accept=".json,application/json" hidden aria-label="Snapshot file" />
       </div>
     </section>
   `;
@@ -275,6 +284,15 @@ function bindDialog(container: HTMLElement, callbacks: RoomDialogCallbacks): voi
   container.querySelector('#room-fresh-interview')?.addEventListener('click', callbacks.onFreshRoom);
   container.querySelector('#snapshot-copy-board')?.addEventListener('click', () => callbacks.onCopySnapshot('board'));
   container.querySelector('#snapshot-copy-run')?.addEventListener('click', () => callbacks.onCopySnapshot('run'));
+  container.querySelector('#snapshot-export')?.addEventListener('click', callbacks.onExportSnapshot);
+  const fileInput = container.querySelector<HTMLInputElement>('#snapshot-file');
+  container.querySelector('#snapshot-import')?.addEventListener('click', () => fileInput?.click());
+  fileInput?.addEventListener('change', () => {
+    const file = fileInput.files?.[0];
+    // Reset so the same file can be chosen again after a fix.
+    fileInput.value = '';
+    if (file) callbacks.onImportSnapshot(file);
+  });
   container.querySelectorAll<HTMLButtonElement>('[data-give-pen]').forEach((btn) => {
     btn.addEventListener('click', () => callbacks.onAssignPen(btn.dataset.givePen ?? null));
   });

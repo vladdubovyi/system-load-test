@@ -204,8 +204,28 @@ as the first v2 item.
   (5): board-link round-trip across tabs, run-link replay equality by flow
   stats, room-beats-board, malformed/newer-version fallback, and an
   imported `<img onerror>` note rendering inert.
-- Phase 3 (file export/import, room import-as-gesture, replay events) is
-  not started.
+- **Phase 3 (2026-11-10).** The file carrier: `serializeSnapshot` /
+  `parseSnapshotFile` (same validator as links, file wording on errors),
+  `snapshotFileName` (`breakit-{board|run}-{slug}-{day}.json`), and
+  `RunReplayV1` with a validated, tick-sorted `events` list. The Share
+  dialog's Snapshot section gains *Export file* and *Import file*; the
+  report modal gains *Export run file*. An import is one undoable gesture
+  (`installBoard(..., { asGesture })` goes through `pushHistory`, so undo
+  and redo work and the room receives one diff); in a room it is refused
+  without the pen and during a run, only the host's import changes the
+  room's scenario, and traffic follows who-can-run. Room runs log every
+  applied event (`RoomRunState.applied`), the report's run file carries
+  them, and a solo tab that imports it pins the seed and arms a scheduler
+  that applies `failure` and `stop` at their ticks before the tick — the
+  same rule as `stepRoomTick`. `pause`, `resume` and `speed` are
+  deliberately not replayed: they are wall-clock controls that never
+  changed the original run's numbers. Any board edit disarms the replay.
+  Solo runs with manual failure injection still record nothing (the v2
+  item noted above). Tests: 5 more codec unit tests; `e2e/share.spec.ts`
+  "Snapshot files" (export→import round-trip with undo/redo, malformed
+  file refused, room import refused without the pen and broadcast with
+  it, and a room run with a paused failure injection replayed solo to
+  identical flow stats).
 
 ### 2.7 Phases, tests, risks
 

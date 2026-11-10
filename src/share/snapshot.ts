@@ -36,8 +36,38 @@ export interface BoardSnapshotV1 {
   board: SnapshotEntity[];
 }
 
-/** Thrown by {@link decodeSnapshot}; `message` is written for the toast. */
-export class SnapshotError extends Error {}
+export type ReplayEventKind = 'pause' | 'resume' | 'speed' | 'failure' | 'stop';
+
+/** One tick-stamped intervention from a room run (interview-platform §4.4). */
+export interface ReplayEvent {
+  seq: number;
+  kind: ReplayEventKind;
+  payload: unknown | null;
+  applyAtTick: number;
+}
+
+/**
+ * A run snapshot plus the interventions that shaped it (§2.6). File carrier
+ * only — a URL would bloat. Loading one pins the seed and arms a local
+ * scheduler that applies the engine-affecting events at their ticks.
+ */
+export interface RunReplayV1 extends BoardSnapshotV1 {
+  kind: 'run';
+  seed: number;
+  events?: ReplayEvent[];
+}
+
+export type SnapshotErrorCode = 'not-a-link' | 'newer-version' | 'unreadable' | 'too-large';
+
+/** Thrown by the decoders; `message` is written for the toast of its carrier. */
+export class SnapshotError extends Error {
+  constructor(
+    public readonly code: SnapshotErrorCode,
+    message: string
+  ) {
+    super(message);
+  }
+}
 
 export const SNAPSHOT_VERSION = 1;
 /** Links longer than this are refused at creation; use file export instead. */
@@ -55,10 +85,32 @@ const ENTITY_KINDS: ReadonlySet<string> = new Set([
   'stroke',
 ]);
 
-const NOT_A_LINK = 'That is not a board link.';
-const NEWER_VERSION = 'This link was made by a newer version of BreakIT.';
-const UNREADABLE = 'That board link could not be read.';
-const TOO_LARGE = 'That board link is too large to load.';
+const MAX_EVENTS = 10000;
+const EVENT_KINDS: ReadonlySet<string> = new Set(['pause', 'resume', 'speed', 'failure', 'stop']);
+
+const LINK_MESSAGES: Record<SnapshotErrorCode, string> = {
+  'not-a-link': 'That is not a board link.',
+  'newer-version': 'This link was made by a newer version of BreakIT.',
+  unreadable: 'That board link could not be read.',
+  'too-large': 'That board link is too large to load.',
+};
+
+const FILE_MESSAGES: Record<SnapshotErrorCode, string> = {
+  'not-a-link': 'That file is not a BreakIT board file.',
+  'newer-version': 'This board file was made by a newer version of BreakIT.',
+  unreadable: 'That file is not a BreakIT board file.',
+  'too-large': 'That board file is too large to load.',
+};
+
+function fail(code: SnapshotErrorCode, messages: Record<SnapshotErrorCode, string> = LINK_MESSAGES): SnapshotError {
+  return new SnapshotError(code, messages[code]);
+}
+
+/** Re-throw a codec error with the wording of another carrier. */
+function reword(error: unknown, messages: Record<SnapshotErrorCode, string>): never {
+  if (error instanceof SnapshotError) throw new SnapshotError(error.code, messages[error.code]);
+  throw error;
+}
 
 // ── Encoding ────────────────────────────────────────────────────────────────
 
@@ -81,42 +133,70 @@ export function parseBoardFragment(hash: string | null | undefined): string | nu
 
 // ── Decoding and validation ─────────────────────────────────────────────────
 
-export async function decodeSnapshot(token: string): Promise<BoardSnapshotV1> {
+export async function decodeSnapshot(token: string): Promise<BoardSnapshotV1 | RunReplayV1> {
   const match = /^(\d+)\.([A-Za-z0-9_-]*)$/.exec(token.trim());
-  if (!match) throw new SnapshotError(NOT_A_LINK);
+  if (!match) throw fail('not-a-link');
   const version = Number(match[1]);
-  if (version > SNAPSHOT_VERSION) throw new SnapshotError(NEWER_VERSION);
-  if (version !== SNAPSHOT_VERSION || match[2].length === 0) throw new SnapshotError(NOT_A_LINK);
+  if (version > SNAPSHOT_VERSION) throw fail('newer-version');
+  if (version !== SNAPSHOT_VERSION || match[2].length === 0) throw fail('not-a-link');
 
   let json: string;
   try {
     const bytes = await pipe(fromBase64Url(match[2]), new DecompressionStream('deflate-raw'));
-    if (bytes.byteLength > MAX_BOARD_BYTES + MAX_DOCUMENT_BYTES) throw new SnapshotError(TOO_LARGE);
+    if (bytes.byteLength > MAX_BOARD_BYTES + MAX_DOCUMENT_BYTES) throw fail('too-large');
     json = new TextDecoder().decode(bytes);
   } catch (error) {
-    throw error instanceof SnapshotError ? error : new SnapshotError(UNREADABLE);
+    throw error instanceof SnapshotError ? error : fail('unreadable');
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
   } catch {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
   return validateSnapshot(parsed);
 }
 
-function validateSnapshot(parsed: unknown): BoardSnapshotV1 {
+/** The file carrier: pretty JSON, no size cap on the way out. */
+export function serializeSnapshot(snapshot: BoardSnapshotV1 | RunReplayV1): string {
+  return `${JSON.stringify(snapshot, null, 2)}\n`;
+}
+
+/** Parse a snapshot file. Same validator as links, file wording for errors. */
+export function parseSnapshotFile(text: string): BoardSnapshotV1 | RunReplayV1 {
+  if (text.length > MAX_BOARD_BYTES + MAX_DOCUMENT_BYTES) throw fail('too-large', FILE_MESSAGES);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw fail('unreadable', FILE_MESSAGES);
+  }
+  try {
+    return validateSnapshot(parsed);
+  } catch (error) {
+    return reword(error, FILE_MESSAGES);
+  }
+}
+
+/** `breakit-board-url-shortener-2026-11-10.json`; the date is the local day. */
+export function snapshotFileName(kind: 'board' | 'run', scenarioSlug: string | null, now = new Date()): string {
+  const slug = (scenarioSlug ?? 'board').replace(/[^a-z0-9-]/gi, '').toLowerCase() || 'board';
+  const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  return `breakit-${kind}-${slug}-${day}.json`;
+}
+
+function validateSnapshot(parsed: unknown): BoardSnapshotV1 | RunReplayV1 {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
   const raw = parsed as Record<string, unknown>;
-  if (raw.v !== 1) throw new SnapshotError(UNREADABLE);
-  if (raw.kind !== 'board' && raw.kind !== 'run') throw new SnapshotError(UNREADABLE);
+  if (raw.v !== 1) throw fail('unreadable');
+  if (raw.kind !== 'board' && raw.kind !== 'run') throw fail('unreadable');
   if (raw.scenarioSlug !== null && typeof raw.scenarioSlug !== 'string') {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
-  if (!Array.isArray(raw.board)) throw new SnapshotError(UNREADABLE);
+  if (!Array.isArray(raw.board)) throw fail('unreadable');
 
   // Unknown top-level keys are dropped, not kept: rebuild from the whitelist.
   const snapshot: BoardSnapshotV1 = {
@@ -128,10 +208,10 @@ function validateSnapshot(parsed: unknown): BoardSnapshotV1 {
 
   if (raw.scenario !== undefined && raw.scenario !== null) {
     const scenario = raw.scenario as ScenarioDocument;
-    if (typeof scenario !== 'object' || Array.isArray(scenario)) throw new SnapshotError(UNREADABLE);
-    if (JSON.stringify(scenario).length > MAX_DOCUMENT_BYTES) throw new SnapshotError(TOO_LARGE);
+    if (typeof scenario !== 'object' || Array.isArray(scenario)) throw fail('unreadable');
+    if (JSON.stringify(scenario).length > MAX_DOCUMENT_BYTES) throw fail('too-large');
     const problems = validateScenarioDocument(scenario);
-    if (problems.length > 0) throw new SnapshotError(UNREADABLE);
+    if (problems.length > 0) throw fail('unreadable');
     snapshot.scenario = scenario;
   }
 
@@ -144,31 +224,55 @@ function validateSnapshot(parsed: unknown): BoardSnapshotV1 {
     // Seeds are uint32 (src/game/rng.ts randomSeed), not int32: the room's
     // server-pinned seed is the narrower one, not the engine's.
     if (typeof seed !== 'number' || !Number.isInteger(seed) || seed < 1 || seed > 0xffffffff) {
-      throw new SnapshotError(UNREADABLE);
+      throw fail('unreadable');
     }
     snapshot.seed = seed;
+    if (raw.events !== undefined && raw.events !== null) {
+      (snapshot as RunReplayV1).events = validateEvents(raw.events);
+    }
   }
 
   return snapshot;
 }
 
+/** Interventions must be well-formed and come back in application order. */
+function validateEvents(raw: unknown): ReplayEvent[] {
+  if (!Array.isArray(raw)) throw fail('unreadable');
+  if (raw.length > MAX_EVENTS) throw fail('too-large');
+  const events: ReplayEvent[] = raw.map((item) => {
+    if (!item || typeof item !== 'object') throw fail('unreadable');
+    const e = item as Record<string, unknown>;
+    if (typeof e.kind !== 'string' || !EVENT_KINDS.has(e.kind)) throw fail('unreadable');
+    if (!Number.isInteger(e.seq) || !Number.isInteger(e.applyAtTick) || (e.applyAtTick as number) < 0) {
+      throw fail('unreadable');
+    }
+    return {
+      seq: e.seq as number,
+      kind: e.kind as ReplayEventKind,
+      payload: e.payload === undefined ? null : e.payload,
+      applyAtTick: e.applyAtTick as number,
+    };
+  });
+  return events.sort((a, b) => a.applyAtTick - b.applyAtTick || a.seq - b.seq);
+}
+
 function validateBoard(entities: unknown[]): SnapshotEntity[] {
-  if (entities.length > MAX_ENTITIES) throw new SnapshotError(TOO_LARGE);
+  if (entities.length > MAX_ENTITIES) throw fail('too-large');
   // Duplicates: last wins, preserving first position (room-merge semantics).
   const byKey = new Map<string, SnapshotEntity>();
   let bytes = 0;
   for (const raw of entities) {
-    if (!raw || typeof raw !== 'object') throw new SnapshotError(UNREADABLE);
+    if (!raw || typeof raw !== 'object') throw fail('unreadable');
     const entity = raw as Record<string, unknown>;
     const kind = entity.kind;
     const id = entity.id;
-    if (typeof kind !== 'string' || !ENTITY_KINDS.has(kind)) throw new SnapshotError(UNREADABLE);
+    if (typeof kind !== 'string' || !ENTITY_KINDS.has(kind)) throw fail('unreadable');
     if (typeof id !== 'string' || id.length === 0 || id.length > 200) {
-      throw new SnapshotError(UNREADABLE);
+      throw fail('unreadable');
     }
-    if (entity.value === undefined || entity.value === null) throw new SnapshotError(UNREADABLE);
+    if (entity.value === undefined || entity.value === null) throw fail('unreadable');
     bytes += JSON.stringify(entity.value).length;
-    if (bytes > MAX_BOARD_BYTES) throw new SnapshotError(TOO_LARGE);
+    if (bytes > MAX_BOARD_BYTES) throw fail('too-large');
     byKey.set(`${kind}:${id}`, { kind: kind as SnapshotEntityKind, id, value: entity.value });
   }
   return dropOrphanBelts([...byKey.values()]);
@@ -195,8 +299,8 @@ function endpointExists(portId: unknown, components: Set<string>): boolean {
 }
 
 function validateTraffic(raw: unknown): TrafficProfile {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new SnapshotError(UNREADABLE);
-  if (JSON.stringify(raw).length > MAX_DOCUMENT_BYTES) throw new SnapshotError(TOO_LARGE);
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw fail('unreadable');
+  if (JSON.stringify(raw).length > MAX_DOCUMENT_BYTES) throw fail('too-large');
   const traffic = raw as TrafficProfile;
   if (
     typeof traffic.baseRps !== 'number' ||
@@ -204,10 +308,10 @@ function validateTraffic(raw: unknown): TrafficProfile {
     traffic.baseRps < 1 ||
     traffic.baseRps > 100000
   ) {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
   if (!['constant', 'spike', 'gradual', 'random'].includes(traffic.pattern)) {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
   return traffic;
 }
@@ -237,7 +341,7 @@ function fromBase64Url(text: string): Uint8Array {
   try {
     binary = atob(padded);
   } catch {
-    throw new SnapshotError(UNREADABLE);
+    throw fail('unreadable');
   }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);

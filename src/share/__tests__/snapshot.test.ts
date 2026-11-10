@@ -6,7 +6,11 @@ import {
   decodeSnapshot,
   encodeSnapshot,
   parseBoardFragment,
+  parseSnapshotFile,
+  serializeSnapshot,
+  snapshotFileName,
   type BoardSnapshotV1,
+  type RunReplayV1,
 } from '../snapshot';
 
 const component = (id: string) => ({
@@ -118,5 +122,51 @@ describe('snapshot codec (product-directions §2)', () => {
     expect(parseBoardFragment('#host=abcdefabcdefabcdef')).toBeNull();
     expect(parseBoardFragment('#join=K7QM-2XRD&board=1.abc')).toBe('1.abc');
     expect(parseBoardFragment('')).toBeNull();
+  });
+});
+
+describe('snapshot files and replays (product-directions §2.5–§2.6)', () => {
+  it('serializes to pretty JSON and parses back with file wording on errors', async () => {
+    const text = serializeSnapshot(SNAPSHOT);
+    expect(text.endsWith('\n')).toBe(true);
+    expect(parseSnapshotFile(text)).toEqual(SNAPSHOT);
+    expect(() => parseSnapshotFile('not json')).toThrow(/board file/);
+    expect(() => parseSnapshotFile('{"v":1,"kind":"board","board":"nope"}')).toThrow(/board file/);
+    expect(() => parseSnapshotFile(JSON.stringify({ ...SNAPSHOT, v: 7 }))).toThrow(/board file/);
+  });
+
+  it('keeps a run file’s events, sorted by tick then sequence', () => {
+    const replay: RunReplayV1 = {
+      ...SNAPSHOT,
+      kind: 'run',
+      seed: 99,
+      events: [
+        { seq: 2, kind: 'failure', payload: { componentId: 'a', type: 'shutdown', duration: 10 }, applyAtTick: 300 },
+        { seq: 1, kind: 'pause', payload: null, applyAtTick: 300 },
+        { seq: 3, kind: 'stop', payload: null, applyAtTick: 2000 },
+      ],
+    };
+    const parsed = parseSnapshotFile(serializeSnapshot(replay)) as RunReplayV1;
+    expect(parsed.events?.map((e) => e.seq)).toEqual([1, 2, 3]);
+    expect(parsed.events?.[1].payload).toEqual({ componentId: 'a', type: 'shutdown', duration: 10 });
+  });
+
+  it('rejects malformed events whole', () => {
+    const bad = { ...SNAPSHOT, kind: 'run', seed: 99, events: [{ seq: 1, kind: 'explode', applyAtTick: 3 }] };
+    expect(() => parseSnapshotFile(JSON.stringify(bad))).toThrow(SnapshotError);
+    const negative = { ...SNAPSHOT, kind: 'run', seed: 99, events: [{ seq: 1, kind: 'stop', applyAtTick: -1 }] };
+    expect(() => parseSnapshotFile(JSON.stringify(negative))).toThrow(SnapshotError);
+  });
+
+  it('ignores events on a board snapshot', () => {
+    const text = JSON.stringify({ ...SNAPSHOT, events: [{ seq: 1, kind: 'stop', applyAtTick: 1 }] });
+    expect('events' in parseSnapshotFile(text)).toBe(false);
+  });
+
+  it('names files by kind, scenario and day', () => {
+    const day = new Date(2026, 10, 10);
+    expect(snapshotFileName('board', 'url-shortener', day)).toBe('breakit-board-url-shortener-2026-11-10.json');
+    expect(snapshotFileName('run', null, day)).toBe('breakit-run-board-2026-11-10.json');
+    expect(snapshotFileName('run', '../etc/passwd', day)).toBe('breakit-run-etcpasswd-2026-11-10.json');
   });
 });
